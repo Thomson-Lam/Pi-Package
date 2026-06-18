@@ -2,10 +2,11 @@
 import { mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import { resolve, dirname, join, basename } from "node:path";
 import { homedir } from "node:os";
+import { fileURLToPath } from "node:url";
 import { validateReport, reportJsonSchema } from "../src/schema.js";
 import type { ReviewDetail, ReviewReport } from "../src/schema.js";
 import { collectGitSnapshot } from "../src/git.js";
-import type { DiffMode, GitFileDiff, GitSnapshot } from "../src/git.js";
+import type { DiffMode, GitSnapshot } from "../src/git.js";
 import { renderHtml } from "../src/render.js";
 import type { ArtifactTemplate } from "../src/render.js";
 import { analyzeDetailProfile, parseReviewDetail } from "../src/detail.js";
@@ -37,16 +38,17 @@ function usage(exitCode = 0): never {
 
 function shortUsage(): string {
   return `pi-review-artifact commands:
-  guide [--template chapters]
-  example [--template chapters]
+  guide [--template codebase]
+  example [--template codebase]
   schema --json
-  dev-render [--template chapters] [--fixture comprehensive] [--detail ultralow|low|medium|high|all] [--cwd <path>] [--project-cwd <path>] [--out repo|localpi|global] [--output <file>] [--output-dir <dir>] [--open|--no-open] [--json]
-  scaffold [--template chapters] [--cwd <repo>] [--mode worktree|staged|baseRef] [--base <ref>] [--include-untracked] [--detail ultralow|low|medium|high] [--output <file>] [--json]
-  validate --stdin|--input <file> [--template chapters] [--cwd <repo>] [--mode worktree|staged|baseRef] [--base <ref>] [--include-untracked] [--detail ultralow|low|medium|high] [--json]
-  render --stdin|--input <file> [--template chapters] [--output <file>] [--out repo|localpi|global] [--cwd <repo>] [--project-cwd <path>] [--mode worktree|staged|baseRef] [--base <ref>] [--include-untracked] [--detail ultralow|low|medium|high] [--open|--no-open] [--json]
+  dev-render [--template codebase] [--fixture comprehensive] [--detail ultralow|low|medium|high|all] [--cwd <path>] [--project-cwd <path>] [--out repo|localpi|global] [--output <file>] [--output-dir <dir>] [--open|--no-open] [--json]
+  scaffold [--template codebase] [--cwd <repo>] [--mode worktree|staged|baseRef] [--base <ref>] [--include-untracked] [--detail ultralow|low|medium|high] [--output <file>] [--json]
+  validate --stdin|--input <file> [--template codebase] [--cwd <repo>] [--mode worktree|staged|baseRef] [--base <ref>] [--include-untracked] [--detail ultralow|low|medium|high] [--json]
+  render --stdin|--input <file> [--template codebase] [--output <file>] [--out repo|localpi|global] [--cwd <repo>] [--project-cwd <path>] [--mode worktree|staged|baseRef] [--base <ref>] [--include-untracked] [--detail ultralow|low|medium|high] [--open|--no-open] [--json]
 
 Notes:
-  - The only supported artifact template is "chapters".
+  - The only supported artifact template is "codebase".
+  - Raw diffs are never rendered. Use curated snippet line ranges instead.
   - baseRef mode requires --base <ref>.
   - --out repo writes under <git-root>/html-reviews/.
   - --out localpi writes under <git-root>/.pi/reviews/.
@@ -63,23 +65,23 @@ function cliHelpText(): string {
   return `${shortUsage()}
 
 Workflow:
-  1. For low/ultralow, generate compact JSON and pass it directly to render --stdin.
-  2. For medium/high, scaffold creates a JSON draft from the current git diff.
-  3. An agent or human replaces every TODO_REPLACE placeholder.
-  4. render validates schema/placeholders/detail coverage, collects authoritative git metadata/diffs, and writes self-contained HTML.
+  1. For low/ultralow, generate compact codebase-review JSON and pass it directly to render --stdin.
+  2. For medium/high, scaffold creates a JSON draft from changed-file metadata.
+  3. An agent or human replaces every TODO_REPLACE placeholder and adds snippet line-range references.
+  4. render validates schema/placeholders/detail coverage, resolves snippets from local files, and writes self-contained HTML.
   5. validate remains available for manual debugging and smoke checks.
 
 Examples:
   node dist/bin/pi-review-artifact.js dev-render --fixture comprehensive --detail all --cwd . --out localpi --no-open
   node dist/bin/pi-review-artifact.js scaffold --cwd . --mode worktree --include-untracked --detail medium --output /tmp/review.json
-  node dist/bin/pi-review-artifact.js render --input /tmp/review.json --template chapters --cwd . --mode worktree --include-untracked --detail medium --out repo --no-open
-  node dist/bin/pi-review-artifact.js render --stdin --template chapters --cwd . --mode worktree --include-untracked --detail low --out localpi --no-open < /tmp/low-review.json
+  node dist/bin/pi-review-artifact.js render --input /tmp/review.json --template codebase --cwd . --mode worktree --include-untracked --detail medium --out repo --no-open
+  node dist/bin/pi-review-artifact.js render --stdin --template codebase --cwd . --mode worktree --include-untracked --detail low --out localpi --no-open < /tmp/low-review.json
 
 Detail tiers:
-  ultralow  Fastest compact handoff. One broad grouping, minimal fields, raw diffs omitted from the artifact.
-  low       Compact internal handoff. 1-3 broad chapters, file purposes, validation or missingValidation.
-  medium    Default shareable artifact. Explicit chapters, all changed files assigned, chapter intent/focus, validation.
-  high      Rigorous review. Exact file coverage, per-file focus, chapter risks/validation, top-level risks/decisions/limitations.
+  ultralow  Fastest compact handoff. Status, file map, optional workflow/block, 0-3 snippets, max ~80 snippet lines.
+  low       Compact internal handoff. File map, at least one workflow/block/data flow, 1-6 snippets, validation or missingValidation.
+  medium    Default shareable artifact. Full changed-file map, building blocks, workflow/data flow, 2-12 snippets, validation.
+  high      Rigorous map. Exhaustive context, multiple flows/focus/risk/decision sections, 4-25 snippets, validation evidence.
 
 Diff modes:
   worktree  git diff HEAD; /pr commonly passes --include-untracked for new files.
@@ -217,7 +219,7 @@ async function main() {
 
       log("Reading git repository metadata...");
       log("Collecting changed file list...");
-      log("Collecting diff patch...");
+      log("Collecting changed-file metadata...");
       const git = collectGitSnapshot({
         cwd,
         mode,
@@ -234,7 +236,8 @@ async function main() {
         "git branch --show-current",
         "git rev-parse --show-toplevel",
         "git rev-parse HEAD",
-        mode === "staged" ? "git diff --cached ..." : mode === "baseRef" ? `git diff ${base} ...` : "git diff HEAD ...",
+        mode === "staged" ? "git diff --cached --name-status --numstat" : mode === "baseRef" ? `git diff ${base} --name-status --numstat` : "git diff HEAD --name-status --numstat",
+        "snippet content resolved from file path + line ranges; raw diffs intentionally omitted",
       ];
       const html = renderHtml(report, git, commands, template);
 
@@ -265,10 +268,10 @@ async function main() {
 }
 
 function validateTemplate(): ArtifactTemplate {
-  const template = arg("--template") || "chapters";
-  if (template === "sections") fail('Template "sections" has been removed. Use --template chapters and put old changes/files content into chapters.');
-  if (template !== "chapters") fail(`Unsupported --template ${JSON.stringify(template)}. Supported templates: chapters.`);
-  return "chapters";
+  const template = arg("--template") || "codebase";
+  if (template === "chapters" || template === "sections") fail(`Template ${JSON.stringify(template)} has been removed. Use --template codebase.`);
+  if (template !== "codebase") fail(`Unsupported --template ${JSON.stringify(template)}. Supported templates: codebase.`);
+  return "codebase";
 }
 
 function validateMode(): DiffMode {
@@ -329,7 +332,8 @@ function renderDevFixtures(opts: { fixture: string; detail: DevRenderDetail; tem
   const artifacts: Array<{ detail: ReviewDetail; path: string }> = [];
   for (const detail of details) {
     const loaded = loadDevFixture({ fixture: opts.fixture, detail });
-    const html = renderHtml(loaded.report, loaded.git, loaded.commands, opts.template);
+    const git = { ...loaded.git, repoRoot: reviewPackageRoot() };
+    const html = renderHtml(loaded.report, git, loaded.commands, opts.template);
     const output = explicitOutput ? resolve(explicitOutput) : resolve(outputDir, devArtifactFileName(opts.fixture, detail));
     mkdirSync(dirname(output), { recursive: true });
     writeFileSync(output, html, "utf8");
@@ -360,6 +364,10 @@ function defaultDevOutputDir(opts: { cwd: string; projectCwd: string; out: "repo
   return join(opts.cwd, "html-reviews", "dev");
 }
 
+function reviewPackageRoot(): string {
+  return resolve(dirname(fileURLToPath(import.meta.url)), "../..");
+}
+
 function devArtifactFileName(fixture: string, detail: ReviewDetail): string {
   return `dev-${slug(fixture)}-${detail}.html`;
 }
@@ -378,7 +386,7 @@ function devIndexHtml(fixture: string, artifacts: Array<{ detail: ReviewDetail; 
 </head>
 <body>
 <h1>Pi review dev fixtures</h1>
-<p>Static dummy review JSON and GitSnapshot fixtures rendered through the production chapters renderer.</p>
+<p>Static dummy review JSON and GitSnapshot fixtures rendered through the production codebase renderer.</p>
 <ul>
 ${links}
 </ul>
@@ -426,80 +434,106 @@ function formatValidationError(e: unknown): string {
 }
 
 function scaffoldReport(git: GitSnapshot, detail: ReviewDetail): ReviewReport {
-  const groups = groupFiles(git.files, detail);
+  const firstFiles = git.files.slice(0, Math.min(3, git.files.length));
   return {
-    schemaVersion: "1.0",
+    schemaVersion: "2.0",
+    artifactKind: "codebase-review",
     reviewDetail: detail,
-    title: "TODO_REPLACE: concise subject for the HTML filename, e.g. review-artifact-output-locations",
-    summary: {
-      intent: "TODO_REPLACE: summarize the purpose of the final diff for reviewers",
-      changeType: "mixed",
-      ...(detail === "ultralow" || detail === "low" ? {} : { howItWorks: "TODO_REPLACE: briefly explain how the changed pieces work together" }),
+    title: "TODO_REPLACE: concise subject for the HTML filename, e.g. review-wizard-codebase-map",
+    status: {
+      currentState: "TODO_REPLACE: explain what the codebase currently does with these changes applied",
+      reviewScope: "TODO_REPLACE: define what this artifact covers and what it intentionally does not cover",
+      ...(detail === "ultralow" ? {} : { changeSummary: "TODO_REPLACE: summarize the current behavior/configuration changes at a high level" }),
+      ...(detail === "high" ? { confidence: "medium" as const } : {}),
     },
-    changes: groups.map((group) => ({
-      title: group.title,
-      summary: "TODO_REPLACE: summarize this change group",
-      files: group.files.map((file) => ({
-        path: file.path,
-        purpose: `TODO_REPLACE: explain why ${file.path} changed`,
-      })),
-      ...(detail === "ultralow" || detail === "low" ? {} : { reviewerNotes: ["TODO_REPLACE: add reviewer guidance for this group or remove this note"] }),
+    fileMap: git.files.map((file) => ({
+      path: file.path,
+      changed: true,
+      status: file.status,
+      role: `TODO_REPLACE: describe what ${file.path} is responsible for in the current codebase`,
+      whyRelevant: `TODO_REPLACE: explain why ${file.path} matters to this review`,
     })),
-    chapters: groups.map((group, index) => ({
-      sequence: index + 1,
-      title: group.title,
-      summary: "TODO_REPLACE: summarize this review chapter",
-      ...(detail === "ultralow" || detail === "low" ? {} : { intent: "TODO_REPLACE: state what reviewers should understand before reading these diffs" }),
-      files: group.files.map((file) => ({
-        path: file.path,
-        purpose: `TODO_REPLACE: explain this file's role in the chapter`,
-        ...(detail === "high"
-          ? {
-              reviewFocus: ["TODO_REPLACE: add file-specific review focus/risk guidance or remove this field"],
-            }
-          : {}),
-      })),
-      ...(detail === "ultralow" || detail === "low"
-        ? {}
-        : {
-            reviewFocus:
-              detail === "high"
-                ? ["TODO_REPLACE: add primary chapter-level review focus", "TODO_REPLACE: add secondary chapter-level review focus"]
-                : ["TODO_REPLACE: add chapter-level review focus"],
-          }),
-      ...(detail === "high"
-        ? {
-            risks: ["TODO_REPLACE: add chapter-specific risk or remove this field"],
-            validation: ["TODO_REPLACE: add chapter-specific validation note or remove this field"],
-          }
-        : {}),
-    })),
-    ...(detail === "high"
-      ? {
-          behaviorFlow: [
+    ...(detail === "ultralow"
+      ? {}
+      : {
+          buildingBlocks: [
             {
-              label: "TODO_REPLACE: behavior step label or remove behaviorFlow",
-              description: "TODO_REPLACE: describe behavior flow only if behavior changed",
-              files: git.files.slice(0, 3).map((file) => file.path),
+              name: "TODO_REPLACE: main codebase building block",
+              kind: "module" as const,
+              description: "TODO_REPLACE: explain the component/module/concept in current-state terms",
+              files: firstFiles.map((file) => file.path),
+              snippetIds: [],
             },
           ],
+          workflows: [
+            {
+              name: "TODO_REPLACE: main workflow",
+              summary: "TODO_REPLACE: explain how the relevant code path works from start to finish",
+              steps: firstFiles.map((file, index) => ({
+                label: `TODO_REPLACE: workflow step ${index + 1}`,
+                description: `TODO_REPLACE: explain how ${file.path} participates in this workflow`,
+                files: [file.path],
+                snippetIds: [],
+              })),
+            },
+          ],
+          snippets: firstFiles.map((file, index) => ({
+            id: `snippet-${index + 1}`,
+            path: file.path,
+            startLine: 1,
+            endLine: 20,
+            caption: `TODO_REPLACE: describe the relevant line range in ${file.path}; adjust startLine/endLine to the precise code`,
+          })),
+        }),
+    ...(detail === "medium" || detail === "high"
+      ? {
+          dataFlows: [
+            {
+              name: "TODO_REPLACE: relevant data/control flow",
+              summary: "TODO_REPLACE: explain what moves through the system",
+              nodes: [
+                { id: "input", label: "TODO_REPLACE: input/source", kind: "input" as const },
+                { id: "process", label: "TODO_REPLACE: processing point", kind: "process" as const },
+                { id: "output", label: "TODO_REPLACE: output/result", kind: "output" as const },
+              ],
+              edges: [
+                { from: "input", to: "process", label: "TODO_REPLACE: what is passed" },
+                { from: "process", to: "output", label: "TODO_REPLACE: what is produced" },
+              ],
+            },
+          ],
+          reviewFocus: [
+            {
+              area: "TODO_REPLACE: review area",
+              question: "TODO_REPLACE: key human review question",
+              severity: "medium" as const,
+              files: firstFiles.map((file) => file.path),
+              snippetIds: [],
+            },
+          ],
+        }
+      : {}),
+    ...(detail === "high"
+      ? {
           risks: [
             {
               severity: "medium" as const,
-              area: "TODO_REPLACE: risk area or remove risks",
+              area: "TODO_REPLACE: risk area or replace with explicit low/no-risk callout",
               description: "TODO_REPLACE: describe a meaningful risk",
               mitigation: "TODO_REPLACE: describe mitigation or remove mitigation",
-              files: git.files.slice(0, 3).map((file) => file.path),
+              files: firstFiles.map((file) => file.path),
+              snippetIds: [],
             },
           ],
           decisions: [
             {
-              decision: "TODO_REPLACE: important implementation decision or remove decisions",
+              decision: "TODO_REPLACE: important implementation decision or explicit no-notable-decisions entry",
               rationale: "TODO_REPLACE: why this decision was made",
               alternatives: ["TODO_REPLACE: alternative considered or remove alternatives"],
+              files: firstFiles.map((file) => file.path),
             },
           ],
-          knownLimitations: ["TODO_REPLACE: known limitation or remove knownLimitations"],
+          knownLimitations: ["TODO_REPLACE: known limitation or explicit none entry"],
         }
       : {}),
     ...(detail === "ultralow"
@@ -515,33 +549,9 @@ function scaffoldReport(git: GitSnapshot, detail: ReviewDetail): ReviewReport {
               },
             ],
           },
-          missingValidation: ["TODO_REPLACE: list important checks not run, or replace with an empty array if none"],
+          missingValidation: ["TODO_REPLACE: list important checks not run, or replace with an empty array if none are missing"],
         }),
   };
-}
-
-function groupFiles(files: GitFileDiff[], detail: ReviewDetail): Array<{ title: string; files: GitFileDiff[] }> {
-  if (detail === "ultralow" || detail === "low") return [{ title: "Review target changes", files }];
-  const groups = new Map<string, GitFileDiff[]>();
-  for (const file of files) {
-    const key = groupKey(file.path, detail);
-    const existing = groups.get(key) || [];
-    existing.push(file);
-    groups.set(key, existing);
-  }
-  return Array.from(groups.entries()).map(([key, groupFiles]) => ({ title: titleForGroup(key), files: groupFiles }));
-}
-
-function groupKey(path: string, detail: ReviewDetail): string {
-  const parts = path.split("/").filter(Boolean);
-  if (parts.length === 0) return "root";
-  if (detail === "high" && parts.length >= 2) return `${parts[0]}/${parts[1]}`;
-  return parts.length === 1 ? "root" : parts[0];
-}
-
-function titleForGroup(key: string): string {
-  if (key === "root") return "Root-level files";
-  return `${key} changes`;
 }
 
 function findPlaceholders(value: unknown, path = "$", found: string[] = []): string[] {
@@ -560,71 +570,128 @@ function findPlaceholders(value: unknown, path = "$", found: string[] = []): str
 }
 
 function guideText(): string {
-  return `# pi-review-artifact chapters guide
+  return `# pi-review-artifact codebase guide
 
-Use scaffold -> fill -> validate -> render. Do not paste HTML or raw diffs into the JSON; the CLI reads authoritative git metadata and patches.
+Use scaffold -> fill -> validate -> render. Do not paste HTML, raw diffs, or copied code into the JSON. The report should explain how the current code works and should reference code snippets by file path and line range.
 
 Required workflow:
 1. Run scaffold with the requested --cwd, --mode, --include-untracked, and --detail flags.
-2. Inspect the final diff and decide a logical reviewer order.
-3. Fill the scaffold JSON, replacing every TODO_REPLACE placeholder.
-4. Validate with the same --cwd/--mode/--include-untracked/--detail flags. This runs tier-specific structural and diff coverage checks.
-5. Render with --template chapters, the requested diff mode, and --detail. Return the Artifact path plus a concise reviewer summary.
+2. Inspect the changed files and relevant adjacent files. Use targeted file reads to identify precise line ranges.
+3. Fill the scaffold JSON, replacing every TODO_REPLACE placeholder. Use snippet references such as {"path":"src/file.ts","startLine":10,"endLine":30}; the CLI reads snippet text from disk at render time.
+4. Validate with the same --cwd/--mode/--include-untracked/--detail flags. This checks schema, changed-file coverage, snippet references, and tier budgets.
+5. Render with --template codebase. Return the Artifact path plus a concise reviewer summary.
 
 Useful commands:
-  node /absolute/path/to/dist/bin/pi-review-artifact.js scaffold --template chapters --cwd /repo --mode worktree --include-untracked --detail medium --output /tmp/review-report.json
-  node /absolute/path/to/dist/bin/pi-review-artifact.js render --input /tmp/review-report.json --template chapters --cwd /repo --mode worktree --include-untracked --detail medium --out repo --no-open
+  node /absolute/path/to/dist/bin/pi-review-artifact.js scaffold --template codebase --cwd /repo --mode worktree --include-untracked --detail medium --output /tmp/review-report.json
+  node /absolute/path/to/dist/bin/pi-review-artifact.js render --input /tmp/review-report.json --template codebase --cwd /repo --mode worktree --include-untracked --detail medium --out repo --no-open
 
 Detail tiers:
-- ultralow: fastest compact handoff; one broad grouping; minimal fields; rendered artifact omits raw diffs.
-- low: compact internal handoff; 1-3 broad chapters; each file needs purpose; requires validation run(s) or missingValidation note(s).
-- medium: default shareable artifact; explicit chapters; all changed files assigned; chapter intent/reviewFocus; validation and missingValidation fields.
-- high: rigorous review; explicit chapters; every changed file assigned exactly once; per-file reviewFocus; chapter risks/validation; top-level risks, decisions, limitations, and validation evidence.
+- ultralow: status + file map, optional explanatory block/flow, 0-3 snippets, max about 80 snippet lines.
+- low: compact codebase map, at least one workflow/block/data flow, 1-6 snippets, validation or missingValidation.
+- medium: default shareable artifact, full changed-file map, building blocks, workflow/data flow, 2-12 snippets, validation and review focus.
+- high: rigorous artifact, broader context, multiple focus/risk/decision sections, 4-25 snippets, validation evidence and limitations.
 
 Rules:
-- Escape nothing manually; provide plain JSON strings.
+- Raw diffs are intentionally omitted; GitHub already provides diffs.
+- Do not include inline code in JSON. Include only snippet ids, paths, startLine/endLine, captions, and optional highlights/mustContain anchors.
+- Prefer short, purposeful snippets over large ranges.
+- Include important unchanged adjacent files in fileMap with changed:false when needed to explain behavior.
 - Do not invent test results. Use missingValidation for checks not run.
-- Use high risk for auth, permissions, migrations, payments, data deletion, shared middleware, schemas, and out-of-scope changes.
-- Files in chapters should match final git diff paths. The renderer warns about stale or invented paths.
+- Files marked changed:true should match final git metadata. The renderer warns about stale or missing paths.
 `;
 }
 
 function exampleReport(): ReviewReport {
   return {
-    schemaVersion: "1.0",
+    schemaVersion: "2.0",
+    artifactKind: "codebase-review",
     reviewDetail: "medium",
     title: "Review artifact example",
-    summary: {
-      intent: "Show the minimal chapters template shape for a final worktree review.",
-      changeType: "mixed",
-      howItWorks: "The report groups files into a reviewer-friendly sequence; the CLI supplies git metadata and diffs.",
+    status: {
+      currentState: "The review extension collects UI choices, sends an agent prompt, and renders structured JSON into an HTML codebase map.",
+      reviewScope: "This example covers the prompt construction and renderer handoff path.",
+      changeSummary: "The artifact format explains current code responsibilities and workflows instead of reproducing raw diffs.",
+      confidence: "medium",
     },
-    changes: [
+    fileMap: [
       {
-        title: "Command workflow",
-        summary: "Adds the user-facing review command and CLI invocation path.",
-        risk: "low",
-        reviewerNotes: ["Check that command defaults match the intended review target."],
-        files: [{ path: "index.ts", purpose: "Registers /pr and sends the agent workflow prompt.", risk: "low" }],
+        path: "index.ts",
+        changed: true,
+        role: "Registers /pr and builds the prompt that asks the agent for codebase-review JSON.",
+        whyRelevant: "This is the user-facing entrypoint for the workflow.",
+        responsibilities: ["wizard option collection", "prompt construction", "handoff to the agent"],
+        snippetIds: ["prompt-builder"],
+      },
+      {
+        path: "src/render.ts",
+        changed: true,
+        role: "Orchestrates JSON-to-HTML rendering and snippet resolution.",
+        whyRelevant: "This is where structured report data becomes the final artifact.",
+        responsibilities: ["validate template", "resolve snippets", "compose HTML"],
       },
     ],
-    chapters: [
+    buildingBlocks: [
       {
-        sequence: 1,
-        title: "Command workflow",
-        summary: "Review the command entrypoint before renderer details.",
-        intent: "Confirm the extension starts the review workflow without skill discovery.",
-        files: [
-          {
-            path: "index.ts",
-            purpose: "Registers /pr and sends exact CLI commands.",
-            reviewFocus: ["Argument parsing", "Absolute CLI path", "Open/include-untracked defaults"],
-            risk: "low",
-          },
+        name: "Prompt-to-render contract",
+        kind: "workflow",
+        description: "The UI collects flags; the agent emits compact JSON with snippet line ranges; the CLI reads the snippets locally and renders HTML.",
+        files: ["index.ts", "src/render.ts"],
+        inputs: ["wizard options", "agent-authored JSON"],
+        outputs: ["self-contained HTML artifact"],
+        snippetIds: ["prompt-builder"],
+      },
+    ],
+    workflows: [
+      {
+        name: "Review artifact generation",
+        summary: "A top-down flow from /pr invocation to HTML output.",
+        steps: [
+          { label: "Pick options", description: "The user chooses target, detail, output, and open behavior in the UI.", files: ["index.ts"] },
+          { label: "Generate JSON", description: "The agent inspects the code and writes codebase-review JSON with snippet references.", files: ["index.ts"], snippetIds: ["prompt-builder"] },
+          { label: "Render artifact", description: "The CLI validates JSON, resolves snippet line ranges, and writes HTML.", files: ["src/render.ts"] },
         ],
-        reviewFocus: ["The agent can follow the prompt without reading source."],
-        risks: ["Incorrect cwd or CLI path would break artifact generation."],
-        validation: ["Run /reload then /pr in Pi."],
+      },
+    ],
+    dataFlows: [
+      {
+        name: "Options to artifact",
+        summary: "The artifact is built from UI options, model-generated structure, local file snippets, and git metadata.",
+        nodes: [
+          { id: "ui", label: "/pr wizard", kind: "input", files: ["index.ts"] },
+          { id: "agent", label: "Agent JSON", kind: "process" },
+          { id: "cli", label: "CLI renderer", kind: "process", files: ["src/render.ts"] },
+          { id: "html", label: "HTML artifact", kind: "output" },
+        ],
+        edges: [
+          { from: "ui", to: "agent", label: "prompt + flags" },
+          { from: "agent", to: "cli", label: "structured JSON" },
+          { from: "cli", to: "html", label: "rendered output" },
+        ],
+      },
+    ],
+    snippets: [
+      {
+        id: "prompt-builder",
+        path: "index.ts",
+        startLine: 1,
+        endLine: 30,
+        caption: "Example snippet reference. Real reports should point at the precise relevant lines.",
+      },
+      {
+        id: "render-entry",
+        path: "src/render.ts",
+        startLine: 1,
+        endLine: 18,
+        caption: "Example renderer entrypoint snippet reference.",
+      },
+    ],
+    reviewFocus: [
+      {
+        area: "Prompt contract",
+        question: "Does the prompt clearly forbid raw diffs and require snippet line-range references?",
+        severity: "medium",
+        files: ["index.ts"],
+        snippetIds: ["prompt-builder"],
       },
     ],
     validation: {

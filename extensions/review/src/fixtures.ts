@@ -66,7 +66,6 @@ function validateGitFixture(value: unknown): GitSnapshot {
     const candidate = file as Record<string, unknown>;
     if (typeof candidate.path !== "string" || typeof candidate.status !== "string") throw new Error(`Invalid dev git fixture: files[${index}] missing path/status.`);
     if (typeof candidate.added !== "number" || typeof candidate.deleted !== "number") throw new Error(`Invalid dev git fixture: files[${index}] missing numeric delta.`);
-    if (candidate.patch !== null && typeof candidate.patch !== "string") throw new Error(`Invalid dev git fixture: files[${index}] patch must be string or null.`);
   }
   return git as GitSnapshot;
 }
@@ -76,7 +75,8 @@ function devFixtureCommands(fixture: DevFixtureName, detail: ReviewDetail): stri
     `dev-render --fixture ${fixture} --detail ${detail}`,
     "git status --short  # fixture: not executed",
     "git diff HEAD --stat  # fixture: not executed",
-    "git diff HEAD --name-status --find-renames  # fixture: not executed",
+    "git diff HEAD --name-status --numstat --find-renames  # fixture: not executed",
+    "snippet content resolved from file path + line ranges; raw diffs omitted",
     "node dist/bin/pi-review-artifact.js dev-render --fixture comprehensive --detail all --no-open",
   ];
 }

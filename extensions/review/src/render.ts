@@ -2,13 +2,15 @@ import { ReviewReport } from "./schema.js";
 import { GitSnapshot } from "./git.js";
 import { baseHtml } from "./templates/base.js";
 import { escapeHtml } from "./templates/components.js";
-import { renderChapters } from "./templates/chapters.js";
+import { renderCodebaseReview } from "./templates/codebase.js";
+import { resolveSnippets } from "./snippets.js";
 
-export type ArtifactTemplate = "chapters";
+export type ArtifactTemplate = "codebase";
 
-export function renderHtml(report: ReviewReport, git: GitSnapshot, commands: string[], template: ArtifactTemplate = "chapters"): string {
-  if (template !== "chapters") {
+export function renderHtml(report: ReviewReport, git: GitSnapshot, commands: string[], template: ArtifactTemplate = "codebase"): string {
+  if (template !== "codebase") {
     throw new Error(`Unsupported template: ${template}`);
   }
-  return baseHtml(escapeHtml(report.title), renderChapters(report, git, commands));
+  const snippets = resolveSnippets(report, git);
+  return baseHtml(escapeHtml(report.title), renderCodebaseReview(report, git, commands, snippets));
 }

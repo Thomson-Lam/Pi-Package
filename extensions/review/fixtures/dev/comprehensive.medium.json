@@ -1,302 +1,71 @@
 {
-  "schemaVersion": "1.0",
+  "schemaVersion": "2.0",
+  "artifactKind": "codebase-review",
   "reviewDetail": "medium",
-  "title": "Medium dev fixture: realistic chapters, tables, and appendices",
-  "summary": {
-    "intent": "Provide a deterministic, low-cost review artifact fixture that stresses styling, responsiveness, text wrapping, diff rendering, and validation presentation without invoking an agent.",
-    "changeType": "mixed",
-    "howItWorks": "Static report JSON is paired with static GitSnapshot metadata so the production chapters renderer can be exercised without collecting live git diffs."
+  "title": "Medium dev fixture: codebase map with workflows and data flow",
+  "status": {
+    "currentState": "The review package exposes a guided /pr UI, asks the agent for compact codebase-review JSON, resolves local snippet line ranges, and renders an HTML explanation of how the code currently works.",
+    "reviewScope": "Fixture coverage for file map, building blocks, top-down workflows, arrow-style data flow, review focus, validation, and snippets.",
+    "changeSummary": "The output format removes raw diffs in favor of current-state explanations and curated code snippets.",
+    "confidence": "medium"
   },
-  "changes": [
-    {
-      "title": "Command workflow",
-      "summary": "Adds local development entrypoints and fixture command behavior.",
-      "risk": "medium",
-      "reviewerNotes": [
-        "Check visual hierarchy, wrapping, and empty-state presentation."
-      ],
-      "files": [
-        {
-          "path": "src/commands/review.ts",
-          "purpose": "Adds the development slash command path and command parsing behavior.",
-          "risk": "high"
-        },
-        {
-          "path": "src/templates/chapters.ts",
-          "purpose": "Exercises the main HTML structure, tables, chapters, appendices, and rigor checklist.",
-          "risk": "low"
-        }
-      ]
-    },
-    {
-      "title": "Presentation surface",
-      "summary": "Exercises CSS, long documentation text, and non-textual diff notes.",
-      "risk": "medium",
-      "reviewerNotes": [
-        "Check visual hierarchy, wrapping, and empty-state presentation."
-      ],
-      "files": [
-        {
-          "path": "src/templates/review.css",
-          "purpose": "Represents extracted or modularized stylesheet work for visual iteration.",
-          "risk": "low"
-        },
-        {
-          "path": "assets/review-preview-screenshot.png",
-          "purpose": "Binary asset included to verify non-textual diff notes.",
-          "risk": "low"
-        },
-        {
-          "path": "docs/review-artifacts/responsiveness/very-long-path-name-that-should-wrap-in-tables-and-navigation.md",
-          "purpose": "Long documentation path and prose to stress wrapping and responsive layout.",
-          "risk": "low"
-        }
-      ]
-    },
-    {
-      "title": "Legacy and generated files",
-      "summary": "Exercises deleted, renamed, and omitted-large-diff rendering.",
-      "risk": "medium",
-      "reviewerNotes": [
-        "Check visual hierarchy, wrapping, and empty-state presentation."
-      ],
-      "files": [
-        {
-          "path": "src/legacy/old-renderer.ts",
-          "purpose": "Deleted legacy renderer to exercise deleted-file badges and diffs.",
-          "risk": "medium"
-        },
-        {
-          "path": "src/components/review-card.tsx",
-          "purpose": "Renamed component to exercise rename badges and component-oriented paths.",
-          "risk": "low"
-        },
-        {
-          "path": "package-lock.json",
-          "purpose": "Large generated file to exercise omitted-diff messaging.",
-          "risk": "medium"
-        }
-      ]
-    }
+  "fileMap": [
+    { "path": "src/commands/review.ts", "changed": true, "status": "M", "role": "Synthetic command entrypoint standing in for the Pi /pr command wiring.", "whyRelevant": "Represents user option collection and workflow launch.", "responsibilities": ["surface review commands", "separate dev fixture rendering from real agent review"], "interactsWith": ["bin/pi-review-artifact.ts"], "snippetIds": ["extension-entry"] },
+    { "path": "src/templates/codebase.ts", "changed": true, "status": "M", "role": "Synthetic previous renderer surface being replaced by codebase-oriented rendering.", "whyRelevant": "Keeps renderer migration cases visible in the fixture.", "responsibilities": ["HTML structure", "section composition"] },
+    { "path": "src/templates/review.css", "changed": true, "status": "A", "role": "Synthetic CSS module file for visual structure.", "whyRelevant": "Exercises style-related file cards." },
+    { "path": "assets/review-preview-screenshot.png", "changed": true, "status": "A", "role": "Synthetic binary preview artifact.", "whyRelevant": "Confirms assets are summarized without raw binary diff output." },
+    { "path": "docs/review-artifacts/responsiveness/very-long-path-name-that-should-wrap-in-tables-and-navigation.md", "changed": true, "status": "M", "role": "Synthetic long-path documentation file.", "whyRelevant": "Stresses table and card wrapping." },
+    { "path": "src/legacy/old-renderer.ts", "changed": true, "status": "D", "role": "Synthetic deleted legacy renderer.", "whyRelevant": "Deleted files still appear as current review metadata without diff hunks." },
+    { "path": "src/components/review-card.tsx", "changed": true, "status": "R100", "role": "Synthetic renamed component.", "whyRelevant": "Exercises status badge behavior for renames." },
+    { "path": "package-lock.json", "changed": true, "status": "M", "role": "Synthetic generated file.", "whyRelevant": "Shows generated files should be summarized, not expanded." },
+    { "path": "experiments/future-review-format.md", "changed": true, "status": "A", "role": "Synthetic experimental design note.", "whyRelevant": "Represents planning docs in the changed-file map." },
+    { "path": "src/untracked/prototype.ts", "changed": true, "status": "A", "role": "Synthetic untracked helper.", "whyRelevant": "Exercises include-untracked metadata." },
+    { "path": "src/snippets.ts", "changed": false, "role": "Real adjacent fixture context: resolves snippet line ranges from disk.", "whyRelevant": "Demonstrates that important unchanged/adjacent files can appear in the map when they explain behavior.", "responsibilities": ["read snippet source", "validate anchors", "return resolved lines"], "snippetIds": ["snippet-resolver"] }
   ],
-  "chapters": [
-    {
-      "sequence": 1,
-      "title": "Command workflow",
-      "summary": "Start with user-facing command behavior and CLI development rendering.",
-      "intent": "Confirm the no-agent development path is obvious and safe to run.",
-      "files": [
-        {
-          "path": "src/commands/review.ts",
-          "purpose": "Adds the development slash command path and command parsing behavior.",
-          "risk": "high"
-        },
-        {
-          "path": "src/templates/chapters.ts",
-          "purpose": "Exercises the main HTML structure, tables, chapters, appendices, and rigor checklist.",
-          "risk": "low"
-        }
-      ],
-      "reviewFocus": [
-        "Verify command defaults mirror the production review command where meaningful."
-      ],
-      "risks": [
-        "Wrong defaults could write dev artifacts somewhere surprising."
-      ],
-      "validation": [
-        "Typecheck and CLI smoke should cover this path."
-      ]
-    },
-    {
-      "sequence": 2,
-      "title": "Presentation stress cases",
-      "summary": "Then inspect responsive text, CSS extraction, binary notes, and long paths.",
-      "intent": "Validate how prose-heavy and path-heavy content behaves in cards, tables, and navigation.",
-      "files": [
-        {
-          "path": "src/templates/review.css",
-          "purpose": "Represents extracted or modularized stylesheet work for visual iteration.",
-          "risk": "low"
-        },
-        {
-          "path": "assets/review-preview-screenshot.png",
-          "purpose": "Binary asset included to verify non-textual diff notes.",
-          "risk": "low"
-        },
-        {
-          "path": "docs/review-artifacts/responsiveness/very-long-path-name-that-should-wrap-in-tables-and-navigation.md",
-          "purpose": "Long documentation path and prose to stress wrapping and responsive layout.",
-          "risk": "low"
-        }
-      ],
-      "reviewFocus": [
-        "Resize browser width and confirm tables, badges, and path text remain usable."
-      ],
-      "risks": [
-        "Long unbroken content can overflow the page."
-      ],
-      "validation": [
-        "Manual viewport smoke remains useful for styling changes."
-      ]
-    },
-    {
-      "sequence": 3,
-      "title": "Generated and legacy file handling",
-      "summary": "Finally check deleted, renamed, and generated-file cases.",
-      "intent": "Make sure unusual git statuses remain legible in chapter tables and appendices.",
-      "files": [
-        {
-          "path": "src/legacy/old-renderer.ts",
-          "purpose": "Deleted legacy renderer to exercise deleted-file badges and diffs.",
-          "risk": "medium"
-        },
-        {
-          "path": "src/components/review-card.tsx",
-          "purpose": "Renamed component to exercise rename badges and component-oriented paths.",
-          "risk": "low"
-        },
-        {
-          "path": "package-lock.json",
-          "purpose": "Large generated file to exercise omitted-diff messaging.",
-          "risk": "medium"
-        },
-        {
-          "path": "src/missing/from-report-only.ts",
-          "purpose": "Intentional stale chapter reference to test missing-file warnings.",
-          "risk": "medium"
-        }
-      ],
-      "reviewFocus": [
-        "Confirm status badges, omitted-diff notes, and missing-file warnings are visually distinct."
-      ],
-      "risks": [
-        "Generated files can dominate visual space if omitted-diff notes are too subtle."
-      ],
-      "validation": [
-        "Fixture render should show warning and appendix sections."
-      ]
-    }
+  "buildingBlocks": [
+    { "name": "Guided /pr command", "kind": "workflow", "description": "The user-facing flow collects target, diff mode, detail, output, and optional emphasis before sending a prompt to the agent.", "files": ["index.ts"], "inputs": ["user selections"], "outputs": ["agent prompt"], "snippetIds": ["extension-entry"] },
+    { "name": "Snippet resolver", "kind": "module", "description": "The CLI reads code snippets by path and line range at render time, keeping JSON compact and avoiding duplicated code in the model output.", "files": ["src/snippets.ts"], "inputs": ["snippet references", "GitSnapshot repo root"], "outputs": ["resolved code lines", "warnings"], "snippetIds": ["snippet-resolver"] },
+    { "name": "Codebase template", "kind": "component", "description": "Reusable rendering components turn file maps, workflows, data flows, focus items, validation, and snippets into HTML.", "files": ["src/templates/codebase.ts", "src/templates/style-modules/base.ts"], "snippetIds": ["codebase-template"] }
   ],
-  "behaviorFlow": [
-    {
-      "label": "User invokes dev command",
-      "description": "The user runs /pr-dev or the CLI dev-render command with familiar output/detail flags.",
-      "files": [
-        "index.ts",
-        "bin/pi-review-artifact.ts"
-      ]
-    },
-    {
-      "label": "Fixture data loads",
-      "description": "The CLI loads static report JSON and a static GitSnapshot fixture instead of reading real git state.",
-      "files": [
-        "src/fixtures.ts",
-        "fixtures/dev/comprehensive.git.json"
-      ]
-    },
-    {
-      "label": "Renderer produces HTML",
-      "description": "The normal chapters renderer writes one or more artifact HTML files for browser, responsive, and print review.",
-      "files": [
-        "src/render.ts",
-        "src/templates/chapters.ts",
-        "src/templates/styles.ts"
-      ]
-    }
+  "workflows": [
+    { "name": "User review flow", "summary": "The user configures a review in the UI, the agent emits structured JSON, and the CLI renders a local HTML artifact.", "trigger": "User invokes /pr", "steps": [
+      { "label": "Pick review options", "description": "The modal wizard gathers target, detail tier, output location, and open behavior.", "files": ["index.ts"], "snippetIds": ["extension-entry"] },
+      { "label": "Generate codebase-review JSON", "description": "The prompt tells the agent to explain current code behavior and include snippet line-range references rather than inline code or diffs.", "files": ["index.ts"] },
+      { "label": "Resolve snippets", "description": "The CLI reads the referenced file ranges from the local checkout or git index.", "files": ["src/snippets.ts"], "snippetIds": ["snippet-resolver"] },
+      { "label": "Render HTML", "description": "The renderer composes sections for status, file map, building blocks, workflows, diagrams, focus, snippets, and validation.", "files": ["src/templates/codebase.ts"], "snippetIds": ["codebase-template"] }
+    ] }
+  ],
+  "dataFlows": [
+    { "name": "Options to HTML artifact", "summary": "A compact JSON contract links the UI, agent, CLI, snippets, and final artifact.", "nodes": [
+      { "id": "ui", "label": "/pr wizard", "kind": "input", "files": ["index.ts"] },
+      { "id": "agent", "label": "Agent-generated JSON", "kind": "process" },
+      { "id": "snippets", "label": "Local snippet resolver", "kind": "process", "files": ["src/snippets.ts"], "snippetIds": ["snippet-resolver"] },
+      { "id": "renderer", "label": "Codebase renderer", "kind": "process", "files": ["src/templates/codebase.ts"] },
+      { "id": "html", "label": "Self-contained HTML", "kind": "output" }
+    ], "edges": [
+      { "from": "ui", "to": "agent", "label": "prompt template + flags" },
+      { "from": "agent", "to": "snippets", "label": "snippet ids + line ranges" },
+      { "from": "snippets", "to": "renderer", "label": "resolved code lines" },
+      { "from": "renderer", "to": "html", "label": "rendered sections" }
+    ] }
+  ],
+  "snippets": [
+    { "id": "extension-entry", "path": "index.ts", "startLine": 1, "endLine": 35, "caption": "Extension imports, option types, and wizard state definitions." },
+    { "id": "snippet-resolver", "path": "src/snippets.ts", "startLine": 1, "endLine": 55, "caption": "Snippet resolution reads local file ranges and records warnings instead of embedding code in JSON." },
+    { "id": "codebase-template", "path": "src/templates/codebase.ts", "startLine": 1, "endLine": 45, "caption": "Codebase template composes status, file map, workflows, data flows, focus, snippets, and validation sections." },
+    { "id": "style-modules", "path": "src/templates/styles.ts", "startLine": 1, "endLine": 8, "caption": "CSS is composed from importable style modules without adding a bundler." }
+  ],
+  "reviewFocus": [
+    { "area": "Snippet economy", "question": "Are snippets short, relevant, and referenced by line range rather than duplicated into JSON?", "severity": "high", "files": ["src/snippets.ts", "src/templates/codebase.ts"], "snippetIds": ["snippet-resolver"] },
+    { "area": "Renderer structure", "question": "Do reusable components explain current code responsibilities and flows clearly without falling back to raw diffs?", "severity": "medium", "files": ["src/templates/codebase.ts"], "snippetIds": ["codebase-template"] }
   ],
   "risks": [
-    {
-      "severity": "high",
-      "area": "Command execution",
-      "description": "The dev slash command runs a local CLI. Argument parsing and path handling must not accidentally invoke the review agent or inspect the wrong repository.",
-      "mitigation": "Keep /pr-dev on pi.exec only and route fixture rendering through dev-render.",
-      "files": [
-        "index.ts",
-        "bin/pi-review-artifact.ts"
-      ]
-    },
-    {
-      "severity": "medium",
-      "area": "Responsive layout",
-      "description": "Long paths, commands, and diff lines can overflow narrow screens if tables or pre blocks are not constrained.",
-      "mitigation": "Use wrapping for prose/table cells and horizontal scroll for raw diffs.",
-      "files": [
-        "src/templates/chapters.ts",
-        "src/templates/styles.ts"
-      ]
-    },
-    {
-      "severity": "low",
-      "area": "Fixture drift",
-      "description": "Fixtures can become stale when schema fields or renderer assumptions change.",
-      "mitigation": "Validate fixture report JSON on every dev-render run."
-    }
+    { "severity": "medium", "area": "Line-range drift", "description": "Snippet line ranges can drift as files change after JSON generation.", "mitigation": "Use mustContain anchors for important snippets and surface resolver warnings.", "files": ["src/snippets.ts"], "snippetIds": ["snippet-resolver"] }
   ],
   "decisions": [
-    {
-      "decision": "Use fixture JSON plus fixture GitSnapshot instead of a bespoke HTML mock.",
-      "rationale": "This keeps development rendering close to the production JSON-to-HTML workflow while avoiding model/token cost.",
-      "alternatives": [
-        "Mock static HTML pages by hand",
-        "Require a real git repo with synthetic changes for every styling iteration"
-      ]
-    },
-    {
-      "decision": "Render all detail tiers from one command.",
-      "rationale": "Ultralow omits raw diffs while high detail exercises dense risk, decision, and validation sections."
-    }
+    { "decision": "Use snippet references instead of inline code.", "rationale": "This saves model output tokens and lets the CLI read authoritative code from disk at render time.", "alternatives": ["Embed code blocks in JSON", "Render raw diffs"] }
   ],
-  "validation": {
-    "relevantTests": [
-      {
-        "name": "Renderer smoke fixture",
-        "file": "fixtures/dev/comprehensive.medium.json",
-        "description": "Ensures dummy report JSON exercises the production renderer.",
-        "relatedFiles": [
-          "src/render.ts",
-          "src/templates/chapters.ts"
-        ]
-      }
-    ],
-    "runs": [
-      {
-        "name": "TypeScript typecheck",
-        "command": "npm run typecheck",
-        "result": "passed",
-        "evidence": "Fixture evidence: command completed with no diagnostics in the dummy scenario.",
-        "notes": "Used to style passed validation rows."
-      },
-      {
-        "name": "Visual regression screenshot",
-        "command": "node scripts/compare-screenshots.js --artifact /tmp/pi-review-dev/high.html",
-        "result": "failed",
-        "evidence": "Fixture evidence: expected screenshot intentionally differs by 12 pixels.",
-        "notes": "Dummy failed result for badge and table styling."
-      },
-      {
-        "name": "Mobile viewport smoke",
-        "command": "open high.html at 375px viewport",
-        "result": "partial",
-        "evidence": "Fixture evidence: overview and chapters checked; print CSS not checked.",
-        "notes": "Exercises partial validation styling."
-      },
-      {
-        "name": "Print stylesheet review",
-        "result": "skipped",
-        "notes": "Skipped in fixture to test skipped validation badge."
-      },
-      {
-        "name": "Accessibility pass",
-        "command": "npx axe /tmp/pi-review-dev/index.html",
-        "result": "not_run",
-        "notes": "Not run; listed for missing validation flow."
-      }
-    ]
-  },
-  "knownLimitations": [
-    "Fixture content is intentionally synthetic and should not be treated as a real code review."
-  ],
-  "missingValidation": [
-    "No real browser automation was run for this dummy fixture."
-  ]
+  "validation": { "relevantTests": [ { "name": "Fixture render smoke", "file": "fixtures/dev/comprehensive.medium.json", "description": "Validates schema and renderer behavior for the codebase artifact format.", "relatedFiles": ["src/render.ts", "src/templates/codebase.ts"] } ], "runs": [ { "name": "TypeScript typecheck", "command": "npm run typecheck", "result": "passed", "evidence": "Fixture evidence for a passed validation row." }, { "name": "Mobile viewport smoke", "command": "open generated fixture at 375px", "result": "partial", "notes": "Fixture evidence for partial validation styling." } ] },
+  "knownLimitations": ["Fixture git metadata is synthetic; snippet content is read from this package's real files."],
+  "missingValidation": ["No automated browser screenshot test is included for this fixture."]
 }

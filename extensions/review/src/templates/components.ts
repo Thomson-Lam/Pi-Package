@@ -39,18 +39,3 @@ export function list(items: string[] | undefined, empty = "None recorded."): str
   if (!items || items.length === 0) return `<p class="muted">${escapeHtml(empty)}</p>`;
   return `<ul>${items.map((item) => `<li>${escapeHtml(item)}</li>`).join("")}</ul>`;
 }
-
-export function renderDiff(patch: string | null, note?: string): string {
-  if (!patch) return `<div class="diff-note">${escapeHtml(note || "No textual diff available.")}</div>`;
-  const lines = patch.split("\n");
-  return `<pre class="diff">${lines.map(renderDiffLine).join("\n")}</pre>${note ? `<div class="diff-note">${escapeHtml(note)}</div>` : ""}`;
-}
-
-function renderDiffLine(line: string): string {
-  let cls = "diff-context";
-  if (line.startsWith("diff --git") || line.startsWith("index ") || line.startsWith("--- ") || line.startsWith("+++ ")) cls = "diff-meta";
-  else if (line.startsWith("@@")) cls = "diff-hunk";
-  else if (line.startsWith("+")) cls = "diff-add";
-  else if (line.startsWith("-")) cls = "diff-del";
-  return `<span class="${cls}">${escapeHtml(line)}</span>`;
-}

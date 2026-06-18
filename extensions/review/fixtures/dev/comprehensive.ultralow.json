@@ -1,66 +1,20 @@
 {
-  "schemaVersion": "1.0",
+  "schemaVersion": "2.0",
+  "artifactKind": "codebase-review",
   "reviewDetail": "ultralow",
-  "title": "Ultralow dev fixture: compact styling stress",
-  "summary": {
-    "intent": "Provide a deterministic, low-cost review artifact fixture that stresses styling, responsiveness, text wrapping, diff rendering, and validation presentation without invoking an agent.",
-    "changeType": "mixed"
+  "title": "Ultralow dev fixture: compact codebase map",
+  "status": {
+    "currentState": "The review artifact package renders a compact codebase map from structured JSON and local snippet line ranges.",
+    "reviewScope": "Fixture smoke coverage for status, file map, and one resolved snippet without rendering raw diffs."
   },
-  "changes": [
-    {
-      "title": "Fixture render smoke",
-      "summary": "A broad grouping for quick artifact shape checks with raw diffs intentionally omitted.",
-      "files": [
-        {
-          "path": "src/commands/review.ts",
-          "purpose": "Adds the development slash command path and command parsing behavior."
-        },
-        {
-          "path": "src/templates/chapters.ts",
-          "purpose": "Exercises the main HTML structure, tables, chapters, appendices, and rigor checklist."
-        },
-        {
-          "path": "src/templates/review.css",
-          "purpose": "Represents extracted or modularized stylesheet work for visual iteration."
-        },
-        {
-          "path": "assets/review-preview-screenshot.png",
-          "purpose": "Binary asset included to verify non-textual diff notes."
-        },
-        {
-          "path": "docs/review-artifacts/responsiveness/very-long-path-name-that-should-wrap-in-tables-and-navigation.md",
-          "purpose": "Long documentation path and prose to stress wrapping and responsive layout."
-        }
-      ]
-    }
+  "fileMap": [
+    { "path": "src/commands/review.ts", "changed": true, "status": "M", "role": "Represents the user-facing command entrypoint in the synthetic fixture.", "whyRelevant": "Shows command-surface context without requiring a raw diff." },
+    { "path": "src/templates/codebase.ts", "changed": true, "status": "M", "role": "Represents the renderer surface being replaced by a codebase-map renderer.", "whyRelevant": "Exercises long renderer paths and artifact structure language." },
+    { "path": "src/templates/review.css", "changed": true, "status": "A", "role": "Represents styling work for the artifact shell.", "whyRelevant": "Keeps CSS-related file-map rendering visible." },
+    { "path": "assets/review-preview-screenshot.png", "changed": true, "status": "A", "role": "Represents non-code artifact assets.", "whyRelevant": "Confirms binary-looking files can be described without diffs." },
+    { "path": "docs/review-artifacts/responsiveness/very-long-path-name-that-should-wrap-in-tables-and-navigation.md", "changed": true, "status": "M", "role": "Represents long documentation paths.", "whyRelevant": "Stresses responsive wrapping." }
   ],
-  "chapters": [
-    {
-      "sequence": 1,
-      "title": "Fixture render smoke",
-      "summary": "Compact chapter that should remain readable without raw diffs.",
-      "files": [
-        {
-          "path": "src/commands/review.ts",
-          "purpose": "Adds the development slash command path and command parsing behavior."
-        },
-        {
-          "path": "src/templates/chapters.ts",
-          "purpose": "Exercises the main HTML structure, tables, chapters, appendices, and rigor checklist."
-        },
-        {
-          "path": "src/templates/review.css",
-          "purpose": "Represents extracted or modularized stylesheet work for visual iteration."
-        },
-        {
-          "path": "assets/review-preview-screenshot.png",
-          "purpose": "Binary asset included to verify non-textual diff notes."
-        },
-        {
-          "path": "docs/review-artifacts/responsiveness/very-long-path-name-that-should-wrap-in-tables-and-navigation.md",
-          "purpose": "Long documentation path and prose to stress wrapping and responsive layout."
-        }
-      ]
-    }
+  "snippets": [
+    { "id": "render-entry", "path": "src/render.ts", "startLine": 1, "endLine": 18, "caption": "Renderer entrypoint resolves snippets and delegates to the codebase template." }
   ]
 }

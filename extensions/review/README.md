@@ -1,6 +1,6 @@
 # review (pi-review-artifact)
 
-Generates predictable, styled, self-contained HTML code-review artifacts from compact agent-authored JSON plus authoritative local git metadata/diffs. Currently only supports `npm`.
+Generates predictable, styled, self-contained HTML codebase-review artifacts from compact agent-authored JSON, local git metadata, and curated snippet line ranges. Raw diffs are intentionally omitted; GitHub remains the diff viewer.
 
 ## Requirements
 
@@ -10,32 +10,29 @@ Generates predictable, styled, self-contained HTML code-review artifacts from co
 
 ## What this extension provides
 
-- Pi extension entrypoint: `index.ts` registers `/pr`
-- CLI: `dist/bin/pi-review-artifact.js` (built from `bin/` + `src/`)
-- Default artifact template: `chapters`
-- Tiered workflow: low/ultralow render compact stdin JSON directly; medium/high scaffold a TODO draft that the agent fills before render. Render validates and writes HTML.
-- Cheap development fixture workflow: `/pr-dev` and CLI `dev-render` render static dummy JSON + dummy GitSnapshot fixtures through the real HTML renderer without invoking the agent.
+- Pi extension entrypoint: `index.ts` registers `/pr` and `/pr-dev`
+- CLI: `dist/bin/pi-review-artifact.js` built from `bin/` + `src/`
+- Default artifact template: `codebase`
+- Tiered workflow: low/ultralow render compact stdin JSON directly; medium/high scaffold a TODO draft that the agent fills before render
+- Snippet references: JSON includes only `path`, `startLine`, and `endLine`; the CLI resolves code locally at render time
+- Cheap development fixture workflow: `/pr-dev` and CLI `dev-render` render static dummy JSON + dummy GitSnapshot fixtures through the real HTML renderer without invoking the agent
 
 ## Workflow
 
-After changes, run `/pr` to open a guided modal wizard. The first menu lets you choose the current Pi cwd, another path, or Help. The wizard then asks for diff mode, detail tier, output location, open behavior, and optional review emphasis. Help is rendered in the UI without adding text to the session.
+Run `/pr` to open a guided modal wizard. The first menu lets you choose the current Pi cwd, another path, or Help. The wizard then asks for diff mode, detail tier, output location, open behavior, and optional review emphasis.
 
-For dummy fixture rendering, run `/pr-dev` to open a guided fixture wizard. The first menu lets you choose the current Pi cwd, another path, or Help. Neither `/pr` nor `/pr-dev` parses configuration flags from the chat bar anymore; configuration is centralized in the modal flow.
+The generated agent prompt asks the agent to explain the current codebase state, file responsibilities, building blocks, workflows, data flows, risks, validation, and focused code snippets. The JSON must not contain raw diffs, HTML, Mermaid, or inline copied code.
 
-Default wizard choices start from the current Pi cwd, medium detail, repo-root output, and opening artifacts in interactive mode. Base-ref reviews default the base ref input to `HEAD`.
+Detail tiers:
 
-Detail tiers are validation profiles when `/pr` or CLI `validate/render --detail ...` is used:
+- `ultralow` — current status, concise file map, optional workflow/block, 0–3 snippet ranges.
+- `low` — compact file map, at least one workflow/block/data flow, 1–6 snippet ranges, validation or missingValidation.
+- `medium` — full changed-file map, important adjacent files, building blocks, workflow/data flow, review focus, 2–12 snippet ranges.
+- `high` — rigorous codebase map with broader context, multiple focus/risk/decision sections, 4–25 snippet ranges, limitations, and validation evidence.
 
-- `ultralow` — fastest compact handoff: one broad grouping, minimal fields, and raw diffs omitted from the rendered artifact.
-- `low` — compact internal handoff: 1–3 broad chapters, each file has a purpose, and validation run(s) or missingValidation note(s) are present.
-- `medium` — default shareable artifact: explicit chapters, all changed files assigned, chapter intent/reviewFocus, file purposes, validation, and missingValidation fields.
-- `high` — rigorous review: every changed file assigned exactly once, per-file reviewFocus, chapter risks/validation, top-level risks, decisions, limitations, and validation evidence. Behavior flow is warned when absent because it is only applicable to behavior-changing work.
-
-Artifacts are written under `html-reviews/` in the target git root by default. Choose `localpi` in the `/pr` wizard or use CLI `render --out localpi` to write to `.pi/reviews/` under the target git root. Choose `global` in the wizard or use CLI `render --out global` to write to `~/.pi/agent/reviews/<project-slug>/`, where `<project-slug>` is derived from the Pi agent cwd basename (or `--project-cwd` for direct CLI use). Rendered HTML filenames use the slugged report title as `<subject>.html`, with spaces and non-alphanumeric symbols converted to hyphens. CLI `render --output <file>` overrides `--out`.
+Artifacts are written under `html-reviews/` in the target git root by default. Choose `localpi` to write to `.pi/reviews/`, or `global` to write to `~/.pi/agent/reviews/<project-slug>/`. Rendered filenames use the slugged report title.
 
 ## Fresh clone setup
-
-From this package root, compile the JS output that the command prompt will invoke from `dist/`:
 
 ```bash
 npm install
@@ -45,36 +42,26 @@ npm run build
 Then in Pi:
 
 1. Run `/reload` so Pi reloads extensions.
-2. Invoke `/pr` and choose Help to see the modal manual, or choose a target to start the review wizard.
+2. Invoke `/pr` and choose Help, or choose a target to start the review wizard.
 
 ## Quick CLI checks
 
 ```bash
 node dist/bin/pi-review-artifact.js schema --json
-node dist/bin/pi-review-artifact.js guide --template chapters
-node dist/bin/pi-review-artifact.js example --template chapters > /tmp/review-example.json
-node dist/bin/pi-review-artifact.js validate --input /tmp/review-example.json
+node dist/bin/pi-review-artifact.js guide --template codebase
+node dist/bin/pi-review-artifact.js example --template codebase > /tmp/review-example.json
+node dist/bin/pi-review-artifact.js validate --input /tmp/review-example.json --detail medium
 node dist/bin/pi-review-artifact.js dev-render --fixture comprehensive --detail all --cwd . --out localpi --no-open
 node dist/bin/pi-review-artifact.js --help
-node dist/bin/pi-review-artifact.js scaffold --template chapters --cwd . --mode worktree --include-untracked --detail ultralow --output /tmp/review-ultralow.json
-node dist/bin/pi-review-artifact.js scaffold --template chapters --cwd . --mode worktree --include-untracked --detail medium --output /tmp/review-scaffold.json
-node dist/bin/pi-review-artifact.js validate --input /tmp/review-scaffold.json --template chapters --cwd . --mode worktree --include-untracked --detail medium # expected to fail until TODO_REPLACE placeholders are filled
-node dist/bin/pi-review-artifact.js render --input /tmp/review-example.json --template chapters --mode worktree --include-untracked --out repo --no-open
+node dist/bin/pi-review-artifact.js scaffold --template codebase --cwd . --mode worktree --include-untracked --detail medium --output /tmp/review-scaffold.json
+node dist/bin/pi-review-artifact.js validate --input /tmp/review-scaffold.json --template codebase --cwd . --mode worktree --include-untracked --detail medium # expected to fail until TODO_REPLACE placeholders are filled
 ```
 
 Notes:
-- `scaffold` and `render` require a git repo with changes (or explicit `--cwd <repo>`).
-- `dev-render` does not require a git repo with changes; it uses static dummy fixtures under `fixtures/dev/`.
+- `scaffold` and `render` require a git repo with changes, unless using `dev-render`.
+- `dev-render` uses static dummy fixtures under `fixtures/dev/`.
 - `--mode baseRef` requires `--base <ref>`.
-- The only supported template is `chapters`; the legacy sections layout has been removed.
-
-## Typical usage flow
-
-1. `/pr` injects a prompt with exact commands for the requested detail tier.
-2. For low/ultralow, the agent inspects git diffs, writes compact JSON in a `render --stdin` here-doc, and renders in one step.
-3. For medium/high, the agent runs `scaffold`, creating a JSON draft with all changed file paths, then replaces all `TODO_REPLACE` placeholders.
-4. `render` validates schema, rejects unresolved placeholders, enforces the requested detail profile against the current diff, reads git metadata/diffs, and renders HTML with a Review rigor checklist.
-5. CLI writes a stable `Artifact: <path> (<n> files)` line.
+- The only supported template is `codebase`; the legacy diff-review layout has been removed.
 
 ## Development
 

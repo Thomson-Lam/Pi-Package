@@ -19,11 +19,17 @@ export type DetailProfileResult = {
   warnings: string[];
   coverage?: {
     changedFiles: number;
-    assignedFiles: number;
+    mappedChangedFiles: number;
     missingFiles: string[];
-    staleFiles: string[];
-    duplicateFiles: string[];
+    staleChangedFlags: string[];
   };
+};
+
+const snippetBudgets: Record<ReviewDetail, { maxCount: number; maxLines: number; minCount: number }> = {
+  ultralow: { minCount: 0, maxCount: 3, maxLines: 80 },
+  low: { minCount: 1, maxCount: 6, maxLines: 180 },
+  medium: { minCount: 2, maxCount: 12, maxLines: 400 },
+  high: { minCount: 4, maxCount: 25, maxLines: 900 },
 };
 
 export function analyzeDetailProfile(opts: {
@@ -35,28 +41,18 @@ export function analyzeDetailProfile(opts: {
   const detail = requestedDetail || report.reviewDetail || "medium";
   const enforced = Boolean(requestedDetail || report.reviewDetail);
   const checks: DetailCheck[] = [];
-
-  const chapters = report.chapters || [];
-  const chapterFilePaths = chapters.flatMap((chapter) => chapter.files.map((file) => file.path));
-  const chapterPathCounts = countValues(chapterFilePaths);
-  const duplicateFiles = Array.from(chapterPathCounts.entries())
-    .filter(([, count]) => count > 1)
-    .map(([path]) => path);
-
-  const coverage = git ? diffCoverage(git, chapterFilePaths) : undefined;
+  const coverage = git ? fileMapCoverage(report, git) : undefined;
 
   addDetailMetadataCheck(checks, report, requestedDetail);
-  addChapterStructureCheck(checks, detail, chapters.length);
-  addFileContextCheck(checks, detail, report);
-  addReviewFocusCheck(checks, detail, report);
+  addStatusCheck(checks, detail, report);
+  addFileMapCheck(checks, detail, report, coverage, Boolean(git));
+  addSnippetChecks(checks, detail, report);
+  addStructureChecks(checks, detail, report);
   addValidationCheck(checks, detail, report);
   addRiskDecisionLimitationChecks(checks, detail, report);
-  addBehaviorFlowCheck(checks, detail, report);
-  addDiffCoverageChecks(checks, detail, coverage, duplicateFiles, Boolean(git));
 
   const errors = checks.filter((check) => check.status === "fail").map((check) => `${check.label}: ${check.detail}`);
   const warnings = checks.filter((check) => check.status === "warn").map((check) => `${check.label}: ${check.detail}`);
-
   return { detail, requestedDetail, enforced, checks, errors, warnings, coverage };
 }
 
@@ -72,16 +68,7 @@ function addDetailMetadataCheck(checks: DetailCheck[], report: ReviewReport, req
       id: "detail-metadata",
       label: "Detail metadata",
       status: report.reviewDetail ? "pass" : "warn",
-      detail: report.reviewDetail ? `Report declares ${report.reviewDetail} detail.` : "Report has no reviewDetail; using default medium semantics without enforcement unless --detail is passed.",
-    });
-    return;
-  }
-  if (!report.reviewDetail) {
-    checks.push({
-      id: "detail-metadata",
-      label: "Detail metadata",
-      status: "fail",
-      detail: `Validation requested ${requestedDetail} detail, but report.reviewDetail is missing. Set reviewDetail to "${requestedDetail}".`,
+      detail: report.reviewDetail ? `Report declares ${report.reviewDetail} detail.` : "Report has no reviewDetail; using default medium semantics unless --detail is passed.",
     });
     return;
   }
@@ -89,82 +76,106 @@ function addDetailMetadataCheck(checks: DetailCheck[], report: ReviewReport, req
     id: "detail-metadata",
     label: "Detail metadata",
     status: report.reviewDetail === requestedDetail ? "pass" : "fail",
-    detail:
-      report.reviewDetail === requestedDetail
-        ? `Report detail matches requested ${requestedDetail}.`
-        : `Validation requested ${requestedDetail}, but report.reviewDetail is ${report.reviewDetail}.`,
+    detail: report.reviewDetail === requestedDetail ? `Report detail matches requested ${requestedDetail}.` : `Validation requested ${requestedDetail}, but report.reviewDetail is ${report.reviewDetail || "missing"}.`,
   });
 }
 
-function addChapterStructureCheck(checks: DetailCheck[], detail: ReviewDetail, chapterCount: number): void {
-  if (detail === "ultralow" || detail === "low") {
-    const preferredMax = detail === "ultralow" ? 1 : 3;
+function addStatusCheck(checks: DetailCheck[], detail: ReviewDetail, report: ReviewReport): void {
+  const hasChangeSummary = Boolean(report.status.changeSummary?.trim());
+  checks.push({
+    id: "status",
+    label: "Current status",
+    status: detail === "ultralow" || hasChangeSummary ? "pass" : "warn",
+    detail: hasChangeSummary ? "Current state, review scope, and change summary are documented." : "Current state and scope are present; changeSummary is optional for ultralow but useful for richer tiers.",
+  });
+}
+
+function addFileMapCheck(
+  checks: DetailCheck[],
+  detail: ReviewDetail,
+  report: ReviewReport,
+  coverage: DetailProfileResult["coverage"],
+  diffAware: boolean,
+): void {
+  const missingRole = report.fileMap.filter((entry) => !entry.role.trim()).map((entry) => entry.path);
+  checks.push({
+    id: "file-map-role",
+    label: "File map roles",
+    status: missingRole.length ? "fail" : "pass",
+    detail: missingRole.length ? `Missing role for ${sampleList(missingRole)}.` : `${report.fileMap.length} file-map entr${report.fileMap.length === 1 ? "y" : "ies"} include roles.`,
+  });
+
+  if (!diffAware || !coverage) {
     checks.push({
-      id: "chapter-structure",
-      label: "Chapter structure",
-      status: chapterCount === 0 || chapterCount <= preferredMax ? "pass" : "warn",
-      detail: chapterCount === 0 ? `${labelDetail(detail)} may derive chapters from changes.` : `${chapterCount} explicit chapter(s); ${detail} detail prefers 1-${preferredMax}.`,
+      id: "file-map-coverage",
+      label: "Changed-file coverage",
+      status: detail === "ultralow" || detail === "low" ? "pass" : "warn",
+      detail: detail === "ultralow" || detail === "low" ? `${labelDetail(detail)} can validate without git metadata.` : "Pass --cwd/--mode to validate changed-file coverage for medium/high detail.",
     });
     return;
   }
-  if (chapterCount === 0) {
-    checks.push({ id: "chapter-structure", label: "Chapter structure", status: "fail", detail: `${detail} detail requires explicit chapters.` });
-    return;
-  }
-  if (detail === "medium") {
-    checks.push({
-      id: "chapter-structure",
-      label: "Chapter structure",
-      status: chapterCount <= 8 ? "pass" : "warn",
-      detail: `${chapterCount} explicit chapter(s); medium detail usually works best with 3-6.`,
-    });
-    return;
-  }
+
+  const failures = [
+    ...(coverage.missingFiles.length ? [`missing changed files: ${sampleList(coverage.missingFiles)}`] : []),
+    ...(coverage.staleChangedFlags.length ? [`changed=true but not in diff: ${sampleList(coverage.staleChangedFlags)}`] : []),
+  ];
+  const required = detail === "medium" || detail === "high";
   checks.push({
-    id: "chapter-structure",
-    label: "Chapter structure",
-    status: "pass",
-    detail: `${chapterCount} explicit chapter(s) present for high-detail review.`,
+    id: "file-map-coverage",
+    label: "Changed-file coverage",
+    status: failures.length ? (required ? "fail" : "warn") : "pass",
+    detail: failures.length ? failures.join("; ") : `${coverage.mappedChangedFiles}/${coverage.changedFiles} changed file(s) represented in fileMap.`,
   });
 }
 
-function addFileContextCheck(checks: DetailCheck[], detail: ReviewDetail, report: ReviewReport): void {
-  const targetFiles = (report.chapters?.length ? report.chapters.flatMap((chapter) => chapter.files) : report.changes.flatMap((change) => change.files)) || [];
-  const missingPurpose = targetFiles.filter((file) => !file.purpose?.trim()).map((file) => file.path);
+function addSnippetChecks(checks: DetailCheck[], detail: ReviewDetail, report: ReviewReport): void {
+  const snippets = report.snippets || [];
+  const ids = snippets.map((snippet) => snippet.id);
+  const duplicateIds = duplicates(ids);
+  const referenced = collectSnippetRefs(report);
+  const missingRefs = Array.from(referenced).filter((id) => !ids.includes(id));
+  const totalLines = snippets.reduce((sum, snippet) => sum + Math.max(0, snippet.endLine - snippet.startLine + 1), 0);
+  const budget = snippetBudgets[detail];
+
   checks.push({
-    id: "file-context",
-    label: "File context",
-    status: missingPurpose.length ? "fail" : "pass",
-    detail: missingPurpose.length ? `Missing purpose for ${sampleList(missingPurpose)}.` : `${targetFiles.length} file reference(s) include purpose text.`,
+    id: "snippet-ids",
+    label: "Snippet references",
+    status: duplicateIds.length || missingRefs.length ? "fail" : "pass",
+    detail: duplicateIds.length || missingRefs.length ? `Duplicate ids: ${sampleList(duplicateIds)}; unresolved refs: ${sampleList(missingRefs)}.` : `${snippets.length} snippet definition(s), ${referenced.size} reference(s), all resolved.`,
   });
 
-  if (detail !== "high") return;
-  const chapterFiles = report.chapters?.flatMap((chapter) => chapter.files) || [];
-  const missingFileFocus = chapterFiles.filter((file) => !file.reviewFocus?.length).map((file) => file.path);
+  const budgetFailures = [
+    snippets.length < budget.minCount ? `expected at least ${budget.minCount} snippet(s)` : undefined,
+    snippets.length > budget.maxCount ? `${snippets.length} snippets exceeds ${budget.maxCount}` : undefined,
+    totalLines > budget.maxLines ? `${totalLines} snippet lines exceeds ${budget.maxLines}` : undefined,
+  ].filter(Boolean) as string[];
   checks.push({
-    id: "file-review-focus",
-    label: "Per-file review focus",
-    status: missingFileFocus.length ? "fail" : "pass",
-    detail: missingFileFocus.length ? `High detail requires reviewFocus for each chapter file; missing ${sampleList(missingFileFocus)}.` : "Every chapter file has per-file reviewFocus.",
+    id: "snippet-budget",
+    label: "Snippet budget",
+    status: budgetFailures.length ? (detail === "ultralow" ? "warn" : "fail") : "pass",
+    detail: budgetFailures.length ? budgetFailures.join("; ") : `${snippets.length} snippet(s), ${totalLines}/${budget.maxLines} referenced line(s).`,
   });
 }
 
-function addReviewFocusCheck(checks: DetailCheck[], detail: ReviewDetail, report: ReviewReport): void {
-  if (detail === "ultralow" || detail === "low") {
-    checks.push({ id: "chapter-review-focus", label: "Chapter review focus", status: "pass", detail: `${labelDetail(detail)} does not require chapter-level reviewFocus.` });
+function addStructureChecks(checks: DetailCheck[], detail: ReviewDetail, report: ReviewReport): void {
+  const blocks = report.buildingBlocks?.length || 0;
+  const workflows = report.workflows?.length || 0;
+  const dataFlows = report.dataFlows?.length || 0;
+  if (detail === "ultralow") {
+    checks.push({ id: "structure", label: "Understanding structure", status: blocks || workflows || dataFlows ? "pass" : "warn", detail: blocks || workflows || dataFlows ? "At least one explanatory section is present." : "Ultralow permits only status + file map, but one workflow/block is helpful." });
     return;
   }
-  const chapters = report.chapters || [];
-  const missingIntent = chapters.filter((chapter) => !chapter.intent?.trim()).map((chapter) => chapter.title);
-  const weakFocus = chapters
-    .filter((chapter) => (chapter.reviewFocus?.length || 0) < (detail === "high" ? 2 : 1))
-    .map((chapter) => chapter.title);
-  const failures = [...missingIntent.map((title) => `${title} missing intent`), ...weakFocus.map((title) => `${title} has insufficient reviewFocus`)];
+  if (detail === "low") {
+    checks.push({ id: "structure", label: "Understanding structure", status: blocks + workflows + dataFlows >= 1 ? "pass" : "fail", detail: blocks + workflows + dataFlows >= 1 ? `${blocks} block(s), ${workflows} workflow(s), ${dataFlows} data flow(s).` : "Low detail requires at least one building block, workflow, or data flow." });
+    return;
+  }
+  const hasWorkflow = workflows + dataFlows >= 1;
+  const hasBlocks = blocks >= 1;
   checks.push({
-    id: "chapter-review-focus",
-    label: "Chapter review focus",
-    status: failures.length ? "fail" : "pass",
-    detail: failures.length ? sampleList(failures) : `${chapters.length} chapter(s) include intent and required reviewFocus.`,
+    id: "structure",
+    label: "Understanding structure",
+    status: hasWorkflow && hasBlocks ? "pass" : "fail",
+    detail: hasWorkflow && hasBlocks ? `${blocks} building block(s), ${workflows} workflow(s), ${dataFlows} data flow(s).` : "Medium/high detail require buildingBlocks and at least one workflow or dataFlow.",
   });
 }
 
@@ -173,146 +184,68 @@ function addValidationCheck(checks: DetailCheck[], detail: ReviewDetail, report:
   const hasMissingValidation = hasOwn(report, "missingValidation");
   const missingValidationCount = report.missingValidation?.length || 0;
   if (detail === "ultralow") {
-    checks.push({
-      id: "validation",
-      label: "Validation documentation",
-      status: runs.length || missingValidationCount ? "pass" : "warn",
-      detail: runs.length || missingValidationCount ? `${runs.length} run(s), ${missingValidationCount} missing-validation note(s).` : "Ultralow detail permits omitted validation documentation for speed.",
-    });
+    checks.push({ id: "validation", label: "Validation documentation", status: runs.length || missingValidationCount ? "pass" : "warn", detail: runs.length || missingValidationCount ? `${runs.length} run(s), ${missingValidationCount} missing-validation note(s).` : "Ultralow permits omitted validation documentation for speed." });
     return;
   }
   if (detail === "low") {
-    checks.push({
-      id: "validation",
-      label: "Validation documentation",
-      status: runs.length || missingValidationCount ? "pass" : "fail",
-      detail: runs.length || missingValidationCount ? `${runs.length} run(s), ${missingValidationCount} missing-validation note(s).` : "Low detail requires at least one validation run or missingValidation note.",
-    });
+    checks.push({ id: "validation", label: "Validation documentation", status: runs.length || missingValidationCount ? "pass" : "fail", detail: runs.length || missingValidationCount ? `${runs.length} run(s), ${missingValidationCount} missing-validation note(s).` : "Low detail requires at least one validation run or missingValidation note." });
     return;
   }
-  if (detail === "medium") {
-    checks.push({
-      id: "validation",
-      label: "Validation documentation",
-      status: report.validation && hasMissingValidation ? "pass" : "fail",
-      detail: report.validation && hasMissingValidation ? `${runs.length} validation run(s); missingValidation field is present.` : "Medium detail requires validation and missingValidation fields, even if missingValidation is empty.",
-    });
-    return;
-  }
-
-  const chapters = report.chapters || [];
-  const chaptersMissingValidation = chapters.filter((chapter) => !chapter.validation?.length).map((chapter) => chapter.title);
-  const topLevelOk = runs.length > 0 || missingValidationCount > 0;
   checks.push({
     id: "validation",
     label: "Validation documentation",
-    status: topLevelOk && chaptersMissingValidation.length === 0 ? "pass" : "fail",
-    detail:
-      topLevelOk && chaptersMissingValidation.length === 0
-        ? `${runs.length} top-level validation run(s), ${missingValidationCount} missing-validation note(s), and chapter validation notes present.`
-        : `High detail requires top-level validation/missingValidation and chapter validation notes. Missing chapter notes: ${sampleList(chaptersMissingValidation)}.`,
+    status: report.validation && hasMissingValidation ? "pass" : "fail",
+    detail: report.validation && hasMissingValidation ? `${runs.length} validation run(s); missingValidation field is present.` : "Medium/high detail require validation and missingValidation fields, even if missingValidation is empty.",
   });
 }
 
 function addRiskDecisionLimitationChecks(checks: DetailCheck[], detail: ReviewDetail, report: ReviewReport): void {
-  if (detail === "ultralow" || detail === "low") {
-    checks.push({ id: "risk-decision-limitation", label: "Risks, decisions, limitations", status: "pass", detail: `${labelDetail(detail)} only requires critical risks when relevant.` });
+  if (detail !== "high") {
+    checks.push({ id: "risk-decision-limitation", label: "Risks, decisions, limitations", status: "pass", detail: `${labelDetail(detail)} records these when relevant.` });
     return;
   }
-  if (detail === "medium") {
-    checks.push({
-      id: "risk-decision-limitation",
-      label: "Risks, decisions, limitations",
-      status: "pass",
-      detail: "Medium detail records these when relevant; absence is rendered as none recorded.",
-    });
-    return;
-  }
-
-  const chapters = report.chapters || [];
-  const chaptersMissingRisks = chapters.filter((chapter) => !chapter.risks?.length).map((chapter) => chapter.title);
   const failures = [
-    ...(report.risks?.length ? [] : ["top-level risks or explicit low/no-risk callout"]),
+    ...(report.reviewFocus?.length ? [] : ["reviewFocus"]),
+    ...(report.risks?.length ? [] : ["risks or explicit low-risk callout"]),
     ...(report.decisions?.length ? [] : ["decisions or explicit no-notable-decisions entry"]),
     ...(report.knownLimitations?.length ? [] : ["knownLimitations or explicit none entry"]),
-    ...chaptersMissingRisks.map((title) => `${title} chapter risks`),
   ];
   checks.push({
     id: "risk-decision-limitation",
     label: "Risks, decisions, limitations",
     status: failures.length ? "fail" : "pass",
-    detail: failures.length ? `High detail requires: ${sampleList(failures)}.` : "High-detail risks, decisions, limitations, and chapter risks are documented.",
+    detail: failures.length ? `High detail requires: ${sampleList(failures)}.` : "High-detail review focus, risks, decisions, and limitations are documented.",
   });
 }
 
-function addBehaviorFlowCheck(checks: DetailCheck[], detail: ReviewDetail, report: ReviewReport): void {
-  if (detail !== "high") return;
-  checks.push({
-    id: "behavior-flow",
-    label: "Behavior flow",
-    status: report.behaviorFlow?.length ? "pass" : "warn",
-    detail: report.behaviorFlow?.length ? `${report.behaviorFlow.length} behavior step(s) documented.` : "High detail should include behaviorFlow when behavior changed; omit only for non-behavioral changes.",
-  });
-}
-
-function addDiffCoverageChecks(
-  checks: DetailCheck[],
-  detail: ReviewDetail,
-  coverage: DetailProfileResult["coverage"],
-  duplicateFiles: string[],
-  diffAware: boolean,
-): void {
-  if (!diffAware || !coverage) {
-    checks.push({
-      id: "diff-coverage",
-      label: "Diff-aware file coverage",
-      status: detail === "ultralow" || detail === "low" ? "pass" : "warn",
-      detail: detail === "ultralow" || detail === "low" ? `${labelDetail(detail)} can validate without git metadata.` : "Pass --cwd/--mode to validate changed-file coverage for medium/high detail.",
-    });
-    return;
-  }
-
-  if (detail === "ultralow" || detail === "low") {
-    checks.push({
-      id: "diff-coverage",
-      label: "Diff-aware file coverage",
-      status: "pass",
-      detail: `${coverage.assignedFiles}/${coverage.changedFiles} changed file(s) referenced; ${detail} detail permits broad grouping.`,
-    });
-    return;
-  }
-
-  const failures = [
-    ...(coverage.missingFiles.length ? [`unassigned changed files: ${sampleList(coverage.missingFiles)}`] : []),
-    ...(coverage.staleFiles.length ? [`stale chapter paths: ${sampleList(coverage.staleFiles)}`] : []),
-    ...(duplicateFiles.length ? [`duplicate chapter assignments: ${sampleList(duplicateFiles)}`] : []),
-  ];
-  checks.push({
-    id: "diff-coverage",
-    label: "Diff-aware file coverage",
-    status: failures.length ? "fail" : "pass",
-    detail: failures.length ? failures.join("; ") : `${coverage.assignedFiles}/${coverage.changedFiles} changed file(s) assigned exactly once to chapters.`,
-  });
-}
-
-function diffCoverage(git: GitSnapshot, chapterFilePaths: string[]): DetailProfileResult["coverage"] {
+function fileMapCoverage(report: ReviewReport, git: GitSnapshot): DetailProfileResult["coverage"] {
   const changed = new Set(git.files.map((file) => file.path));
-  const assigned = new Set(chapterFilePaths);
+  const mappedChanged = new Set(report.fileMap.filter((entry) => entry.changed !== false).map((entry) => entry.path));
   return {
     changedFiles: changed.size,
-    assignedFiles: Array.from(assigned).filter((path) => changed.has(path)).length,
-    missingFiles: Array.from(changed).filter((path) => !assigned.has(path)),
-    staleFiles: Array.from(assigned).filter((path) => !changed.has(path)),
-    duplicateFiles: Array.from(countValues(chapterFilePaths).entries())
-      .filter(([, count]) => count > 1)
-      .map(([path]) => path),
+    mappedChangedFiles: Array.from(mappedChanged).filter((path) => changed.has(path)).length,
+    missingFiles: Array.from(changed).filter((path) => !mappedChanged.has(path)),
+    staleChangedFlags: Array.from(mappedChanged).filter((path) => !changed.has(path)),
   };
 }
 
-function countValues(values: string[]): Map<string, number> {
-  const out = new Map<string, number>();
-  for (const value of values) out.set(value, (out.get(value) || 0) + 1);
-  return out;
+function collectSnippetRefs(report: ReviewReport): Set<string> {
+  const ids = new Set<string>();
+  const add = (values?: string[]) => values?.forEach((id) => ids.add(id));
+  report.fileMap.forEach((entry) => add(entry.snippetIds));
+  report.buildingBlocks?.forEach((entry) => add(entry.snippetIds));
+  report.workflows?.forEach((workflow) => workflow.steps.forEach((step) => add(step.snippetIds)));
+  report.dataFlows?.forEach((flow) => flow.nodes.forEach((node) => add(node.snippetIds)));
+  report.reviewFocus?.forEach((entry) => add(entry.snippetIds));
+  report.risks?.forEach((entry) => add(entry.snippetIds));
+  report.decisions?.forEach((entry) => add(entry.snippetIds));
+  return ids;
+}
+
+function duplicates(values: string[]): string[] {
+  const counts = new Map<string, number>();
+  values.forEach((value) => counts.set(value, (counts.get(value) || 0) + 1));
+  return Array.from(counts.entries()).filter(([, count]) => count > 1).map(([value]) => value);
 }
 
 function labelDetail(detail: ReviewDetail): string {

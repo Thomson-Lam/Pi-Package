@@ -97,7 +97,7 @@ async function pickReviewOptions(ctx: ExtensionCommandContext, cliPath: string):
 
     if (step === 4) {
       const selected = await selectModal<ReviewDetail>(ctx, "Review depth", [
-        { value: "medium", label: "Medium", description: "Default shareable artifact with coherent chapters" },
+        { value: "medium", label: "Medium", description: "Default shareable codebase map with workflows and snippets" },
         { value: "low", label: "Low", description: "Compact internal handoff" },
         { value: "ultralow", label: "Ultralow", description: "Fastest minimal artifact" },
         { value: "high", label: "High", description: "Rigorous, exhaustive review artifact" },
@@ -414,7 +414,7 @@ function buildReviewPrompt(cliPath: string, opts: ReviewCommandOptions): string 
   const untrackedArg = opts.includeUntracked ? " --include-untracked" : "";
   const openArg = opts.open ? "--open" : "--no-open";
   const outArg = `--out ${opts.out}`;
-  const renderArgs = `--template chapters --cwd ${cwdArg} --project-cwd ${shellQuote(opts.projectCwd)} ${modeArgs}${untrackedArg} --detail ${opts.detail} ${outArg} ${openArg}`;
+  const renderArgs = `--template codebase --cwd ${cwdArg} --project-cwd ${shellQuote(opts.projectCwd)} ${modeArgs}${untrackedArg} --detail ${opts.detail} ${outArg} ${openArg}`;
   const diffArgs = opts.mode === "staged" ? "diff --cached" : opts.mode === "baseRef" ? `diff ${shellQuote(opts.base || "HEAD")}` : "diff HEAD";
 
   if (opts.detail === "ultralow" || opts.detail === "low") return buildEphemeralReviewPrompt({ cliPath, cli, cwdArg, opts, renderArgs, diffArgs });
@@ -425,16 +425,16 @@ function buildScaffoldReviewPrompt(input: { cliPath: string; cli: string; cwdArg
   const { cliPath, cli, cwdArg, opts, renderArgs, diffArgs } = input;
   const reportPath = `/tmp/pi-review-report-${Date.now()}.json`;
   const inputArg = shellQuote(reportPath);
-  const scaffoldCommand = `node ${cli} scaffold --template chapters --cwd ${cwdArg} ${renderModeArgs(opts)}${opts.includeUntracked ? " --include-untracked" : ""} --detail ${opts.detail} --output ${inputArg}`;
+  const scaffoldCommand = `node ${cli} scaffold --template codebase --cwd ${cwdArg} ${renderModeArgs(opts)}${opts.includeUntracked ? " --include-untracked" : ""} --detail ${opts.detail} --output ${inputArg}`;
   const renderCommand = `node ${cli} render --input ${inputArg} ${renderArgs}`;
 
   return `${commonReviewHeader(cliPath, opts)}
 
 Workflow requirements:
-1. Run the scaffold command exactly. It writes a draft JSON report containing all changed file paths and TODO_REPLACE placeholders.
-2. Inspect the final diff in ${opts.targetCwd} using Bash/Git. Use the scaffold only as structure; do not trust placeholders as content.
-3. Fill the scaffold JSON at ${reportPath}. Replace every TODO_REPLACE placeholder. Set report.title to a concise subject for the HTML filename (render writes <subject>.html after slugging spaces/symbols to hyphens). Do not include HTML, Mermaid, or raw diffs in the JSON. Do not invent test outcomes.
-4. Render with the chapters template. Render performs schema validation, placeholder rejection, detail-profile validation, git metadata collection, and HTML generation in one step. If render fails, fix the JSON and rerun render.
+1. Run the scaffold command exactly. It writes a draft codebase-review JSON report containing changed file paths and TODO_REPLACE placeholders.
+2. Inspect changed files and important adjacent files in ${opts.targetCwd} using targeted reads and Git metadata. Use GitHub for raw diffs; this artifact should explain how the code currently works.
+3. Fill the scaffold JSON at ${reportPath}. Replace every TODO_REPLACE placeholder. Set report.title to a concise subject for the HTML filename (render writes <subject>.html after slugging spaces/symbols to hyphens). Do not include HTML, Mermaid, raw diffs, or inline copied code in the JSON. Include code snippets only as path + startLine/endLine references. Do not invent test outcomes.
+4. Render with the codebase template. Render performs schema validation, placeholder rejection, detail-profile validation, git metadata collection, snippet resolution from local files, and HTML generation in one step. If render fails, fix the JSON and rerun render.
 5. Return the final Artifact path plus a concise reviewer summary.
 
 Run scaffold first:
@@ -447,8 +447,7 @@ Suggested Git inspection commands:
 git -C ${cwdArg} status --short
 git -C ${cwdArg} ${diffArgs} --stat
 git -C ${cwdArg} ${diffArgs} --name-status --find-renames
-# Inspect file-level patches as needed:
-git -C ${cwdArg} ${diffArgs} -- <path>
+# Inspect relevant files with targeted reads and record only snippet line ranges in JSON.
 \`\`\`
 
 Then run render exactly after filling the report:
@@ -458,8 +457,8 @@ ${renderCommand}
 
 Only if you are unsure about the schema shape, run these fallback references:
 \`\`\`bash
-node ${cli} guide --template chapters
-node ${cli} example --template chapters
+node ${cli} guide --template codebase
+node ${cli} example --template codebase
 \`\`\`
 `;
 }
@@ -472,9 +471,9 @@ function buildEphemeralReviewPrompt(input: { cliPath: string; cli: string; cwdAr
 
 Workflow requirements for ${opts.detail} detail:
 1. Do not run scaffold and do not write a report JSON file to /tmp.
-2. Inspect the final diff in ${opts.targetCwd} using Bash/Git.
-3. Generate compact report JSON directly in the render command here-doc. Set report.title to a concise subject for the HTML filename (render writes <subject>.html after slugging spaces/symbols to hyphens). Do not include HTML, Mermaid, or raw diffs in the JSON. Do not invent test outcomes.
-4. Render with the chapters template. Render performs schema validation, placeholder rejection, detail-profile validation, git metadata collection, and HTML generation in one step. If render fails, fix the here-doc JSON and rerun render.
+2. Inspect changed files and important adjacent files in ${opts.targetCwd} using targeted reads and Git metadata. Use GitHub for raw diffs; this artifact should explain how the code currently works.
+3. Generate compact codebase-review JSON directly in the render command here-doc. Set report.title to a concise subject for the HTML filename (render writes <subject>.html after slugging spaces/symbols to hyphens). Do not include HTML, Mermaid, raw diffs, or inline copied code in the JSON. Include code snippets only as path + startLine/endLine references. Do not invent test outcomes.
+4. Render with the codebase template. Render performs schema validation, placeholder rejection, detail-profile validation, git metadata collection, snippet resolution from local files, and HTML generation in one step. If render fails, fix the here-doc JSON and rerun render.
 5. Return the final Artifact path plus a concise reviewer summary.
 
 Suggested Git inspection commands:
@@ -482,8 +481,7 @@ Suggested Git inspection commands:
 git -C ${cwdArg} status --short
 git -C ${cwdArg} ${diffArgs} --stat
 git -C ${cwdArg} ${diffArgs} --name-status --find-renames
-# Inspect file-level patches as needed:
-git -C ${cwdArg} ${diffArgs} -- <path>
+# Inspect relevant files with targeted reads and record only snippet line ranges in JSON.
 \`\`\`
 
 Use this JSON shape for the here-doc. Keep it concise and replace all example text; choose a title that makes a good slugged filename:
@@ -491,58 +489,29 @@ Use this JSON shape for the here-doc. Keep it concise and replace all example te
 ${ephemeralJsonShape(opts.detail)}
 \`\`\`
 
-Run render with stdin after inspecting the diff:
+Run render with stdin after inspecting the code:
 \`\`\`bash
 ${renderCommandPrefix} <<'PI_REVIEW_JSON'
-{
-  "schemaVersion": "1.0",
-  "reviewDetail": "${opts.detail}",
-  "title": "Concise change subject for filename",
-  "summary": {
-    "intent": "What this diff is trying to accomplish.",
-    "changeType": "mixed"
-  },
-  "changes": [
-    {
-      "title": "Review target changes",
-      "summary": "Brief summary of the changed area.",
-      "files": [
-        { "path": "path/from/git-diff", "purpose": "Why this file changed." }
-      ]
-    }
-  ],
-  "chapters": [
-    {
-      "sequence": 1,
-      "title": "Review target changes",
-      "summary": "Brief reviewer-facing summary.",
-      "files": [
-        { "path": "path/from/git-diff", "purpose": "Why this file changed." }
-      ]
-    }
-  ]${opts.detail === "low" ? `,
-  "validation": { "runs": [] },
-  "missingValidation": ["State checks not run, or use an empty array if none are missing."]` : ""}
-}
+${ephemeralJsonShape(opts.detail)}
 PI_REVIEW_JSON
 \`\`\`
 
 Only if you are unsure about the schema shape, run these fallback references:
 \`\`\`bash
-node ${cli} guide --template chapters
-node ${cli} example --template chapters
+node ${cli} guide --template codebase
+node ${cli} example --template codebase
 \`\`\`
 `;
 }
 
 function commonReviewHeader(cliPath: string, opts: ReviewCommandOptions): string {
-  return `Create a chapters-based code review artifact for the final requested diff.
+  return `Create a codebase-review HTML artifact for the final requested change set. Raw diffs must be omitted; GitHub already provides them.
 
 Use this exact local CLI; do not assume pi-review-artifact is on PATH:
 - CLI path: ${cliPath}
 - Target cwd: ${opts.targetCwd}
 - Pi agent cwd for global project slug: ${opts.projectCwd}
-- Template: chapters
+- Template: codebase
 - Diff mode: ${opts.mode}${opts.base ? ` (${opts.base})` : ""}
 - Include untracked files: ${opts.includeUntracked ? "yes" : "no"}
 - Review detail: ${opts.detail}
@@ -572,27 +541,53 @@ function renderModeArgs(opts: ReviewCommandOptions): string {
 }
 
 function ephemeralJsonShape(detail: ReviewDetail): string {
-  const validation = detail === "low" ? `,\n  "validation": { "runs": [] },\n  "missingValidation": ["Checks not run, or [] if none"]` : "";
-  return `{\n  "schemaVersion": "1.0",\n  "reviewDetail": "${detail}",\n  "title": "concise change subject for filename",\n  "summary": { "intent": "...", "changeType": "mixed" },\n  "changes": [{ "title": "...", "summary": "...", "files": [{ "path": "...", "purpose": "..." }] }],\n  "chapters": [{ "sequence": 1, "title": "...", "summary": "...", "files": [{ "path": "...", "purpose": "..." }] }]${validation}\n}`;
+  const validation = detail === "low" ? `,
+  "validation": { "runs": [] },
+  "missingValidation": ["Checks not run, or [] if none"]` : "";
+  return `{
+  "schemaVersion": "2.0",
+  "artifactKind": "codebase-review",
+  "reviewDetail": "${detail}",
+  "title": "concise change subject for filename",
+  "status": {
+    "currentState": "What the relevant code currently does.",
+    "reviewScope": "What this artifact covers.",
+    "changeSummary": "High-level behavior/configuration change."
+  },
+  "fileMap": [
+    { "path": "path/from/git-metadata", "changed": true, "role": "What this file is responsible for.", "whyRelevant": "Why it matters to the review." }
+  ],
+  "buildingBlocks": [
+    { "name": "Main building block", "kind": "module", "description": "What it does.", "files": ["path/from/git-metadata"], "snippetIds": ["focused-snippet"] }
+  ],
+  "workflows": [
+    { "name": "Main workflow", "summary": "How the code path works.", "steps": [
+      { "label": "Step", "description": "What happens.", "files": ["path/from/git-metadata"], "snippetIds": ["focused-snippet"] }
+    ] }
+  ],
+  "snippets": [
+    { "id": "focused-snippet", "path": "path/from/git-metadata", "startLine": 1, "endLine": 20, "caption": "Why these lines matter." }
+  ]${validation}
+}`;
 }
 
 function detailInstructions(detail: ReviewDetail): string {
   if (detail === "ultralow") {
-    return `- Ultralow: fastest compact handoff. Use one broad group/chapter, file purposes, minimal validation notes, no raw diffs in the rendered artifact, and a concise title that becomes the subject-based HTML filename.`;
+    return `- Ultralow: fastest compact handoff. Include current status, a concise changed-file map, optional workflow/block context, 0-3 snippet line ranges, minimal validation notes, no raw diffs or inline code, and a concise title that becomes the subject-based HTML filename.`;
   }
   if (detail === "low") {
-    return `- Low: concise internal handoff. Prefer 1-3 chapters, brief summaries, file purposes, validation/missingValidation, only critical risks, and a concise title that becomes the subject-based HTML filename.`;
+    return `- Low: concise internal handoff. Include file roles, at least one building block/workflow/data flow, 1-6 focused snippet line ranges, validation/missingValidation, only critical risks, no raw diffs or inline code, and a concise title that becomes the subject-based HTML filename.`;
   }
   if (detail === "high") {
-    return `- High: rigorous review artifact. Cover every changed file, use explicit reviewer order, add per-file purpose/focus/risk where useful, include risks with mitigation, decisions/alternatives, behaviorFlow for behavior changes, knownLimitations, detailed validation evidence, and a concise title that becomes the subject-based HTML filename.`;
+    return `- High: rigorous codebase map. Cover every changed file plus important adjacent files, explain building blocks, workflows and data flows, include 4-25 focused snippet line ranges, add review focus/risk/decision/limitation sections, detailed validation evidence, no raw diffs or inline code, and a concise title that becomes the subject-based HTML filename.`;
   }
-  return `- Medium: shareable coherent artifact. Prefer 3-6 chapters, assign all changed files where possible, include chapter summaries, file purposes, chapter-level reviewFocus, validation/missingValidation, relevant risks/decisions/knownLimitations, and a concise title that becomes the subject-based HTML filename.`;
+  return `- Medium: shareable coherent codebase map. Cover all changed files where possible, include important adjacent files, building blocks, at least one workflow/data flow, 2-12 focused snippet line ranges, review focus, validation/missingValidation, relevant risks/decisions/knownLimitations, no raw diffs or inline code, and a concise title that becomes the subject-based HTML filename.`;
 }
 
 function reviewDevHelpText(cliPath: string, currentCwd: string): string {
   return `# /pr-dev help
 
-Render dummy chapters-based review HTML fixtures from inside Pi without invoking the agent.
+Render dummy codebase-review review HTML fixtures from inside Pi without invoking the agent.
 
 ## How to use it
 
@@ -609,7 +604,7 @@ The wizard asks for:
 
 - Runs the local CLI command \`dev-render\` using \`pi.exec\`.
 - Loads static dummy review JSON and a static dummy GitSnapshot fixture.
-- Calls the same chapters HTML renderer used by production review artifacts.
+- Calls the same codebase HTML renderer used by production review artifacts.
 - Does not call \`pi.sendUserMessage\`.
 - Does not start an agent turn.
 - Does not inspect real git state.
@@ -630,7 +625,7 @@ node '${cliPath}' dev-render --fixture comprehensive --detail all --cwd '${curre
 function reviewHelpText(cliPath: string, currentCwd: string): string {
   return `# /pr help
 
-Create a shareable chapters-based code review artifact from compact JSON plus authoritative local git diffs.
+Create a shareable codebase-review artifact from compact JSON, local git metadata, and curated code snippet line ranges. Raw diffs are intentionally omitted because GitHub already provides them.
 
 ## How to use it
 
@@ -647,23 +642,20 @@ The wizard asks for:
 - Whether to open the generated artifact.
 - Optional review emphasis, such as security boundaries or API compatibility.
 
-## Diff modes
-
-- Worktree changes — compares against HEAD and can include untracked files.
-- Staged changes — uses \`git diff --cached\`.
-- Base ref — compares against a branch, tag, or commit; the wizard defaults this value to \`HEAD\`.
-
 ## Detail tiers
 
-- Ultralow — fastest compact handoff: one broad grouping, minimal fields, raw diffs omitted from the artifact. Uses direct stdin JSON; no /tmp report.
-- Low — compact internal handoff: 1-3 chapters, minimal optional fields. Uses direct stdin JSON; no /tmp report.
-- Medium — default shareable artifact: 3-6 chapters, validation, relevant risks/decisions. Uses scaffolded /tmp JSON for robust editing.
-- High — rigorous review: exhaustive file coverage, per-file focus/risk where useful, decisions, behavior flow, limitations, detailed validation evidence. Uses scaffolded /tmp JSON for robust editing.
+- Ultralow — current status, concise file map, optional workflow/block, 0-3 snippet ranges. Uses direct stdin JSON; no /tmp report.
+- Low — compact file map, at least one workflow/block/data flow, 1-6 snippet ranges, validation or missingValidation. Uses direct stdin JSON; no /tmp report.
+- Medium — full changed-file map, important adjacent files, building blocks, workflow/data flow, review focus, 2-12 snippet ranges. Uses scaffolded /tmp JSON.
+- High — rigorous codebase map with broader context, multiple focus/risk/decision sections, 4-25 snippet ranges, limitations and validation evidence. Uses scaffolded /tmp JSON.
 
 ## What the agent will do
 
-- Low/ultralow: inspect git, generate compact JSON in a render stdin here-doc, and render in one CLI step.
-- Medium/high: scaffold a JSON draft, fill it, then render. Render performs validation and HTML generation in one step.
+- Inspect changed files and relevant adjacent files with targeted reads.
+- Generate JSON that explains how the current code works.
+- Reference code snippets by \`path\`, \`startLine\`, and \`endLine\` only.
+- Avoid raw diffs, HTML, Mermaid, and inline copied code in JSON.
+- Let the CLI resolve snippet content locally and render the final HTML.
 
 ## Direct CLI fallback
 
@@ -672,21 +664,22 @@ CLI path for this extension:
 
 Example direct commands:
 \`\`\`bash
-node '${cliPath}' scaffold --template chapters --cwd '${currentCwd}' --mode worktree --include-untracked --detail medium --output /tmp/pi-review-report.json
-node '${cliPath}' render --input /tmp/pi-review-report.json --template chapters --cwd '${currentCwd}' --mode worktree --include-untracked --detail medium --out repo --no-open
-node '${cliPath}' render --stdin --template chapters --cwd '${currentCwd}' --mode worktree --include-untracked --detail low --out localpi --no-open <<'JSON'
-{"schemaVersion":"1.0","reviewDetail":"low","title":"Example","summary":{"intent":"Example.","changeType":"mixed"},"changes":[{"title":"Changes","summary":"Example.","files":[{"path":"file.ts","purpose":"Example."}]}],"chapters":[{"sequence":1,"title":"Changes","summary":"Example.","files":[{"path":"file.ts","purpose":"Example."}]}],"validation":{"runs":[]},"missingValidation":["Example only."]}
+node '${cliPath}' scaffold --template codebase --cwd '${currentCwd}' --mode worktree --include-untracked --detail medium --output /tmp/pi-review-report.json
+node '${cliPath}' render --input /tmp/pi-review-report.json --template codebase --cwd '${currentCwd}' --mode worktree --include-untracked --detail medium --out repo --no-open
+node '${cliPath}' render --stdin --template codebase --cwd '${currentCwd}' --mode worktree --include-untracked --detail low --out localpi --no-open <<'JSON'
+{"schemaVersion":"2.0","artifactKind":"codebase-review","reviewDetail":"low","title":"Example","status":{"currentState":"Example current behavior.","reviewScope":"Example scope.","changeSummary":"Example summary."},"fileMap":[{"path":"file.ts","changed":true,"role":"Example role."}],"buildingBlocks":[{"name":"Example block","kind":"module","description":"Example.","files":["file.ts"],"snippetIds":["example"]}],"workflows":[{"name":"Example workflow","summary":"Example.","steps":[{"label":"Step","description":"Example.","files":["file.ts"],"snippetIds":["example"]}]}],"snippets":[{"id":"example","path":"file.ts","startLine":1,"endLine":20,"caption":"Example snippet."}],"validation":{"runs":[]},"missingValidation":["Example only."]}
 JSON
 \`\`\`
 
 ## Cheap development fixture rendering
 
-Use \`/pr-dev\` to render static dummy HTML artifacts through the same chapters renderer without invoking the agent or reading real git state.
+Use \`/pr-dev\` to render static dummy HTML artifacts through the same codebase renderer without invoking the agent or reading real git state.
 
 ## Troubleshooting
 
 - If render says \`not a git repository\`, run \`/pr\` again and choose the correct repo path.
 - If validation reports unresolved placeholders, edit the scaffold JSON or stdin JSON and replace every \`TODO_REPLACE\` string.
+- If snippet warnings appear, adjust the snippet path/line range or add a stable \`mustContain\` anchor.
 - If the artifact omits new files, run \`/pr\` again and include untracked files or ensure files are staged/tracked.
 `;
 }
