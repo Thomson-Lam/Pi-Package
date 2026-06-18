@@ -1,6 +1,8 @@
 import { dirname, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
-import type { ExtensionAPI } from "@earendil-works/pi-coding-agent";
+import type { ExtensionAPI, ExtensionCommandContext } from "@earendil-works/pi-coding-agent";
+import { DynamicBorder, getMarkdownTheme } from "@earendil-works/pi-coding-agent";
+import { Container, Markdown, SelectList, Text } from "@earendil-works/pi-tui";
 
 type ReviewMode = "worktree" | "staged" | "baseRef";
 type ReviewDetail = "ultralow" | "low" | "medium" | "high";
@@ -27,26 +29,311 @@ type ReviewDevCommandOptions = {
   ignored: string[];
 };
 
-type ParsedReviewArgs = ReviewCommandOptions | { help: true } | string;
-type ParsedReviewDevArgs = ReviewDevCommandOptions | { help: true } | string;
-
 const here = dirname(fileURLToPath(import.meta.url));
+const BACK = Symbol("review-wizard-back");
+type Back = typeof BACK;
+
+function isBack(value: unknown): value is Back {
+  return value === BACK;
+}
+
+async function pickReviewOptions(ctx: ExtensionCommandContext, cliPath: string): Promise<ReviewCommandOptions | undefined> {
+  let step = 0;
+  let targetCwd = ctx.cwd;
+  let mode: ReviewMode = "worktree";
+  let base: string | undefined;
+  let includeUntracked = true;
+  let detail: ReviewDetail = "medium";
+  let out: ReviewOut = "repo";
+  let open = ctx.hasUI;
+  let userPrompt: string | undefined;
+
+  while (step >= 0 && step < 7) {
+    if (step === 0) {
+      const selected = await pickReviewTargetCwd(ctx, cliPath);
+      if (isBack(selected)) continue;
+      if (!selected) return undefined;
+      targetCwd = selected;
+      step++;
+      continue;
+    }
+
+    if (step === 1) {
+      const selected = await selectModal<ReviewMode>(ctx, "Diff to review", [
+        { value: "worktree", label: "Worktree changes", description: "Compare against HEAD and include untracked files by default" },
+        { value: "staged", label: "Staged changes", description: "Review only git diff --cached" },
+        { value: "baseRef", label: "Compare with base ref", description: "Compare the target against a branch, tag, or commit" },
+      ]);
+      if (isBack(selected)) { step--; continue; }
+      if (!selected) return undefined;
+      mode = selected;
+      base = undefined;
+      includeUntracked = mode === "worktree";
+      step = mode === "baseRef" ? 2 : mode === "worktree" ? 3 : 4;
+      continue;
+    }
+
+    if (step === 2) {
+      const selected = await editorModal(ctx, "Base ref", base || "HEAD");
+      if (selected === undefined) return undefined;
+      base = selected.trim() || "HEAD";
+      step = 4;
+      continue;
+    }
+
+    if (step === 3) {
+      const selected = await selectModal<boolean>(ctx, "Include untracked files?", [
+        { value: true, label: "Yes", description: "Recommended for worktree reviews" },
+        { value: false, label: "No", description: "Only tracked files in the git diff" },
+      ]);
+      if (isBack(selected)) { step = 1; continue; }
+      if (selected === undefined) return undefined;
+      includeUntracked = selected;
+      step = 4;
+      continue;
+    }
+
+    if (step === 4) {
+      const selected = await selectModal<ReviewDetail>(ctx, "Review depth", [
+        { value: "medium", label: "Medium", description: "Default shareable artifact with coherent chapters" },
+        { value: "low", label: "Low", description: "Compact internal handoff" },
+        { value: "ultralow", label: "Ultralow", description: "Fastest minimal artifact" },
+        { value: "high", label: "High", description: "Rigorous, exhaustive review artifact" },
+      ]);
+      if (isBack(selected)) { step = mode === "worktree" ? 3 : mode === "baseRef" ? 2 : 1; continue; }
+      if (!selected) return undefined;
+      detail = selected;
+      step = 5;
+      continue;
+    }
+
+    if (step === 5) {
+      const selected = await selectModal<ReviewOut>(ctx, "Where should the artifact be written?", [
+        { value: "repo", label: "Repo root", description: "Write directly in the target git repository root" },
+        { value: "localpi", label: "Local Pi store", description: "Write under .pi/reviews/ in the target repo" },
+        { value: "global", label: "Global Pi store", description: "Write under ~/.pi/agent/reviews/" },
+      ]);
+      if (isBack(selected)) { step = 4; continue; }
+      if (!selected) return undefined;
+      out = selected;
+      step = 6;
+      continue;
+    }
+
+    if (step === 6) {
+      const selected = ctx.hasUI
+        ? await selectModal<boolean>(ctx, "Open artifact after render?", [
+            { value: true, label: "Yes", description: "Open the generated HTML when rendering completes" },
+            { value: false, label: "No", description: "Only print the artifact path" },
+          ])
+        : false;
+      if (isBack(selected)) { step = 5; continue; }
+      if (selected === undefined) return undefined;
+      open = selected;
+
+      const addPrompt = await selectModal<boolean>(ctx, "Add review emphasis?", [
+        { value: false, label: "No", description: "Use the standard review guidance" },
+        { value: true, label: "Yes", description: "Add a short custom focus, e.g. security or API compatibility" },
+      ]);
+      if (isBack(addPrompt)) { step = 6; continue; }
+      if (addPrompt === undefined) return undefined;
+      userPrompt = addPrompt ? await inputModal(ctx, "Review emphasis", userPrompt || "Focus especially on...") : undefined;
+      if (addPrompt && !userPrompt?.trim()) return undefined;
+      step = 7;
+    }
+  }
+
+  return { mode, base: base || (mode === "baseRef" ? "HEAD" : undefined), open, includeUntracked, targetCwd, detail, out, userPrompt: userPrompt?.trim() || undefined };
+}
+
+async function pickReviewDevOptions(ctx: ExtensionCommandContext, cliPath: string): Promise<ReviewDevCommandOptions | undefined> {
+  let step = 0;
+  let targetCwd = ctx.cwd;
+  let detail: ReviewDevDetail = "all";
+  let out: ReviewOut = "repo";
+  let open = ctx.hasUI;
+
+  while (step >= 0 && step < 4) {
+    if (step === 0) {
+      const selected = await pickReviewDevTargetCwd(ctx, cliPath);
+      if (isBack(selected)) continue;
+      if (!selected) return undefined;
+      targetCwd = selected;
+      step++;
+      continue;
+    }
+
+    if (step === 1) {
+      const selected = await selectModal<ReviewDevDetail>(ctx, "Fixture detail", [
+        { value: "all", label: "All detail tiers", description: "Render ultralow, low, medium, and high fixtures" },
+        { value: "medium", label: "Medium", description: "Default shareable fixture" },
+        { value: "low", label: "Low", description: "Compact fixture" },
+        { value: "ultralow", label: "Ultralow", description: "Smallest fixture" },
+        { value: "high", label: "High", description: "Rigorous fixture" },
+      ]);
+      if (isBack(selected)) { step--; continue; }
+      if (!selected) return undefined;
+      detail = selected;
+      step++;
+      continue;
+    }
+
+    if (step === 2) {
+      const selected = await selectModal<ReviewOut>(ctx, "Where should fixture artifacts be written?", [
+        { value: "repo", label: "Repo root", description: "Write directly in the target git repository root" },
+        { value: "localpi", label: "Local Pi store", description: "Write under .pi/reviews/dev/ in the target repo" },
+        { value: "global", label: "Global Pi store", description: "Write under ~/.pi/agent/reviews/dev/" },
+      ]);
+      if (isBack(selected)) { step--; continue; }
+      if (!selected) return undefined;
+      out = selected;
+      step++;
+      continue;
+    }
+
+    if (step === 3) {
+      const selected = ctx.hasUI
+        ? await selectModal<boolean>(ctx, "Open fixture artifact(s)?", [
+            { value: true, label: "Yes", description: "Open after rendering" },
+            { value: false, label: "No", description: "Only print paths" },
+          ])
+        : false;
+      if (isBack(selected)) { step--; continue; }
+      if (selected === undefined) return undefined;
+      open = selected;
+      step++;
+    }
+  }
+
+  return { open, targetCwd, detail, out, fixture: "comprehensive", ignored: [] };
+}
+
+async function pickReviewTargetCwd(ctx: ExtensionCommandContext, cliPath: string): Promise<string | undefined | Back> {
+  return pickHelpTargetCwd(ctx, "Review target", "Help", "Show /pr help without adding it to the chat context", "Review Artifact Help", reviewHelpText(cliPath, ctx.cwd));
+}
+
+async function pickReviewDevTargetCwd(ctx: ExtensionCommandContext, cliPath: string): Promise<string | undefined | Back> {
+  return pickHelpTargetCwd(ctx, "Fixture target cwd", "Help", "Show /pr-dev help without adding it to the chat context", "Review Fixture Help", reviewDevHelpText(cliPath, ctx.cwd));
+}
+
+async function pickHelpTargetCwd(
+  ctx: ExtensionCommandContext,
+  title: string,
+  helpLabel: string,
+  helpDescription: string,
+  helpTitle: string,
+  helpMarkdown: string,
+): Promise<string | undefined | Back> {
+  while (true) {
+    const choice = await selectModal<"current" | "custom" | "help">(ctx, title, [
+      { value: "current", label: "Current Pi cwd", description: ctx.cwd },
+      { value: "custom", label: "Choose another path", description: "Enter a repo or subdirectory path" },
+      { value: "help", label: helpLabel, description: helpDescription },
+    ]);
+    if (isBack(choice)) continue;
+    if (!choice) return undefined;
+    if (choice === "help") {
+      await showReviewHelp(ctx, helpTitle, helpMarkdown);
+      continue;
+    }
+    if (choice === "current") return ctx.cwd;
+    const value = await inputModal(ctx, "Target path", ctx.cwd);
+    return value?.trim() ? resolve(ctx.cwd, value.trim()) : undefined;
+  }
+}
+
+async function selectModal<T>(ctx: ExtensionCommandContext, title: string, items: Array<{ value: T; label: string; description?: string }>): Promise<T | undefined | Back> {
+  const result = await ctx.ui.custom<T | undefined | Back>((tui, theme, _keybindings, done) => {
+    const container = new Container();
+    const selectItems = items.map((item, index) => ({ value: String(index), label: item.label, description: item.description }));
+    container.addChild(new DynamicBorder((s: string) => theme.fg("accent", s)));
+    container.addChild(new Text(theme.fg("accent", theme.bold(title)), 1, 0));
+    const selectList = new SelectList(selectItems, Math.min(items.length, 10), {
+      selectedPrefix: (text: string) => theme.fg("accent", text),
+      selectedText: (text: string) => theme.fg("accent", text),
+      description: (text: string) => theme.fg("muted", text),
+      scrollInfo: (text: string) => theme.fg("dim", text),
+      noMatch: (text: string) => theme.fg("warning", text),
+    });
+    selectList.onSelect = (item) => done(items[Number(item.value)]?.value);
+    selectList.onCancel = () => done(undefined);
+    container.addChild(selectList);
+    container.addChild(new Text(theme.fg("dim", "↑↓/j/k navigate • enter select • h back • esc cancel"), 1, 0));
+    container.addChild(new DynamicBorder((s: string) => theme.fg("accent", s)));
+    return {
+      render: (width: number) => container.render(width),
+      invalidate: () => container.invalidate(),
+      handleInput: (data: string) => {
+        if (data === "h") done(BACK);
+        else if (data === "j" || data === "J") selectList.handleInput("\x1b[B");
+        else if (data === "k" || data === "K") selectList.handleInput("\x1b[A");
+        else selectList.handleInput(data);
+        tui.requestRender();
+      },
+    };
+  });
+  return result;
+}
+
+async function inputModal(ctx: ExtensionCommandContext, title: string, placeholder: string): Promise<string | undefined> {
+  return ctx.ui.input(title, placeholder);
+}
+
+async function editorModal(ctx: ExtensionCommandContext, title: string, initialText: string): Promise<string | undefined> {
+  return ctx.ui.editor(title, initialText);
+}
+
+async function showReviewHelp(ctx: ExtensionCommandContext, title: string, markdown: string): Promise<void | Back> {
+  return ctx.ui.custom<void | Back>((tui, theme, _keybindings, done) => {
+    let scroll = 0;
+    const pageSize = 28;
+    const mdTheme = getMarkdownTheme();
+    const renderPage = (width: number): string[] => {
+      const innerWidth = Math.max(10, width - 2);
+      const border = (text: string) => theme.fg("borderAccent", text);
+      const top = border(`┌${"─".repeat(innerWidth)}┐`);
+      const bottom = border(`└${"─".repeat(innerWidth)}┘`);
+      const wrapBorder = (line: string) => border("│") + padAnsi(line, innerWidth) + border("│");
+
+      const bodyLines = new Markdown(markdown, 1, 1, mdTheme).render(innerWidth);
+      const maxScroll = Math.max(0, bodyLines.length - pageSize);
+      scroll = Math.min(maxScroll, Math.max(0, scroll));
+      const visibleBody = bodyLines.slice(scroll, scroll + pageSize);
+      const footer = theme.fg("dim", `j/k scroll • page up/down • showing ${scroll + 1}-${Math.min(bodyLines.length, scroll + pageSize)} of ${bodyLines.length} • h back • enter/esc close`);
+
+      return [
+        top,
+        wrapBorder(theme.fg("accent", theme.bold(title))),
+        ...visibleBody.map(wrapBorder),
+        wrapBorder(footer),
+        bottom,
+      ];
+    };
+    return {
+      render: renderPage,
+      invalidate: () => undefined,
+      handleInput: (data: string) => {
+        if (data === "h") done(BACK);
+        else if (data === "\r" || data === "\n" || data === "\x1b" || data === "\u0003") done();
+        else if (data === "j" || data === "J" || data === "\x1b[B") scroll += 1;
+        else if (data === "k" || data === "K" || data === "\x1b[A") scroll -= 1;
+        else if (data === "\x1b[6~") scroll += pageSize;
+        else if (data === "\x1b[5~") scroll -= pageSize;
+        tui.requestRender();
+      },
+    };
+  }, { overlay: true, overlayOptions: { width: "84%", minWidth: 60, maxHeight: "86%", margin: 2 } });
+}
 
 export default function reviewExtension(pi: ExtensionAPI) {
   pi.registerCommand("pr-dev", {
-    description: "Render dummy review HTML fixtures without invoking the agent",
+    description: "Open the review fixture renderer wizard",
     handler: async (args, ctx) => {
       const cliPath = resolve(here, "dist/bin/pi-review-artifact.js");
-      const parsed = parseReviewDevArgs(args || "", ctx.hasUI, ctx.cwd);
-      if (typeof parsed === "string") {
-        ctx.ui.notify(parsed, "error");
-        return;
-      }
-      if ("help" in parsed) {
-        pi.sendMessage({ customType: "review-dev-help", content: reviewDevHelpText(cliPath, ctx.cwd), display: true });
-        ctx.ui.notify("Displayed /pr-dev help.", "info");
-        return;
-      }
+      if ((args || "").trim()) ctx.ui.notify("/pr-dev is now guided. Opening the fixture wizard instead of parsing arguments.", "info");
+
+      const parsed = await pickReviewDevOptions(ctx, cliPath);
+      if (!parsed) return;
 
       const cliArgs = buildReviewDevCliArgs(cliPath, parsed);
       ctx.ui.notify(`Rendering dev review fixture (${parsed.detail}) for ${parsed.targetCwd}.`, "info");
@@ -59,19 +346,13 @@ export default function reviewExtension(pi: ExtensionAPI) {
   });
 
   pi.registerCommand("pr", {
-    description: "Start a chapters-based code review artifact workflow for a target git diff",
+    description: "Open the code review artifact wizard",
     handler: async (args, ctx) => {
       const cliPath = resolve(here, "dist/bin/pi-review-artifact.js");
-      const parsed = parseReviewArgs(args || "", ctx.hasUI, ctx.cwd);
-      if (typeof parsed === "string") {
-        ctx.ui.notify(parsed, "error");
-        return;
-      }
-      if ("help" in parsed) {
-        pi.sendMessage({ customType: "review-help", content: reviewHelpText(cliPath, ctx.cwd), display: true });
-        ctx.ui.notify("Displayed /pr help.", "info");
-        return;
-      }
+      if ((args || "").trim()) ctx.ui.notify("/pr is now guided. Opening the review wizard instead of parsing arguments.", "info");
+
+      const parsed = await pickReviewOptions(ctx, cliPath);
+      if (!parsed) return;
 
       const prompt = buildReviewPrompt(cliPath, parsed);
       ctx.ui.notify(`Starting /pr artifact workflow for ${parsed.targetCwd}.`, "info");
@@ -79,114 +360,6 @@ export default function reviewExtension(pi: ExtensionAPI) {
       else pi.sendUserMessage(prompt, { deliverAs: "followUp" });
     },
   });
-}
-
-function parseReviewDevArgs(args: string, hasUI: boolean, defaultCwd: string): ParsedReviewDevArgs {
-  const tokens = tokenizeArgs(args);
-  if (tokens.includes("--help") || tokens.includes("-h") || tokens.includes("help")) return { help: true };
-
-  let open = hasUI;
-  let targetCwd: string | undefined;
-  let detail: ReviewDevDetail = "all";
-  let out: ReviewOut = "repo";
-  let fixture = "comprehensive";
-  const ignored: string[] = [];
-
-  for (let i = 0; i < tokens.length; i++) {
-    const token = tokens[i];
-    if (token === "worktree" || token === "staged") {
-      ignored.push(token);
-      continue;
-    }
-    if (token === "baseRef") {
-      ignored.push(token);
-      const next = tokens[i + 1];
-      if (next && !next.startsWith("--")) {
-        ignored.push(next);
-        i++;
-      }
-      continue;
-    }
-    if (token === "--base") {
-      const next = tokens[i + 1];
-      if (!next || next.startsWith("--")) return "Usage: /pr-dev --base <ref> (accepted for /pr compatibility but ignored by fixture rendering)";
-      ignored.push(`${token} ${next}`);
-      i++;
-      continue;
-    }
-    if (token === "--cwd" || token === "--repo" || token === "--path") {
-      const next = tokens[i + 1];
-      if (!next || next.startsWith("--")) return "Usage: /pr-dev --cwd <path> [--detail ultralow|low|medium|high|all] [--out repo|localpi|global]";
-      targetCwd = resolve(defaultCwd, next);
-      i++;
-      continue;
-    }
-    if (token.startsWith("--cwd=") || token.startsWith("--repo=") || token.startsWith("--path=")) {
-      targetCwd = resolve(defaultCwd, token.slice(token.indexOf("=") + 1));
-      continue;
-    }
-    if (token === "--fixture") {
-      const next = tokens[i + 1];
-      if (!next || next.startsWith("--")) return "Usage: /pr-dev --fixture comprehensive";
-      fixture = next;
-      i++;
-      continue;
-    }
-    if (token.startsWith("--fixture=")) {
-      fixture = token.slice("--fixture=".length);
-      continue;
-    }
-    if (token === "--detail") {
-      const next = tokens[i + 1];
-      if (!next || next.startsWith("--")) return "Usage: /pr-dev --detail ultralow|low|medium|high|all";
-      if (!isReviewDevDetail(next)) return `Unsupported --detail ${JSON.stringify(next)}. Use ultralow, low, medium, high, or all.`;
-      detail = next;
-      i++;
-      continue;
-    }
-    if (token.startsWith("--detail=")) {
-      const value = token.slice("--detail=".length);
-      if (!isReviewDevDetail(value)) return `Unsupported --detail ${JSON.stringify(value)}. Use ultralow, low, medium, high, or all.`;
-      detail = value;
-      continue;
-    }
-    if (token === "--out") {
-      const next = tokens[i + 1];
-      if (!next || next.startsWith("--")) return "Usage: /pr-dev --out repo|localpi|global";
-      if (!isReviewOut(next)) return `Unsupported --out ${JSON.stringify(next)}. Use repo, localpi, or global.`;
-      out = next;
-      i++;
-      continue;
-    }
-    if (token.startsWith("--out=")) {
-      const value = token.slice("--out=".length);
-      if (!isReviewOut(value)) return `Unsupported --out ${JSON.stringify(value)}. Use repo, localpi, or global.`;
-      out = value;
-      continue;
-    }
-    if (token === "--open") {
-      open = true;
-      continue;
-    }
-    if (token === "--no-open") {
-      open = false;
-      continue;
-    }
-    if (token === "--include-untracked" || token === "--tracked-only" || token === "--no-include-untracked") {
-      ignored.push(token);
-      continue;
-    }
-    if (token.startsWith("--")) {
-      return `Unknown /pr-dev option: ${token}. Run /pr-dev --help for usage.`;
-    }
-    if (!targetCwd) {
-      targetCwd = resolve(defaultCwd, token);
-      continue;
-    }
-    return `Unexpected /pr-dev argument: ${token}. Run /pr-dev --help for usage.`;
-  }
-
-  return { open, targetCwd: targetCwd || defaultCwd, detail, out, fixture, ignored };
 }
 
 function buildReviewDevCliArgs(cliPath: string, opts: ReviewDevCommandOptions): string[] {
@@ -228,137 +401,6 @@ function formatReviewDevResult(input: {
 \`\`\`text
 ${stdout}
 \`\`\`${stderr}`;
-}
-
-function parseReviewArgs(args: string, hasUI: boolean, defaultCwd: string): ParsedReviewArgs {
-  const tokens = tokenizeArgs(args);
-  if (tokens.includes("--help") || tokens.includes("-h") || tokens.includes("help")) return { help: true };
-
-  let mode: ReviewMode = "worktree";
-  let base: string | undefined;
-  let open = hasUI;
-  let includeUntracked: boolean | undefined;
-  let targetCwd: string | undefined;
-  let detail: ReviewDetail = "medium";
-  let out: ReviewOut = "repo";
-  const userPrompts: string[] = [];
-
-  for (let i = 0; i < tokens.length; i++) {
-    const token = tokens[i];
-    if (token === "worktree" || token === "staged") {
-      mode = token;
-      continue;
-    }
-    if (token === "baseRef") {
-      mode = "baseRef";
-      const next = tokens[i + 1];
-      if (next && !next.startsWith("--")) {
-        base = next;
-        i++;
-      }
-      continue;
-    }
-    if (token === "--base") {
-      const next = tokens[i + 1];
-      if (!next || next.startsWith("--")) return "Usage: /pr [path] baseRef <ref> or /pr [path] --base <ref>";
-      base = next;
-      mode = "baseRef";
-      i++;
-      continue;
-    }
-    if (token === "--cwd" || token === "--repo" || token === "--path") {
-      const next = tokens[i + 1];
-      if (!next || next.startsWith("--")) return `Usage: /pr --cwd <path> [worktree|staged|baseRef <ref>] [--detail ultralow|low|medium|high] [--out repo|localpi|global]`;
-      targetCwd = resolve(defaultCwd, next);
-      i++;
-      continue;
-    }
-    if (token.startsWith("--cwd=")) {
-      targetCwd = resolve(defaultCwd, token.slice("--cwd=".length));
-      continue;
-    }
-    if (token.startsWith("--repo=") || token.startsWith("--path=")) {
-      targetCwd = resolve(defaultCwd, token.slice(token.indexOf("=") + 1));
-      continue;
-    }
-    if (token === "--detail") {
-      const next = tokens[i + 1];
-      if (!next || next.startsWith("--")) return "Usage: /pr --detail ultralow|low|medium|high";
-      if (!isReviewDetail(next)) return `Unsupported --detail ${JSON.stringify(next)}. Use ultralow, low, medium, or high.`;
-      detail = next;
-      i++;
-      continue;
-    }
-    if (token.startsWith("--detail=")) {
-      const value = token.slice("--detail=".length);
-      if (!isReviewDetail(value)) return `Unsupported --detail ${JSON.stringify(value)}. Use ultralow, low, medium, or high.`;
-      detail = value;
-      continue;
-    }
-    if (token === "--out") {
-      const next = tokens[i + 1];
-      if (!next || next.startsWith("--")) return "Usage: /pr --out repo|localpi|global";
-      if (!isReviewOut(next)) return `Unsupported --out ${JSON.stringify(next)}. Use repo, localpi, or global.`;
-      out = next;
-      i++;
-      continue;
-    }
-    if (token.startsWith("--out=")) {
-      const value = token.slice("--out=".length);
-      if (!isReviewOut(value)) return `Unsupported --out ${JSON.stringify(value)}. Use repo, localpi, or global.`;
-      out = value;
-      continue;
-    }
-    if (token === "--open") {
-      open = true;
-      continue;
-    }
-    if (token === "--no-open") {
-      open = false;
-      continue;
-    }
-    if (token === "--include-untracked") {
-      includeUntracked = true;
-      continue;
-    }
-    if (token === "--tracked-only" || token === "--no-include-untracked") {
-      includeUntracked = false;
-      continue;
-    }
-    if (token === "--prompt") {
-      const next = tokens[i + 1];
-      if (!next || next.startsWith("--")) return "Usage: /pr --prompt <instructions>";
-      userPrompts.push(next);
-      i++;
-      continue;
-    }
-    if (token.startsWith("--prompt=")) {
-      const value = token.slice("--prompt=".length).trim();
-      if (!value) return "Usage: /pr --prompt <instructions>";
-      userPrompts.push(value);
-      continue;
-    }
-    if (token.startsWith("--")) {
-      return `Unknown /pr option: ${token}. Run /pr --help for usage.`;
-    }
-    if (!targetCwd) {
-      targetCwd = resolve(defaultCwd, token);
-      continue;
-    }
-    return `Unexpected /pr argument: ${token}. Run /pr --help for usage.`;
-  }
-
-  if (mode === "baseRef" && !base) return "Usage: /pr [path] baseRef <ref> [--detail ultralow|low|medium|high] [--out repo|localpi|global] [--open|--no-open] [--include-untracked] [--prompt <instructions>]";
-  return {
-    mode,
-    base,
-    open,
-    includeUntracked: includeUntracked ?? mode === "worktree",
-    targetCwd: targetCwd || defaultCwd,
-    detail,
-    out,
-    userPrompt: userPrompts.length ? userPrompts.join("\n\n") : undefined,
-  };
 }
 
 function buildReviewPrompt(cliPath: string, opts: ReviewCommandOptions): string {
@@ -544,18 +586,16 @@ function reviewDevHelpText(cliPath: string, currentCwd: string): string {
 
 Render dummy chapters-based review HTML fixtures from inside Pi without invoking the agent.
 
-## Quick start
+## How to use it
 
-\`/pr-dev [path] [--fixture comprehensive] [--detail ultralow|low|medium|high|all] [--out repo|localpi|global] [--open|--no-open]\`
+Type \`/pr-dev\` to open the guided fixture wizard. No flags or positional arguments are required or parsed.
 
-If \`path\` is omitted, /pr-dev uses the current Pi cwd: \`${currentCwd}\`.
+The wizard asks for:
 
-## Common examples
-
-- \`/pr-dev\` — render all dummy detail-tier artifacts using the current cwd and default output behavior.
-- \`/pr-dev --detail all --out localpi --no-open\` — render all fixture artifacts under \`.pi/reviews/dev/\` without opening a browser.
-- \`/pr-dev --detail high --out repo --open\` — render only the high-detail fixture and open it.
-- \`/pr-dev --cwd agent/extensions/review --detail medium --out global\` — write a medium fixture artifact under \`~/.pi/agent/reviews/dev/\`.
+- Target cwd: current Pi cwd (\`${currentCwd}\`) or another path.
+- Detail tier: all, ultralow, low, medium, or high.
+- Output location: repo root, local Pi store, or global Pi store.
+- Whether to open the generated artifact(s).
 
 ## What /pr-dev does
 
@@ -566,16 +606,6 @@ If \`path\` is omitted, /pr-dev uses the current Pi cwd: \`${currentCwd}\`.
 - Does not start an agent turn.
 - Does not inspect real git state.
 - Does not generate JSON with a model.
-
-## Supported flags
-
-- Path targeting: positional path, \`--cwd <path>\`, \`--repo <path>\`, \`--path <path>\`.
-- Fixture: \`--fixture comprehensive\`.
-- Detail: \`--detail ultralow\`, \`--detail low\`, \`--detail medium\`, \`--detail high\`, or \`--detail all\`.
-- Output: \`--out repo\`, \`--out localpi\`, \`--out global\`.
-- Open control: \`--open\`, \`--no-open\`.
-
-For easier switching between \`/pr\` and \`/pr-dev\`, real-diff flags like \`worktree\`, \`staged\`, \`baseRef <ref>\`, \`--base <ref>\`, and \`--include-untracked\` are accepted but ignored.
 
 ## Direct CLI fallback
 
@@ -594,46 +624,33 @@ function reviewHelpText(cliPath: string, currentCwd: string): string {
 
 Create a shareable chapters-based code review artifact from compact JSON plus authoritative local git diffs.
 
-## Quick start
+## How to use it
 
-\`/pr [path] [worktree|staged|baseRef <ref>] [--detail ultralow|low|medium|high] [--out repo|localpi|global] [--open|--no-open] [--include-untracked] [--prompt <instructions>]\`
+Type \`/pr\` to open the guided review wizard. No flags or positional arguments are required or parsed.
 
-If \`path\` is omitted, /pr uses the current Pi cwd: \`${currentCwd}\`.
+The wizard asks for:
 
-## Common examples
-
-- \`/pr\` — review current cwd worktree, include untracked files, medium detail, write the HTML directly in the target git repo root.
-- \`/pr agent/extensions/review\` — review a nested repo/directory and write to that repo root.
-- \`/pr --cwd agent/extensions/review --detail high\` — rigorous artifact for a target path.
-- \`/pr agent/extensions/review staged --detail low --no-open\` — compact staged-only artifact.
-- \`/pr agent/extensions/review --detail low --out localpi\` — write to the target repo's local Pi store at .pi/reviews/.
-- \`/pr agent/extensions/review baseRef main --detail medium --out global\` — compare target path against main and write to ~/.pi/agent/reviews/.
-- \`/pr --detail high --prompt "Focus especially on API compatibility and migration risks."\` — add custom review emphasis to the generated workflow prompt.
-
-## Path targeting and options
-
-- Positional path: \`/pr path/to/repo\`.
-- Explicit path: \`/pr --cwd path/to/repo\`, \`/pr --cwd=path/to/repo\`.
-- Aliases: \`--repo\`, \`--repo=...\`, \`--path\`, \`--path=...\`.
-- Output control: \`--out repo\` (default, writes the HTML file directly in the target git repo root), \`--out localpi\` (writes to \`.pi/reviews/\` under the target git root), \`--out global\` (writes to \`~/.pi/agent/reviews/\`). Explicit CLI \`--output <file>\` overrides \`--out\`.
-- Open control: \`--open\`, \`--no-open\`.
-- Untracked control: \`--include-untracked\`, \`--tracked-only\`, \`--no-include-untracked\`.
-- Detail control: \`--detail ultralow\`, \`--detail low\`, \`--detail=medium\`, \`--detail high\`.
-- Additional prompt: \`--prompt "Focus on security boundaries"\` or \`--prompt=...\`. Repeat \`--prompt\` to append multiple instruction blocks.
-- Help: \`/pr --help\`, \`/pr -h\`, or \`/pr help\`.
+- Target cwd: current Pi cwd (\`${currentCwd}\`) or another path.
+- Diff mode: worktree changes, staged changes, or compare with a base ref.
+- Base ref: defaults to \`HEAD\` when base-ref mode is selected.
+- Whether to include untracked files for worktree reviews.
+- Review depth: ultralow, low, medium, or high.
+- Output location: repo root, local Pi store, or global Pi store.
+- Whether to open the generated artifact.
+- Optional review emphasis, such as security boundaries or API compatibility.
 
 ## Diff modes
 
-- \`worktree\` — default; compares against HEAD. Includes untracked files by default for /pr.
-- \`staged\` — uses \`git diff --cached\`; untracked files are excluded unless explicitly included.
-- \`baseRef <ref>\` — compares against an explicit base ref and requires the ref argument.
+- Worktree changes — compares against HEAD and can include untracked files.
+- Staged changes — uses \`git diff --cached\`.
+- Base ref — compares against a branch, tag, or commit; the wizard defaults this value to \`HEAD\`.
 
 ## Detail tiers
 
-- \`--detail ultralow\` — fastest compact handoff: one broad grouping, minimal fields, raw diffs omitted from the artifact. Uses direct stdin JSON; no /tmp report.
-- \`--detail low\` — compact internal handoff: 1-3 chapters, minimal optional fields. Uses direct stdin JSON; no /tmp report.
-- \`--detail medium\` — default shareable artifact: 3-6 chapters, validation, relevant risks/decisions. Uses scaffolded /tmp JSON for robust editing.
-- \`--detail high\` — rigorous review: exhaustive file coverage, per-file focus/risk where useful, decisions, behavior flow, limitations, detailed validation evidence. Uses scaffolded /tmp JSON for robust editing.
+- Ultralow — fastest compact handoff: one broad grouping, minimal fields, raw diffs omitted from the artifact. Uses direct stdin JSON; no /tmp report.
+- Low — compact internal handoff: 1-3 chapters, minimal optional fields. Uses direct stdin JSON; no /tmp report.
+- Medium — default shareable artifact: 3-6 chapters, validation, relevant risks/decisions. Uses scaffolded /tmp JSON for robust editing.
+- High — rigorous review: exhaustive file coverage, per-file focus/risk where useful, decisions, behavior flow, limitations, detailed validation evidence. Uses scaffolded /tmp JSON for robust editing.
 
 ## What the agent will do
 
@@ -652,55 +669,18 @@ node '${cliPath}' render --input /tmp/pi-review-report.json --template chapters 
 node '${cliPath}' render --stdin --template chapters --cwd '${currentCwd}' --mode worktree --include-untracked --detail low --out localpi --no-open <<'JSON'
 {"schemaVersion":"1.0","reviewDetail":"low","title":"Example","summary":{"intent":"Example.","changeType":"mixed"},"changes":[{"title":"Changes","summary":"Example.","files":[{"path":"file.ts","purpose":"Example."}]}],"chapters":[{"sequence":1,"title":"Changes","summary":"Example.","files":[{"path":"file.ts","purpose":"Example."}]}],"validation":{"runs":[]},"missingValidation":["Example only."]}
 JSON
-# omit --out or pass --out repo to write directly in the target git root; use --out localpi for .pi/reviews/ or --out global for ~/.pi/agent/reviews/.
 \`\`\`
 
 ## Cheap development fixture rendering
 
-Use \`/pr-dev --detail all --out localpi --no-open\` to render static dummy HTML artifacts through the same chapters renderer without invoking the agent or reading real git state.
+Use \`/pr-dev\` to render static dummy HTML artifacts through the same chapters renderer without invoking the agent or reading real git state.
 
 ## Troubleshooting
 
-- If render says \`not a git repository\`, pass a repo path: \`/pr --cwd path/to/repo\`.
+- If render says \`not a git repository\`, run \`/pr\` again and choose the correct repo path.
 - If validation reports unresolved placeholders, edit the scaffold JSON or stdin JSON and replace every \`TODO_REPLACE\` string.
-- If the artifact omits new files, rerun with \`--include-untracked\` or ensure files are staged/tracked.
+- If the artifact omits new files, run \`/pr\` again and include untracked files or ensure files are staged/tracked.
 `;
-}
-
-function tokenizeArgs(input: string): string[] {
-  const out: string[] = [];
-  let current = "";
-  let quote: "'" | '"' | undefined;
-  for (let i = 0; i < input.length; i++) {
-    const ch = input[i];
-    if (quote) {
-      if (ch === quote) quote = undefined;
-      else current += ch;
-      continue;
-    }
-    if (ch === "'" || ch === '"') {
-      quote = ch;
-      continue;
-    }
-    if (/\s/.test(ch)) {
-      if (current) {
-        out.push(current);
-        current = "";
-      }
-      continue;
-    }
-    current += ch;
-  }
-  if (current) out.push(current);
-  return out;
-}
-
-function isReviewDetail(value: string): value is ReviewDetail {
-  return value === "ultralow" || value === "low" || value === "medium" || value === "high";
-}
-
-function isReviewDevDetail(value: string): value is ReviewDevDetail {
-  return value === "all" || isReviewDetail(value);
 }
 
 function outputLocationDescription(out: ReviewOut): string {
@@ -709,8 +689,16 @@ function outputLocationDescription(out: ReviewOut): string {
   return "repo root (the target git repository root)";
 }
 
-function isReviewOut(value: string): value is ReviewOut {
-  return value === "repo" || value === "localpi" || value === "global";
+
+function padAnsi(input: string, width: number): string {
+  const plain = stripAnsi(input);
+  const truncated = plain.length > width ? plain.slice(0, Math.max(0, width - 1)) + "…" : input;
+  const visible = stripAnsi(truncated).length;
+  return visible >= width ? truncated : truncated + " ".repeat(width - visible);
+}
+
+function stripAnsi(input: string): string {
+  return input.replace(/\u001b\[[0-?]*[ -/]*[@-~]/g, "").replace(/\u001b\][^\u0007]*(?:\u0007|\u001b\\)/g, "");
 }
 
 function shellQuote(value: string): string {

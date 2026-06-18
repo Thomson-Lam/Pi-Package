@@ -18,32 +18,11 @@ Generates predictable, styled, self-contained HTML code-review artifacts from co
 
 ## Workflow
 
-After changes, run:
+After changes, run `/pr` to open a guided modal wizard. The first menu lets you choose the current Pi cwd, another path, or Help. The wizard then asks for diff mode, detail tier, output location, open behavior, and optional review emphasis. Help is rendered in the UI without adding text to the session.
 
-```text
-/pr [path] [worktree|staged|baseRef <ref>] [--detail ultralow|low|medium|high] [--out repo|localpi|global] [--open|--no-open] [--include-untracked] [--prompt <instructions>]
-/pr --cwd <path> [worktree|staged|baseRef <ref>] [--detail ultralow|low|medium|high] [--out repo|localpi|global] [--prompt <instructions>]
-/pr --repo <path> ...    # alias for --cwd
-/pr --path <path> ...    # alias for --cwd
-/pr --help               # also -h or help
+For dummy fixture rendering, run `/pr-dev` to open a guided fixture wizard. The first menu lets you choose the current Pi cwd, another path, or Help. Neither `/pr` nor `/pr-dev` parses configuration flags from the chat bar anymore; configuration is centralized in the modal flow.
 
-/pr-dev [path] [--fixture comprehensive] [--detail ultralow|low|medium|high|all] [--out repo|localpi|global] [--open|--no-open]
-/pr-dev --help           # dummy fixture render; no agent turn and no live git collection
-```
-
-Default `/pr` starts a medium-detail chapters review for the current Pi cwd, uses `worktree` mode, includes untracked files, writes the artifact directly under the target git repo root, and opens the artifact in interactive mode. Pass `--out localpi` to write to `.pi/reviews/` under the target git root, or `--out global` to write to `~/.pi/agent/reviews/`. Pass a positional `path`, `--cwd <path>`, `--repo <path>`, or `--path <path>` when the repo to review is not the current Pi cwd. Use `--tracked-only` or `--no-include-untracked` to omit untracked files. Use `--prompt "..."` to append additional review emphasis to the generated agent workflow prompt.
-
-Examples:
-
-```text
-/pr
-/pr agent/extensions/review
-/pr --cwd agent/extensions/review --detail high
-/pr agent/extensions/review staged --detail low --no-open
-/pr agent/extensions/review baseRef main --detail medium --out global
-/pr agent/extensions/review --detail low --out localpi
-/pr --detail high --prompt "Focus especially on API compatibility and migration risks."
-```
+Default wizard choices start from the current Pi cwd, medium detail, repo-root output, and opening artifacts in interactive mode. Base-ref reviews default the base ref input to `HEAD`.
 
 Detail tiers are validation profiles when `/pr` or CLI `validate/render --detail ...` is used:
 
@@ -52,7 +31,7 @@ Detail tiers are validation profiles when `/pr` or CLI `validate/render --detail
 - `medium` — default shareable artifact: explicit chapters, all changed files assigned, chapter intent/reviewFocus, file purposes, validation, and missingValidation fields.
 - `high` — rigorous review: every changed file assigned exactly once, per-file reviewFocus, chapter risks/validation, top-level risks, decisions, limitations, and validation evidence. Behavior flow is warned when absent because it is only applicable to behavior-changing work.
 
-Artifacts are written directly under the target git root by default. Use `/pr --out localpi` or CLI `render --out localpi` to write to `.pi/reviews/` under the target git root. Use `/pr --out global` or CLI `render --out global` to write to `~/.pi/agent/reviews/`. CLI `render --output <file>` overrides `--out`.
+Artifacts are written directly under the target git root by default. Choose `localpi` in the `/pr` wizard or use CLI `render --out localpi` to write to `.pi/reviews/` under the target git root. Choose `global` in the wizard or use CLI `render --out global` to write to `~/.pi/agent/reviews/`. CLI `render --output <file>` overrides `--out`.
 
 ## Fresh clone setup
 
@@ -66,7 +45,7 @@ npm run build
 Then in Pi:
 
 1. Run `/reload` so Pi reloads extensions.
-2. Invoke `/pr --help` to see the manual, or `/pr <repo-path>` to generate an artifact.
+2. Invoke `/pr` and choose Help to see the modal manual, or choose a target to start the review wizard.
 
 ## Quick CLI checks
 
@@ -105,4 +84,4 @@ npm run build
 node dist/bin/pi-review-artifact.js dev-render --fixture comprehensive --detail all --cwd . --out localpi --no-open
 ```
 
-Use `/pr-dev --detail all --out localpi --no-open` from Pi after `/reload` to render the same dummy artifacts without invoking the agent.
+Use `/pr-dev` from Pi after `/reload` to render the same dummy artifacts without invoking the agent.
