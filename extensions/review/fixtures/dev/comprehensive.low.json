@@ -1,0 +1,153 @@
+{
+  "schemaVersion": "1.0",
+  "reviewDetail": "low",
+  "title": "Low dev fixture: concise review artifact coverage",
+  "summary": {
+    "intent": "Provide a deterministic, low-cost review artifact fixture that stresses styling, responsiveness, text wrapping, diff rendering, and validation presentation without invoking an agent.",
+    "changeType": "mixed"
+  },
+  "changes": [
+    {
+      "title": "Command and renderer path",
+      "summary": "Concise grouping for command wiring and renderer output.",
+      "risk": "medium",
+      "reviewerNotes": [
+        "Check visual hierarchy, wrapping, and empty-state presentation."
+      ],
+      "files": [
+        {
+          "path": "src/commands/review.ts",
+          "purpose": "Adds the development slash command path and command parsing behavior.",
+          "risk": "high"
+        },
+        {
+          "path": "src/templates/chapters.ts",
+          "purpose": "Exercises the main HTML structure, tables, chapters, appendices, and rigor checklist.",
+          "risk": "low"
+        },
+        {
+          "path": "src/templates/review.css",
+          "purpose": "Represents extracted or modularized stylesheet work for visual iteration.",
+          "risk": "low"
+        },
+        {
+          "path": "assets/review-preview-screenshot.png",
+          "purpose": "Binary asset included to verify non-textual diff notes.",
+          "risk": "low"
+        }
+      ]
+    },
+    {
+      "title": "Formatting stressors",
+      "summary": "Concise grouping for long paths, omitted diffs, and validation notes.",
+      "risk": "medium",
+      "reviewerNotes": [
+        "Check visual hierarchy, wrapping, and empty-state presentation."
+      ],
+      "files": [
+        {
+          "path": "docs/review-artifacts/responsiveness/very-long-path-name-that-should-wrap-in-tables-and-navigation.md",
+          "purpose": "Long documentation path and prose to stress wrapping and responsive layout.",
+          "risk": "low"
+        },
+        {
+          "path": "src/legacy/old-renderer.ts",
+          "purpose": "Deleted legacy renderer to exercise deleted-file badges and diffs.",
+          "risk": "medium"
+        },
+        {
+          "path": "src/components/review-card.tsx",
+          "purpose": "Renamed component to exercise rename badges and component-oriented paths.",
+          "risk": "low"
+        },
+        {
+          "path": "package-lock.json",
+          "purpose": "Large generated file to exercise omitted-diff messaging.",
+          "risk": "medium"
+        }
+      ]
+    }
+  ],
+  "chapters": [
+    {
+      "sequence": 1,
+      "title": "Command and renderer path",
+      "summary": "Review the command and renderer-facing pieces first.",
+      "files": [
+        {
+          "path": "src/commands/review.ts",
+          "purpose": "Adds the development slash command path and command parsing behavior.",
+          "risk": "high"
+        },
+        {
+          "path": "src/templates/chapters.ts",
+          "purpose": "Exercises the main HTML structure, tables, chapters, appendices, and rigor checklist.",
+          "risk": "low"
+        },
+        {
+          "path": "src/templates/review.css",
+          "purpose": "Represents extracted or modularized stylesheet work for visual iteration.",
+          "risk": "low"
+        },
+        {
+          "path": "assets/review-preview-screenshot.png",
+          "purpose": "Binary asset included to verify non-textual diff notes.",
+          "risk": "low"
+        }
+      ],
+      "reviewFocus": [
+        "Keep the low-detail layout compact while retaining file purpose context."
+      ]
+    },
+    {
+      "sequence": 2,
+      "title": "Formatting stressors",
+      "summary": "Review long paths, deleted/renamed files, and omitted diffs.",
+      "files": [
+        {
+          "path": "docs/review-artifacts/responsiveness/very-long-path-name-that-should-wrap-in-tables-and-navigation.md",
+          "purpose": "Long documentation path and prose to stress wrapping and responsive layout.",
+          "risk": "low"
+        },
+        {
+          "path": "src/legacy/old-renderer.ts",
+          "purpose": "Deleted legacy renderer to exercise deleted-file badges and diffs.",
+          "risk": "medium"
+        },
+        {
+          "path": "src/components/review-card.tsx",
+          "purpose": "Renamed component to exercise rename badges and component-oriented paths.",
+          "risk": "low"
+        },
+        {
+          "path": "package-lock.json",
+          "purpose": "Large generated file to exercise omitted-diff messaging.",
+          "risk": "medium"
+        }
+      ],
+      "reviewFocus": [
+        "Check badges and table wrapping with minimal prose."
+      ]
+    }
+  ],
+  "validation": {
+    "runs": [
+      {
+        "name": "TypeScript typecheck",
+        "command": "npm run typecheck",
+        "result": "passed",
+        "evidence": "Fixture evidence: command completed with no diagnostics in the dummy scenario.",
+        "notes": "Used to style passed validation rows."
+      },
+      {
+        "name": "Accessibility pass",
+        "command": "npx axe /tmp/pi-review-dev/index.html",
+        "result": "not_run",
+        "notes": "Not run; listed for missing validation flow."
+      }
+    ]
+  },
+  "missingValidation": [
+    "Fixture intentionally does not run real browser, print, or accessibility checks."
+  ]
+}

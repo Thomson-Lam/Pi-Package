@@ -1,0 +1,359 @@
+{
+  "schemaVersion": "1.0",
+  "reviewDetail": "high",
+  "title": "High dev fixture: exhaustive review format and styling stress test",
+  "summary": {
+    "intent": "Provide a deterministic, low-cost review artifact fixture that stresses styling, responsiveness, text wrapping, diff rendering, and validation presentation without invoking an agent.",
+    "changeType": "mixed",
+    "howItWorks": "Static report JSON is paired with static GitSnapshot metadata so the production chapters renderer can be exercised without collecting live git diffs."
+  },
+  "changes": [
+    {
+      "title": "Development command surface",
+      "summary": "High-detail command and fixture loading changes.",
+      "risk": "medium",
+      "reviewerNotes": [
+        "Check visual hierarchy, wrapping, and empty-state presentation."
+      ],
+      "files": [
+        {
+          "path": "src/commands/review.ts",
+          "purpose": "Adds the development slash command path and command parsing behavior.",
+          "risk": "high"
+        },
+        {
+          "path": "src/templates/chapters.ts",
+          "purpose": "Exercises the main HTML structure, tables, chapters, appendices, and rigor checklist.",
+          "risk": "low"
+        },
+        {
+          "path": "src/templates/review.css",
+          "purpose": "Represents extracted or modularized stylesheet work for visual iteration.",
+          "risk": "low"
+        }
+      ]
+    },
+    {
+      "title": "Renderer visual stress coverage",
+      "summary": "High-detail renderer, docs, binary, deleted, renamed, and generated-file cases.",
+      "risk": "medium",
+      "reviewerNotes": [
+        "Check visual hierarchy, wrapping, and empty-state presentation."
+      ],
+      "files": [
+        {
+          "path": "assets/review-preview-screenshot.png",
+          "purpose": "Binary asset included to verify non-textual diff notes.",
+          "risk": "low"
+        },
+        {
+          "path": "docs/review-artifacts/responsiveness/very-long-path-name-that-should-wrap-in-tables-and-navigation.md",
+          "purpose": "Long documentation path and prose to stress wrapping and responsive layout.",
+          "risk": "low"
+        },
+        {
+          "path": "src/legacy/old-renderer.ts",
+          "purpose": "Deleted legacy renderer to exercise deleted-file badges and diffs.",
+          "risk": "medium"
+        },
+        {
+          "path": "src/components/review-card.tsx",
+          "purpose": "Renamed component to exercise rename badges and component-oriented paths.",
+          "risk": "low"
+        },
+        {
+          "path": "package-lock.json",
+          "purpose": "Large generated file to exercise omitted-diff messaging.",
+          "risk": "medium"
+        },
+        {
+          "path": "experiments/future-review-format.md",
+          "purpose": "Intentionally ungrouped experimental format note.",
+          "risk": "low"
+        }
+      ]
+    }
+  ],
+  "chapters": [
+    {
+      "sequence": 1,
+      "title": "No-agent development command",
+      "summary": "Review command parsing, local execution, and CLI fixture rendering.",
+      "intent": "Ensure the user can run dummy artifact generation in Pi without starting an agent turn.",
+      "files": [
+        {
+          "path": "src/commands/review.ts",
+          "purpose": "Adds the development slash command path and command parsing behavior.",
+          "risk": "high",
+          "reviewFocus": [
+            "Inspect src/commands/review.ts for formatting and reviewer-context clarity.",
+            "Check edge-case visual presentation in dense high-detail mode."
+          ]
+        },
+        {
+          "path": "src/templates/chapters.ts",
+          "purpose": "Exercises the main HTML structure, tables, chapters, appendices, and rigor checklist.",
+          "risk": "low",
+          "reviewFocus": [
+            "Inspect src/templates/chapters.ts for formatting and reviewer-context clarity.",
+            "Check edge-case visual presentation in dense high-detail mode."
+          ]
+        },
+        {
+          "path": "src/templates/review.css",
+          "purpose": "Represents extracted or modularized stylesheet work for visual iteration.",
+          "risk": "low",
+          "reviewFocus": [
+            "Inspect src/templates/review.css for formatting and reviewer-context clarity.",
+            "Check edge-case visual presentation in dense high-detail mode."
+          ]
+        }
+      ],
+      "reviewFocus": [
+        "Confirm /pr-dev only uses local CLI execution.",
+        "Confirm familiar /pr flags are accepted where meaningful."
+      ],
+      "risks": [
+        "A command implementation bug could accidentally trigger an agent turn.",
+        "Path defaults can surprise users if repo/local/global output behavior diverges from /pr."
+      ],
+      "validation": [
+        "TypeScript typecheck covers command helper signatures.",
+        "Manual /pr-dev --detail all --no-open smoke verifies execution."
+      ]
+    },
+    {
+      "sequence": 2,
+      "title": "Dense renderer and responsive cases",
+      "summary": "Review long text, diff overflow, badges, and status-heavy tables.",
+      "intent": "Exercise the parts of the artifact that are most likely to regress as styling evolves.",
+      "files": [
+        {
+          "path": "assets/review-preview-screenshot.png",
+          "purpose": "Binary asset included to verify non-textual diff notes.",
+          "risk": "low",
+          "reviewFocus": [
+            "Inspect assets/review-preview-screenshot.png for formatting and reviewer-context clarity.",
+            "Check edge-case visual presentation in dense high-detail mode."
+          ]
+        },
+        {
+          "path": "docs/review-artifacts/responsiveness/very-long-path-name-that-should-wrap-in-tables-and-navigation.md",
+          "purpose": "Long documentation path and prose to stress wrapping and responsive layout.",
+          "risk": "low",
+          "reviewFocus": [
+            "Inspect docs/review-artifacts/responsiveness/very-long-path-name-that-should-wrap-in-tables-and-navigation.md for formatting and reviewer-context clarity.",
+            "Check edge-case visual presentation in dense high-detail mode."
+          ]
+        },
+        {
+          "path": "src/legacy/old-renderer.ts",
+          "purpose": "Deleted legacy renderer to exercise deleted-file badges and diffs.",
+          "risk": "medium",
+          "reviewFocus": [
+            "Inspect src/legacy/old-renderer.ts for formatting and reviewer-context clarity.",
+            "Check edge-case visual presentation in dense high-detail mode."
+          ]
+        },
+        {
+          "path": "src/components/review-card.tsx",
+          "purpose": "Renamed component to exercise rename badges and component-oriented paths.",
+          "risk": "low",
+          "reviewFocus": [
+            "Inspect src/components/review-card.tsx for formatting and reviewer-context clarity.",
+            "Check edge-case visual presentation in dense high-detail mode."
+          ]
+        }
+      ],
+      "reviewFocus": [
+        "Check dark/light color contrast and badge wrapping.",
+        "Check diff panes at mobile and desktop widths."
+      ],
+      "risks": [
+        "Long paths or commands can cause horizontal page overflow.",
+        "Binary/omitted diff notes can be confused with validation warnings."
+      ],
+      "validation": [
+        "Manual viewport smoke at 375px, 768px, and desktop widths.",
+        "Print preview spot check for card and details behavior."
+      ]
+    },
+    {
+      "sequence": 3,
+      "title": "Fixture drift and appendices",
+      "summary": "Review generated-file, ungrouped, and intentionally stale-reference behavior.",
+      "intent": "Make sure future schema or renderer changes fail cheaply and visibly in dev fixtures.",
+      "files": [
+        {
+          "path": "package-lock.json",
+          "purpose": "Large generated file to exercise omitted-diff messaging.",
+          "risk": "medium",
+          "reviewFocus": [
+            "Inspect package-lock.json for formatting and reviewer-context clarity.",
+            "Check edge-case visual presentation in dense high-detail mode."
+          ]
+        },
+        {
+          "path": "experiments/future-review-format.md",
+          "purpose": "Intentionally ungrouped experimental format note.",
+          "risk": "low",
+          "reviewFocus": [
+            "Inspect experiments/future-review-format.md for formatting and reviewer-context clarity.",
+            "Check edge-case visual presentation in dense high-detail mode."
+          ]
+        },
+        {
+          "path": "src/missing/from-report-only.ts",
+          "purpose": "Intentional stale chapter file to verify missing-file warnings.",
+          "risk": "medium",
+          "reviewFocus": [
+            "Confirm missing-file warnings are legible and not mistaken for real git files."
+          ]
+        }
+      ],
+      "reviewFocus": [
+        "Check rigor checklist failures/warnings are visually distinct.",
+        "Check appendices remain scannable with ungrouped files."
+      ],
+      "risks": [
+        "Fixture drift can hide production rendering regressions if dev-render stops validating reports."
+      ],
+      "validation": [
+        "dev-render validates report JSON before rendering.",
+        "Fixture README documents the intended edge cases."
+      ]
+    }
+  ],
+  "behaviorFlow": [
+    {
+      "label": "User invokes dev command",
+      "description": "The user runs /pr-dev or the CLI dev-render command with familiar output/detail flags.",
+      "files": [
+        "index.ts",
+        "bin/pi-review-artifact.ts"
+      ]
+    },
+    {
+      "label": "Fixture data loads",
+      "description": "The CLI loads static report JSON and a static GitSnapshot fixture instead of reading real git state.",
+      "files": [
+        "src/fixtures.ts",
+        "fixtures/dev/comprehensive.git.json"
+      ]
+    },
+    {
+      "label": "Renderer produces HTML",
+      "description": "The normal chapters renderer writes one or more artifact HTML files for browser, responsive, and print review.",
+      "files": [
+        "src/render.ts",
+        "src/templates/chapters.ts",
+        "src/templates/styles.ts"
+      ]
+    }
+  ],
+  "risks": [
+    {
+      "severity": "high",
+      "area": "Command execution",
+      "description": "The dev slash command runs a local CLI. Argument parsing and path handling must not accidentally invoke the review agent or inspect the wrong repository.",
+      "mitigation": "Keep /pr-dev on pi.exec only and route fixture rendering through dev-render.",
+      "files": [
+        "index.ts",
+        "bin/pi-review-artifact.ts"
+      ]
+    },
+    {
+      "severity": "medium",
+      "area": "Responsive layout",
+      "description": "Long paths, commands, and diff lines can overflow narrow screens if tables or pre blocks are not constrained.",
+      "mitigation": "Use wrapping for prose/table cells and horizontal scroll for raw diffs.",
+      "files": [
+        "src/templates/chapters.ts",
+        "src/templates/styles.ts"
+      ]
+    },
+    {
+      "severity": "low",
+      "area": "Fixture drift",
+      "description": "Fixtures can become stale when schema fields or renderer assumptions change.",
+      "mitigation": "Validate fixture report JSON on every dev-render run."
+    }
+  ],
+  "decisions": [
+    {
+      "decision": "Use fixture JSON plus fixture GitSnapshot instead of a bespoke HTML mock.",
+      "rationale": "This keeps development rendering close to the production JSON-to-HTML workflow while avoiding model/token cost.",
+      "alternatives": [
+        "Mock static HTML pages by hand",
+        "Require a real git repo with synthetic changes for every styling iteration"
+      ]
+    },
+    {
+      "decision": "Render all detail tiers from one command.",
+      "rationale": "Ultralow omits raw diffs while high detail exercises dense risk, decision, and validation sections."
+    }
+  ],
+  "validation": {
+    "relevantTests": [
+      {
+        "name": "Fixture report schema validation",
+        "file": "src/fixtures.ts",
+        "description": "Reports are validated through validateReport before rendering.",
+        "relatedFiles": [
+          "fixtures/dev/comprehensive.high.json",
+          "src/schema.ts"
+        ]
+      },
+      {
+        "name": "Responsive artifact manual check",
+        "description": "Open the generated high-detail artifact at several viewport widths.",
+        "relatedFiles": [
+          "src/templates/styles.ts",
+          "src/templates/chapters.ts"
+        ]
+      }
+    ],
+    "runs": [
+      {
+        "name": "TypeScript typecheck",
+        "command": "npm run typecheck",
+        "result": "passed",
+        "evidence": "Fixture evidence: command completed with no diagnostics in the dummy scenario.",
+        "notes": "Used to style passed validation rows."
+      },
+      {
+        "name": "Visual regression screenshot",
+        "command": "node scripts/compare-screenshots.js --artifact /tmp/pi-review-dev/high.html",
+        "result": "failed",
+        "evidence": "Fixture evidence: expected screenshot intentionally differs by 12 pixels.",
+        "notes": "Dummy failed result for badge and table styling."
+      },
+      {
+        "name": "Mobile viewport smoke",
+        "command": "open high.html at 375px viewport",
+        "result": "partial",
+        "evidence": "Fixture evidence: overview and chapters checked; print CSS not checked.",
+        "notes": "Exercises partial validation styling."
+      },
+      {
+        "name": "Print stylesheet review",
+        "result": "skipped",
+        "notes": "Skipped in fixture to test skipped validation badge."
+      },
+      {
+        "name": "Accessibility pass",
+        "command": "npx axe /tmp/pi-review-dev/index.html",
+        "result": "not_run",
+        "notes": "Not run; listed for missing validation flow."
+      }
+    ]
+  },
+  "knownLimitations": [
+    "The git fixture is static; it cannot prove live collectGitSnapshot behavior.",
+    "The visual fixture intentionally includes failure/warning states that would not all appear in a clean production artifact."
+  ],
+  "missingValidation": [
+    "No automated screenshot baseline is included yet.",
+    "No real accessibility scanner was run for this fixture."
+  ]
+}

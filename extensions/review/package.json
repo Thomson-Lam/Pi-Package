@@ -1,0 +1,25 @@
+{
+  "name": "pi-review-artifact",
+  "version": "0.1.0",
+  "private": true,
+  "description": "Generate predictable HTML review artifacts from compact JSON + git metadata",
+  "keywords": ["pi-package"],
+  "type": "module",
+  "bin": {
+    "pi-review-artifact": "./dist/bin/pi-review-artifact.js"
+  },
+  "pi": {
+    "extensions": ["./index.ts"]
+  },
+  "scripts": {
+    "build": "tsc -p tsconfig.json",
+    "typecheck": "tsc -p tsconfig.json --noEmit"
+  },
+  "dependencies": {
+    "zod": "^4.0.0"
+  },
+  "devDependencies": {
+    "@types/node": "^22.0.0",
+    "typescript": "^5.8.0"
+  }
+}

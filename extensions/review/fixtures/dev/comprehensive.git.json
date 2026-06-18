@@ -1,0 +1,89 @@
+{
+  "repoRoot": "/fixture/pi-review-dev-repo",
+  "branch": "feature/review-html-fixtures",
+  "headSha": "0123456789abcdef0123456789abcdef01234567",
+  "baseLabel": "HEAD",
+  "mode": "worktree",
+  "totals": {
+    "files": 10,
+    "added": 1479,
+    "deleted": 1281
+  },
+  "files": [
+    {
+      "path": "src/commands/review.ts",
+      "status": "M",
+      "added": 48,
+      "deleted": 12,
+      "patch": "diff --git a/src/commands/review.ts b/src/commands/review.ts\nindex 0123456..89abcde 100644\n--- a/src/commands/review.ts\n+++ b/src/commands/review.ts\n@@ -10,8 +10,16 @@ export function registerReviewCommand() {\n-  registerCommand(\"pr\", runReview);\n+  registerCommand(\"pr\", runReview);\n+  registerCommand(\"pr-dev\", runFixtureRender);\n+  // Development command intentionally bypasses the agent loop.\n+  // It renders static JSON and static git metadata through the real renderer.\n   return true;\n }\n@@ -44,6 +52,12 @@ function runReview(args) {\n+function runFixtureRender(args) {\n+  return execCli([\"dev-render\", ...args]);\n+}"
+    },
+    {
+      "path": "src/templates/chapters.ts",
+      "status": "M",
+      "added": 96,
+      "deleted": 31,
+      "patch": "diff --git a/src/templates/chapters.ts b/src/templates/chapters.ts\nindex 1111111..2222222 100644\n--- a/src/templates/chapters.ts\n+++ b/src/templates/chapters.ts\n@@ -80,7 +80,12 @@ function renderOverview(report) {\n-  return `<section>${summary}</section>`;\n+  return `<section id=\"overview\" class=\"review-overview\">${summary}</section>`;\n+}\n+\n+function renderResponsiveStressRow(label: string, value: string): string {\n+  return `<tr><th>${label}</th><td>${value}</td></tr>`;\n }\n@@ -145,6 +150,8 @@ function renderChapterBody(chapters) {\n+// Fixture includes this intentionally long line to exercise horizontal scrolling, wrapping, and diff overflow behavior in narrow browser widths: const reviewFixtureStressValue = \"abcdefghijklmnopqrstuvwxyz-0123456789-ABCDEFGHIJKLMNOPQRSTUVWXYZ-this-segment-keeps-going-to-force-overflow-and-verify-that-the-diff-pane-scrolls-instead-of-breaking-the-entire-page\";"
+    },
+    {
+      "path": "src/templates/review.css",
+      "status": "A",
+      "added": 74,
+      "deleted": 0,
+      "note": "Synthetic new stylesheet for fixture coverage",
+      "patch": "diff --git a/src/templates/review.css b/src/templates/review.css\nnew file mode 100644\n--- /dev/null\n+++ b/src/templates/review.css\n@@ -0,0 +1,8 @@\n+:root {\n+  --review-bg: #f7f8fb;\n+  --review-surface: #ffffff;\n+}\n+.review-card {\n+  border-radius: 14px;\n+  overflow-wrap: anywhere;\n+}"
+    },
+    {
+      "path": "assets/review-preview-screenshot.png",
+      "status": "A",
+      "added": 0,
+      "deleted": 0,
+      "patch": null,
+      "note": "Diff omitted: binary file"
+    },
+    {
+      "path": "docs/review-artifacts/responsiveness/very-long-path-name-that-should-wrap-in-tables-and-navigation.md",
+      "status": "M",
+      "added": 22,
+      "deleted": 4,
+      "patch": "diff --git a/docs/review-artifacts/responsiveness/very-long-path-name-that-should-wrap-in-tables-and-navigation.md b/docs/review-artifacts/responsiveness/very-long-path-name-that-should-wrap-in-tables-and-navigation.md\nindex abcdef0..1234567 100644\n--- a/docs/review-artifacts/responsiveness/very-long-path-name-that-should-wrap-in-tables-and-navigation.md\n+++ b/docs/review-artifacts/responsiveness/very-long-path-name-that-should-wrap-in-tables-and-navigation.md\n@@ -1,5 +1,8 @@\n # Responsive artifact notes\n-Short note.\n+Long note with inline code-like text: `node dist/bin/pi-review-artifact.js dev-render --fixture comprehensive --detail all --output-dir /tmp/pi-review-dev --no-open`.\n+A deliberately long prose line follows to test table cell wrapping, small viewport behavior, and print layout stability for reviewer-facing content that does not contain convenient spaces in some segments: ReviewArtifactResponsivenessStressToken_abcdefghijklmnopqrstuvwxyz_0123456789_ABCDEFGHIJKLMNOPQRSTUVWXYZ_end."
+    },
+    {
+      "path": "src/legacy/old-renderer.ts",
+      "status": "D",
+      "added": 0,
+      "deleted": 36,
+      "patch": "diff --git a/src/legacy/old-renderer.ts b/src/legacy/old-renderer.ts\ndeleted file mode 100644\nindex 9999999..0000000\n--- a/src/legacy/old-renderer.ts\n+++ /dev/null\n@@ -1,5 +0,0 @@\n-export function renderSections() {\n-  return \"legacy sections renderer\";\n-}"
+    },
+    {
+      "path": "src/components/review-card.tsx",
+      "status": "R100",
+      "added": 12,
+      "deleted": 8,
+      "patch": "diff --git a/src/components/old-card.tsx b/src/components/review-card.tsx\nsimilarity index 82%\nrename from src/components/old-card.tsx\nrename to src/components/review-card.tsx\nindex 3333333..4444444 100644\n--- a/src/components/old-card.tsx\n+++ b/src/components/review-card.tsx\n@@ -1,4 +1,5 @@\n-export function OldCard(props) {\n+export function ReviewCard(props) {\n+  // Renamed to match artifact terminology.\n   return <article>{props.children}</article>;\n }"
+    },
+    {
+      "path": "package-lock.json",
+      "status": "M",
+      "added": 1200,
+      "deleted": 1190,
+      "patch": null,
+      "note": "Diff omitted: exceeds size cap"
+    },
+    {
+      "path": "experiments/future-review-format.md",
+      "status": "A",
+      "added": 18,
+      "deleted": 0,
+      "note": "Intentionally ungrouped by some fixtures to exercise appendix rendering",
+      "patch": "diff --git a/experiments/future-review-format.md b/experiments/future-review-format.md\nnew file mode 100644\n--- /dev/null\n+++ b/experiments/future-review-format.md\n@@ -0,0 +1,4 @@\n+# Future review format\n+This ungrouped file appears in the appendices when report chapters do not assign it.\n+It helps test reviewer guidance for files that need separate attention."
+    },
+    {
+      "path": "src/untracked/prototype.ts",
+      "status": "A",
+      "added": 9,
+      "deleted": 0,
+      "note": "Synthetic untracked diff",
+      "patch": "diff --git a/src/untracked/prototype.ts b/src/untracked/prototype.ts\nnew file mode 100644\n--- /dev/null\n+++ b/src/untracked/prototype.ts\n@@ -0,0 +1,5 @@\n+export const prototype = true;\n+export const message = \"Included to test synthetic untracked diffs.\";"
+    }
+  ]
+}

@@ -1,0 +1,15 @@
+{
+  "defaultProvider": "openai-codex",
+  "defaultModel": "gpt-5.5",
+  "defaultThinkingLevel": "medium",
+  "theme": "dark",
+  "enabledModels": [
+    "openai-codex/gpt-5.4",
+    "openai-codex/gpt-5.5"
+  ],
+  "packages": [
+    "npm:pi-interactive-shell",
+    "npm:pi-opencode-bridge",
+    "git:github.com/YOUR_GITHUB_USER/pi-workflow-package@v0.1.0"
+  ]
+}
