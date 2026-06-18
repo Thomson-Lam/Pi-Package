@@ -31,7 +31,7 @@ Detail tiers are validation profiles when `/pr` or CLI `validate/render --detail
 - `medium` — default shareable artifact: explicit chapters, all changed files assigned, chapter intent/reviewFocus, file purposes, validation, and missingValidation fields.
 - `high` — rigorous review: every changed file assigned exactly once, per-file reviewFocus, chapter risks/validation, top-level risks, decisions, limitations, and validation evidence. Behavior flow is warned when absent because it is only applicable to behavior-changing work.
 
-Artifacts are written directly under the target git root by default. Choose `localpi` in the `/pr` wizard or use CLI `render --out localpi` to write to `.pi/reviews/` under the target git root. Choose `global` in the wizard or use CLI `render --out global` to write to `~/.pi/agent/reviews/`. CLI `render --output <file>` overrides `--out`.
+Artifacts are written under `html-reviews/` in the target git root by default. Choose `localpi` in the `/pr` wizard or use CLI `render --out localpi` to write to `.pi/reviews/` under the target git root. Choose `global` in the wizard or use CLI `render --out global` to write to `~/.pi/agent/reviews/<project-slug>/`, where `<project-slug>` is derived from the Pi agent cwd basename (or `--project-cwd` for direct CLI use). Rendered HTML filenames use the slugged report title as `<subject>.html`, with spaces and non-alphanumeric symbols converted to hyphens. CLI `render --output <file>` overrides `--out`.
 
 ## Fresh clone setup
 

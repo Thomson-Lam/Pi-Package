@@ -121,7 +121,7 @@ export function collectGitSnapshot(opts: {
 }
 
 function isIgnoredReviewArtifactPath(path: string): boolean {
-  return path === ".pi/reviews" || path.startsWith(".pi/reviews/");
+  return path === ".pi/reviews" || path.startsWith(".pi/reviews/") || path === "html-reviews" || path.startsWith("html-reviews/");
 }
 
 function finalPathFromGitFields(fields: string[]): string {

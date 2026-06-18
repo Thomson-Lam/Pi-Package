@@ -4,7 +4,7 @@ Description: Navigation index for the Pi review-artifact extension package.
 Purpose: Help contributors locate extension wiring, CLI implementation, scaffold workflow, and chapters artifact rendering quickly.
 
 Components:
-- `index.ts` — Pi extension entrypoint; registers `/pr`, `/pr --help`, path/`--cwd` targeting, `--detail ultralow|low|medium|high`, `--out repo|localpi|global`, `--prompt <instructions>` user review emphasis, low/ultralow direct-stdin render prompts, medium/high scaffold-then-render prompts, and `/pr-dev` dummy fixture rendering without invoking the agent.
+- `index.ts` — Pi extension entrypoint; registers `/pr`, `/pr --help`, path/`--cwd` targeting, `--detail ultralow|low|medium|high`, `--out repo|localpi|global`, `--prompt <instructions>` user review emphasis, low/ultralow direct-stdin render prompts, medium/high scaffold-then-render prompts, project-cwd aware global output, and `/pr-dev` dummy fixture rendering without invoking the agent.
 - `bin/pi-review-artifact.ts` — CLI entrypoint implementing top-level `--help`, `guide`, `example`, `schema`, `dev-render`, `scaffold`, `validate`, and `render` commands; validation rejects unresolved `TODO_REPLACE` placeholders and enforces requested detail profiles.
 - `src/detail.ts` — Detail-tier profile analysis for low/medium/high structural and diff-aware validation plus renderer checklist data.
 - `src/schema.ts` — Strict Zod v4 report schema, including optional `reviewDetail` and `chapters`, and JSON Schema export.

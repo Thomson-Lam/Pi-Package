@@ -8,4 +8,5 @@ auth.json
 sessions/
 reviews/
 handoffs/
+docs/handoff/
 plan-mode/config.json

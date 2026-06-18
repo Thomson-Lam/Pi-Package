@@ -1,6 +1,6 @@
 #!/usr/bin/env node
 import { mkdirSync, readFileSync, writeFileSync } from "node:fs";
-import { resolve, dirname, join } from "node:path";
+import { resolve, dirname, join, basename } from "node:path";
 import { homedir } from "node:os";
 import { validateReport, reportJsonSchema } from "../src/schema.js";
 import type { ReviewDetail, ReviewReport } from "../src/schema.js";
@@ -40,14 +40,18 @@ function shortUsage(): string {
   guide [--template chapters]
   example [--template chapters]
   schema --json
-  dev-render [--template chapters] [--fixture comprehensive] [--detail ultralow|low|medium|high|all] [--cwd <path>] [--out repo|localpi|global] [--output <file>] [--output-dir <dir>] [--open|--no-open] [--json]
+  dev-render [--template chapters] [--fixture comprehensive] [--detail ultralow|low|medium|high|all] [--cwd <path>] [--project-cwd <path>] [--out repo|localpi|global] [--output <file>] [--output-dir <dir>] [--open|--no-open] [--json]
   scaffold [--template chapters] [--cwd <repo>] [--mode worktree|staged|baseRef] [--base <ref>] [--include-untracked] [--detail ultralow|low|medium|high] [--output <file>] [--json]
   validate --stdin|--input <file> [--template chapters] [--cwd <repo>] [--mode worktree|staged|baseRef] [--base <ref>] [--include-untracked] [--detail ultralow|low|medium|high] [--json]
-  render --stdin|--input <file> [--template chapters] [--output <file>] [--out repo|localpi|global] [--cwd <repo>] [--mode worktree|staged|baseRef] [--base <ref>] [--include-untracked] [--detail ultralow|low|medium|high] [--open|--no-open] [--json]
+  render --stdin|--input <file> [--template chapters] [--output <file>] [--out repo|localpi|global] [--cwd <repo>] [--project-cwd <path>] [--mode worktree|staged|baseRef] [--base <ref>] [--include-untracked] [--detail ultralow|low|medium|high] [--open|--no-open] [--json]
 
 Notes:
   - The only supported artifact template is "chapters".
   - baseRef mode requires --base <ref>.
+  - --out repo writes under <git-root>/html-reviews/.
+  - --out localpi writes under <git-root>/.pi/reviews/.
+  - --out global writes under ~/.pi/agent/reviews/<project-slug>/; pass --project-cwd to control the slug.
+  - Rendered HTML filenames use the slugged report title as <subject>.html; spaces and non-alphanumeric symbols become hyphens.
   - dev-render uses static dummy JSON and git fixtures; it does not inspect real git or invoke an agent.
   - scaffold writes a TODO_REPLACE draft; validate/render reject unresolved placeholders.
   - render and dev-render default to --out repo and open the artifact unless --no-open is passed.
@@ -299,8 +303,9 @@ function resolveRenderOutput(report: ReviewReport, git: GitSnapshot): string {
   const out = arg("--out") || "repo";
   if (out !== "repo" && out !== "localpi" && out !== "global") fail(`Unsupported --out ${JSON.stringify(out)}. Use repo, localpi, or global.`);
 
-  const outputDir = out === "global" ? join(homedir(), ".pi", "agent", "reviews") : out === "localpi" ? join(git.repoRoot, ".pi", "reviews") : git.repoRoot;
-  return resolve(outputDir, `${new Date().toISOString().replace(/[.:]/g, "-")}-${slug(report.title)}.html`);
+  const projectSlug = projectSlugFromCwd(arg("--project-cwd") || process.cwd());
+  const outputDir = out === "global" ? join(homedir(), ".pi", "agent", "reviews", projectSlug) : out === "localpi" ? join(git.repoRoot, ".pi", "reviews") : join(git.repoRoot, "html-reviews");
+  return resolve(outputDir, `${slug(report.title)}.html`);
 }
 
 type DevRenderResult = {
@@ -319,13 +324,13 @@ function renderDevFixtures(opts: { fixture: string; detail: DevRenderDetail; tem
   const explicitOutputDir = arg("--output-dir");
   const out = validateOutFlag();
   const cwd = resolve(arg("--cwd") || arg("--repo") || arg("--path") || process.cwd());
-  const outputDir = explicitOutputDir ? resolve(explicitOutputDir) : defaultDevOutputDir({ cwd, out, multiple: details.length > 1 });
+  const outputDir = explicitOutputDir ? resolve(explicitOutputDir) : defaultDevOutputDir({ cwd, projectCwd: resolve(arg("--project-cwd") || process.cwd()), out });
 
   const artifacts: Array<{ detail: ReviewDetail; path: string }> = [];
   for (const detail of details) {
     const loaded = loadDevFixture({ fixture: opts.fixture, detail });
     const html = renderHtml(loaded.report, loaded.git, loaded.commands, opts.template);
-    const output = explicitOutput ? resolve(explicitOutput) : details.length === 1 && !explicitOutputDir && out === "repo" ? resolve(cwd, devArtifactFileName(opts.fixture, detail)) : resolve(outputDir, devArtifactFileName(opts.fixture, detail));
+    const output = explicitOutput ? resolve(explicitOutput) : resolve(outputDir, devArtifactFileName(opts.fixture, detail));
     mkdirSync(dirname(output), { recursive: true });
     writeFileSync(output, html, "utf8");
     artifacts.push({ detail, path: output });
@@ -349,10 +354,10 @@ function validateOutFlag(): "repo" | "localpi" | "global" {
   return out;
 }
 
-function defaultDevOutputDir(opts: { cwd: string; out: "repo" | "localpi" | "global"; multiple: boolean }): string {
-  if (opts.out === "global") return join(homedir(), ".pi", "agent", "reviews", "dev");
+function defaultDevOutputDir(opts: { cwd: string; projectCwd: string; out: "repo" | "localpi" | "global" }): string {
+  if (opts.out === "global") return join(homedir(), ".pi", "agent", "reviews", projectSlugFromCwd(opts.projectCwd), "dev");
   if (opts.out === "localpi") return join(opts.cwd, ".pi", "reviews", "dev");
-  return opts.multiple ? join(opts.cwd, "pi-review-dev") : opts.cwd;
+  return join(opts.cwd, "html-reviews", "dev");
 }
 
 function devArtifactFileName(fixture: string, detail: ReviewDetail): string {
@@ -425,7 +430,7 @@ function scaffoldReport(git: GitSnapshot, detail: ReviewDetail): ReviewReport {
   return {
     schemaVersion: "1.0",
     reviewDetail: detail,
-    title: "TODO_REPLACE: concise review artifact title",
+    title: "TODO_REPLACE: concise subject for the HTML filename, e.g. review-artifact-output-locations",
     summary: {
       intent: "TODO_REPLACE: summarize the purpose of the final diff for reviewers",
       changeType: "mixed",
@@ -635,6 +640,10 @@ function fail(message: string): never {
 
 function slug(s: string): string {
   return s.toLowerCase().replace(/[^a-z0-9]+/g, "-").replace(/(^-|-$)/g, "").slice(0, 60) || "review";
+}
+
+function projectSlugFromCwd(cwd: string): string {
+  return slug(basename(resolve(cwd)) || resolve(cwd));
 }
 
 main();

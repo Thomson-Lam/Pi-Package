@@ -15,6 +15,7 @@ type ReviewCommandOptions = {
   open: boolean;
   includeUntracked: boolean;
   targetCwd: string;
+  projectCwd: string;
   detail: ReviewDetail;
   out: ReviewOut;
   userPrompt?: string;
@@ -23,6 +24,7 @@ type ReviewCommandOptions = {
 type ReviewDevCommandOptions = {
   open: boolean;
   targetCwd: string;
+  projectCwd: string;
   detail: ReviewDevDetail;
   out: ReviewOut;
   fixture: string;
@@ -109,9 +111,9 @@ async function pickReviewOptions(ctx: ExtensionCommandContext, cliPath: string):
 
     if (step === 5) {
       const selected = await selectModal<ReviewOut>(ctx, "Where should the artifact be written?", [
-        { value: "repo", label: "Repo root", description: "Write directly in the target git repository root" },
+        { value: "repo", label: "Repo HTML reviews", description: "Write under html-reviews/ in the target git repository root" },
         { value: "localpi", label: "Local Pi store", description: "Write under .pi/reviews/ in the target repo" },
-        { value: "global", label: "Global Pi store", description: "Write under ~/.pi/agent/reviews/" },
+        { value: "global", label: "Global Pi store", description: "Write under ~/.pi/agent/reviews/<project-slug>/" },
       ]);
       if (isBack(selected)) { step = 4; continue; }
       if (!selected) return undefined;
@@ -143,7 +145,7 @@ async function pickReviewOptions(ctx: ExtensionCommandContext, cliPath: string):
     }
   }
 
-  return { mode, base: base || (mode === "baseRef" ? "HEAD" : undefined), open, includeUntracked, targetCwd, detail, out, userPrompt: userPrompt?.trim() || undefined };
+  return { mode, base: base || (mode === "baseRef" ? "HEAD" : undefined), open, includeUntracked, targetCwd, projectCwd: ctx.cwd, detail, out, userPrompt: userPrompt?.trim() || undefined };
 }
 
 async function pickReviewDevOptions(ctx: ExtensionCommandContext, cliPath: string): Promise<ReviewDevCommandOptions | undefined> {
@@ -180,9 +182,9 @@ async function pickReviewDevOptions(ctx: ExtensionCommandContext, cliPath: strin
 
     if (step === 2) {
       const selected = await selectModal<ReviewOut>(ctx, "Where should fixture artifacts be written?", [
-        { value: "repo", label: "Repo root", description: "Write directly in the target git repository root" },
+        { value: "repo", label: "Repo HTML reviews", description: "Write under html-reviews/dev/ in the target git repository root" },
         { value: "localpi", label: "Local Pi store", description: "Write under .pi/reviews/dev/ in the target repo" },
-        { value: "global", label: "Global Pi store", description: "Write under ~/.pi/agent/reviews/dev/" },
+        { value: "global", label: "Global Pi store", description: "Write under ~/.pi/agent/reviews/<project-slug>/dev/" },
       ]);
       if (isBack(selected)) { step--; continue; }
       if (!selected) return undefined;
@@ -205,7 +207,7 @@ async function pickReviewDevOptions(ctx: ExtensionCommandContext, cliPath: strin
     }
   }
 
-  return { open, targetCwd, detail, out, fixture: "comprehensive", ignored: [] };
+  return { open, targetCwd, projectCwd: ctx.cwd, detail, out, fixture: "comprehensive", ignored: [] };
 }
 
 async function pickReviewTargetCwd(ctx: ExtensionCommandContext, cliPath: string): Promise<string | undefined | Back> {
@@ -374,6 +376,8 @@ function buildReviewDevCliArgs(cliPath: string, opts: ReviewDevCommandOptions): 
     opts.targetCwd,
     "--out",
     opts.out,
+    "--project-cwd",
+    opts.projectCwd,
     opts.open ? "--open" : "--no-open",
   ];
 }
@@ -410,7 +414,7 @@ function buildReviewPrompt(cliPath: string, opts: ReviewCommandOptions): string 
   const untrackedArg = opts.includeUntracked ? " --include-untracked" : "";
   const openArg = opts.open ? "--open" : "--no-open";
   const outArg = `--out ${opts.out}`;
-  const renderArgs = `--template chapters --cwd ${cwdArg} ${modeArgs}${untrackedArg} --detail ${opts.detail} ${outArg} ${openArg}`;
+  const renderArgs = `--template chapters --cwd ${cwdArg} --project-cwd ${shellQuote(opts.projectCwd)} ${modeArgs}${untrackedArg} --detail ${opts.detail} ${outArg} ${openArg}`;
   const diffArgs = opts.mode === "staged" ? "diff --cached" : opts.mode === "baseRef" ? `diff ${shellQuote(opts.base || "HEAD")}` : "diff HEAD";
 
   if (opts.detail === "ultralow" || opts.detail === "low") return buildEphemeralReviewPrompt({ cliPath, cli, cwdArg, opts, renderArgs, diffArgs });
@@ -429,7 +433,7 @@ function buildScaffoldReviewPrompt(input: { cliPath: string; cli: string; cwdArg
 Workflow requirements:
 1. Run the scaffold command exactly. It writes a draft JSON report containing all changed file paths and TODO_REPLACE placeholders.
 2. Inspect the final diff in ${opts.targetCwd} using Bash/Git. Use the scaffold only as structure; do not trust placeholders as content.
-3. Fill the scaffold JSON at ${reportPath}. Replace every TODO_REPLACE placeholder. Do not include HTML, Mermaid, or raw diffs in the JSON. Do not invent test outcomes.
+3. Fill the scaffold JSON at ${reportPath}. Replace every TODO_REPLACE placeholder. Set report.title to a concise subject for the HTML filename (render writes <subject>.html after slugging spaces/symbols to hyphens). Do not include HTML, Mermaid, or raw diffs in the JSON. Do not invent test outcomes.
 4. Render with the chapters template. Render performs schema validation, placeholder rejection, detail-profile validation, git metadata collection, and HTML generation in one step. If render fails, fix the JSON and rerun render.
 5. Return the final Artifact path plus a concise reviewer summary.
 
@@ -469,7 +473,7 @@ function buildEphemeralReviewPrompt(input: { cliPath: string; cli: string; cwdAr
 Workflow requirements for ${opts.detail} detail:
 1. Do not run scaffold and do not write a report JSON file to /tmp.
 2. Inspect the final diff in ${opts.targetCwd} using Bash/Git.
-3. Generate compact report JSON directly in the render command here-doc. Do not include HTML, Mermaid, or raw diffs in the JSON. Do not invent test outcomes.
+3. Generate compact report JSON directly in the render command here-doc. Set report.title to a concise subject for the HTML filename (render writes <subject>.html after slugging spaces/symbols to hyphens). Do not include HTML, Mermaid, or raw diffs in the JSON. Do not invent test outcomes.
 4. Render with the chapters template. Render performs schema validation, placeholder rejection, detail-profile validation, git metadata collection, and HTML generation in one step. If render fails, fix the here-doc JSON and rerun render.
 5. Return the final Artifact path plus a concise reviewer summary.
 
@@ -482,7 +486,7 @@ git -C ${cwdArg} ${diffArgs} --name-status --find-renames
 git -C ${cwdArg} ${diffArgs} -- <path>
 \`\`\`
 
-Use this JSON shape for the here-doc. Keep it concise and replace all example text:
+Use this JSON shape for the here-doc. Keep it concise and replace all example text; choose a title that makes a good slugged filename:
 \`\`\`json
 ${ephemeralJsonShape(opts.detail)}
 \`\`\`
@@ -493,7 +497,7 @@ ${renderCommandPrefix} <<'PI_REVIEW_JSON'
 {
   "schemaVersion": "1.0",
   "reviewDetail": "${opts.detail}",
-  "title": "Concise review title",
+  "title": "Concise change subject for filename",
   "summary": {
     "intent": "What this diff is trying to accomplish.",
     "changeType": "mixed"
@@ -537,12 +541,16 @@ function commonReviewHeader(cliPath: string, opts: ReviewCommandOptions): string
 Use this exact local CLI; do not assume pi-review-artifact is on PATH:
 - CLI path: ${cliPath}
 - Target cwd: ${opts.targetCwd}
+- Pi agent cwd for global project slug: ${opts.projectCwd}
 - Template: chapters
 - Diff mode: ${opts.mode}${opts.base ? ` (${opts.base})` : ""}
 - Include untracked files: ${opts.includeUntracked ? "yes" : "no"}
 - Review detail: ${opts.detail}
 - Output location: ${outputLocationDescription(opts.out)}
 - Open artifact after render: ${opts.open ? "yes" : "no"}${userPromptInstructions(opts)}
+
+Filename rule:
+- The report title controls the HTML filename. Choose a concise subject related to the change; render writes it as <subject>.html after converting spaces and non-alphanumeric symbols to hyphens.
 
 Detail tier expectations:
 ${detailInstructions(opts.detail)}`;
@@ -565,20 +573,20 @@ function renderModeArgs(opts: ReviewCommandOptions): string {
 
 function ephemeralJsonShape(detail: ReviewDetail): string {
   const validation = detail === "low" ? `,\n  "validation": { "runs": [] },\n  "missingValidation": ["Checks not run, or [] if none"]` : "";
-  return `{\n  "schemaVersion": "1.0",\n  "reviewDetail": "${detail}",\n  "title": "...",\n  "summary": { "intent": "...", "changeType": "mixed" },\n  "changes": [{ "title": "...", "summary": "...", "files": [{ "path": "...", "purpose": "..." }] }],\n  "chapters": [{ "sequence": 1, "title": "...", "summary": "...", "files": [{ "path": "...", "purpose": "..." }] }]${validation}\n}`;
+  return `{\n  "schemaVersion": "1.0",\n  "reviewDetail": "${detail}",\n  "title": "concise change subject for filename",\n  "summary": { "intent": "...", "changeType": "mixed" },\n  "changes": [{ "title": "...", "summary": "...", "files": [{ "path": "...", "purpose": "..." }] }],\n  "chapters": [{ "sequence": 1, "title": "...", "summary": "...", "files": [{ "path": "...", "purpose": "..." }] }]${validation}\n}`;
 }
 
 function detailInstructions(detail: ReviewDetail): string {
   if (detail === "ultralow") {
-    return `- Ultralow: fastest compact handoff. Use one broad group/chapter, file purposes, minimal validation notes, and no raw diffs in the rendered artifact.`;
+    return `- Ultralow: fastest compact handoff. Use one broad group/chapter, file purposes, minimal validation notes, no raw diffs in the rendered artifact, and a concise title that becomes the subject-based HTML filename.`;
   }
   if (detail === "low") {
-    return `- Low: concise internal handoff. Prefer 1-3 chapters, brief summaries, file purposes, validation/missingValidation, and only critical risks.`;
+    return `- Low: concise internal handoff. Prefer 1-3 chapters, brief summaries, file purposes, validation/missingValidation, only critical risks, and a concise title that becomes the subject-based HTML filename.`;
   }
   if (detail === "high") {
-    return `- High: rigorous review artifact. Cover every changed file, use explicit reviewer order, add per-file purpose/focus/risk where useful, include risks with mitigation, decisions/alternatives, behaviorFlow for behavior changes, knownLimitations, and detailed validation evidence.`;
+    return `- High: rigorous review artifact. Cover every changed file, use explicit reviewer order, add per-file purpose/focus/risk where useful, include risks with mitigation, decisions/alternatives, behaviorFlow for behavior changes, knownLimitations, detailed validation evidence, and a concise title that becomes the subject-based HTML filename.`;
   }
-  return `- Medium: shareable coherent artifact. Prefer 3-6 chapters, assign all changed files where possible, include chapter summaries, file purposes, chapter-level reviewFocus, validation/missingValidation, and relevant risks/decisions/knownLimitations.`;
+  return `- Medium: shareable coherent artifact. Prefer 3-6 chapters, assign all changed files where possible, include chapter summaries, file purposes, chapter-level reviewFocus, validation/missingValidation, relevant risks/decisions/knownLimitations, and a concise title that becomes the subject-based HTML filename.`;
 }
 
 function reviewDevHelpText(cliPath: string, currentCwd: string): string {
@@ -594,7 +602,7 @@ The wizard asks for:
 
 - Target cwd: current Pi cwd (\`${currentCwd}\`) or another path.
 - Detail tier: all, ultralow, low, medium, or high.
-- Output location: repo root, local Pi store, or global Pi store.
+- Output location: repo html-reviews, local Pi store, or global Pi store.
 - Whether to open the generated artifact(s).
 
 ## What /pr-dev does
@@ -635,7 +643,7 @@ The wizard asks for:
 - Base ref: defaults to \`HEAD\` when base-ref mode is selected.
 - Whether to include untracked files for worktree reviews.
 - Review depth: ultralow, low, medium, or high.
-- Output location: repo root, local Pi store, or global Pi store.
+- Output location: repo html-reviews, local Pi store, or global Pi store.
 - Whether to open the generated artifact.
 - Optional review emphasis, such as security boundaries or API compatibility.
 
@@ -684,9 +692,9 @@ Use \`/pr-dev\` to render static dummy HTML artifacts through the same chapters 
 }
 
 function outputLocationDescription(out: ReviewOut): string {
-  if (out === "global") return "global (~/.pi/agent/reviews/)";
+  if (out === "global") return "global (~/.pi/agent/reviews/<project-slug>/, where project slug is the Pi agent cwd basename)";
   if (out === "localpi") return "local Pi store (.pi/reviews/ under the git root)";
-  return "repo root (the target git repository root)";
+  return "repo html-reviews (html-reviews/ under the target git repository root)";
 }
 
 
