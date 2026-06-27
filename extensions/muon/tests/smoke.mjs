@@ -41,9 +41,6 @@ assert.equal(existsSync(join(muonDir, "skills", "writing-plans", "SKILL.md")), t
 
 const superpowers = readFileSync(join(muonDir, "superpowers.ts"), "utf8");
 assert.match(superpowers, /discoverSuperpowersResources/);
-assert.match(superpowers, /maybeInjectSuperpowersBootstrap/);
-assert.match(superpowers, /using-superpowers/);
-assert.match(superpowers, /stripFrontmatter/);
 
 const commands = readFileSync(join(muonDir, "commands.ts"), "utf8");
 assert.match(commands, /muon/);

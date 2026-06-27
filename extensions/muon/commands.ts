@@ -151,12 +151,12 @@ async function pickMuonSkillsAction(ctx: ExtensionCommandContext, state: MuonSta
     {
       value: "on",
       label: state.config.superpowersMode === "on" ? "On ✓" : "On",
-      description: "Expose bundled skills and inject using-superpowers once per session",
+      description: "Expose bundled skills in the skill catalog",
     },
     {
       value: "off",
       label: state.config.superpowersMode === "off" ? "Off ✓" : "Off",
-      description: "Disable bundled skill discovery and bootstrap injection",
+      description: "Remove bundled skills from the skill catalog",
     },
   ]);
   if (!selected) return undefined;
@@ -222,14 +222,14 @@ async function runMuonAction(pi: ExtensionAPI, deps: MuonDeps, ctx: ExtensionCom
     }
     deps.setState((draft) => {
       draft.config.superpowersMode = mode;
-      draft.injectBootstrapThisSession = true;
     }, ctx);
     ctx.ui.notify(
       mode === "on"
-        ? "Muon skills mode set to on. Skill-first bootstrap will be injected on your next prompt."
-        : "Muon skills mode set to off. Bundled skills remain discoverable, but bootstrap injection is disabled.",
+        ? "Muon skills mode set to on. Reloading to apply…"
+        : "Muon skills mode set to off. Reloading to apply…",
       "success",
     );
+    await ctx.reload();
     return;
   }
 

@@ -13,7 +13,6 @@ export function createInitialMuonState(): MuonState {
     },
     activeRunId: undefined,
     runs: {},
-    injectBootstrapThisSession: true,
   };
 }
 
@@ -25,7 +24,6 @@ export function restoreMuonState(ctx: ExtensionContext): MuonState {
     state.config = { ...state.config, ...(data.config ?? {}) };
     state.activeRunId = data.activeRunId ?? state.activeRunId;
     state.runs = data.runs && typeof data.runs === "object" ? data.runs : state.runs;
-    state.injectBootstrapThisSession = data.injectBootstrapThisSession ?? state.injectBootstrapThisSession;
   }
   return state;
 }

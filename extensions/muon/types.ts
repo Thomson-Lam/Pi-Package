@@ -29,7 +29,6 @@ export interface MuonState {
   config: MuonConfig;
   activeRunId?: string;
   runs: Record<string, MuonRunSummary>;
-  injectBootstrapThisSession: boolean;
 }
 
 export interface MuonPersistedState extends MuonState {

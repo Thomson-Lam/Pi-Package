@@ -7,12 +7,12 @@ Muon is a personal Pi extension for bundled skill-first workflows, transparent s
 Muon includes a self-contained copy of the Superpowers-style skills under `extensions/muon/skills/`.
 
 ```text
-/muon skills off      # bundled skills remain discoverable, but bootstrap injection is disabled
-/muon skills on       # inject using-superpowers once per session on the next prompt
+/muon skills off      # hide bundled skills from the skill catalog
+/muon skills on       # expose bundled skills in the skill catalog
 /muon skills status
 ```
 
-Default is `off`. Bundled skills are always discoverable once the extension is loaded; toggling skills mode does not require `/reload`.
+Default is `off`. Toggling skills mode does not require `/reload`.
 
 ## Manual commands
 
@@ -53,7 +53,7 @@ dispatching-parallel-agents
 writing-skills
 ```
 
-Muon always returns `extensions/muon/skills` through Pi resource discovery once the extension is loaded. When skills mode is `on`, Muon injects `using-superpowers` into context once per session.
+Muon exposes `extensions/muon/skills` through Pi resource discovery when skills mode is `on`.
 
 ## muon_subagent
 

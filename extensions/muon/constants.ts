@@ -7,7 +7,6 @@ const HERE = dirname(fileURLToPath(import.meta.url));
 export const MUON_EXTENSION_NAME = "muon";
 export const MUON_STATE_ENTRY_TYPE = "muon-state";
 export const MUON_RUN_MESSAGE_TYPE = "muon-run";
-export const MUON_BOOTSTRAP_MARKER = "muon:skills bootstrap for pi";
 export const MAX_PARALLEL_DEFAULT = 2;
 export const MAX_PARALLEL_HARD_CAP = 8;
 export const MAX_DEPTH_DEFAULT = 1;
