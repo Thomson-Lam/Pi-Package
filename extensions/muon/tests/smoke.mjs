@@ -35,4 +35,15 @@ const constants = readFileSync(join(muonDir, "constants.ts"), "utf8");
 assert.match(constants, /MUON_EXTENSION_NAME/);
 assert.match(constants, /MAX_PARALLEL_HARD_CAP = 8/);
 
+const superpowers = readFileSync(join(muonDir, "superpowers.ts"), "utf8");
+assert.match(superpowers, /discoverSuperpowersResources/);
+assert.match(superpowers, /maybeInjectSuperpowersBootstrap/);
+assert.match(superpowers, /using-superpowers/);
+assert.match(superpowers, /stripFrontmatter/);
+
+const commands = readFileSync(join(muonDir, "commands.ts"), "utf8");
+assert.match(commands, /muon/);
+assert.match(commands, /skills/);
+assert.match(commands, /bootstrap/);
+
 console.log("muon scaffold smoke checks passed");
