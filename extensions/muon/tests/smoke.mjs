@@ -51,6 +51,11 @@ assert.match(commands, /skills/);
 assert.match(commands, /on\|off/);
 assert.match(commands, /pickMuonSkillsAction/);
 assert.match(commands, /Muon Skills/);
+const skillsPicker = commands.match(/async function pickMuonSkillsAction[\s\S]*?async function showMuonHelp/)?.[0] ?? "";
+assert.match(skillsPicker, /value: "on"/);
+assert.match(skillsPicker, /value: "off"/);
+assert.doesNotMatch(skillsPicker, /value: "status"/);
+assert.doesNotMatch(skillsPicker, /value: "help"/);
 assert.doesNotMatch(commands, /skills off\|discover\|bootstrap/);
 assert.doesNotMatch(commands, /skills on\|off\|discover\|bootstrap/);
 

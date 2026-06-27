@@ -30,7 +30,7 @@ Default is `off`. After changing skills mode, run `/reload` so Pi refreshes disc
 /muon rollback <runId> [targetRef]
 ```
 
-The `/muon` menu and `/muon skills` modal support `j`/`k` navigation, Enter to select, `h`/`?` for help, and Esc to cancel.
+The `/muon` menu supports `j`/`k` navigation, Enter to select, `h`/`?` for help, and Esc to cancel. The `/muon skills` modal supports `j`/`k` navigation, Enter to select On or Off, and Esc to cancel.
 
 ## Bundled skills
 

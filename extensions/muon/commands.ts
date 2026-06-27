@@ -158,12 +158,9 @@ async function pickMuonSkillsAction(ctx: ExtensionCommandContext, state: MuonSta
       label: state.config.superpowersMode === "off" ? "Off ✓" : "Off",
       description: "Disable bundled skill discovery and bootstrap injection",
     },
-    { value: "status", label: "Status", description: "Show current skills mode and bundled skill source" },
-    { value: "help", label: "Help", description: "Show Muon help" },
   ]);
   if (!selected) return undefined;
-  if (selected === "help") return { kind: "help" };
-  return { kind: "skills", mode: selected as "on" | "off" | "status" };
+  return { kind: "skills", mode: selected as "on" | "off" };
 }
 
 async function showMuonHelp(ctx: ExtensionCommandContext): Promise<void> {
