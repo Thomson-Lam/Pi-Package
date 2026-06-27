@@ -84,4 +84,10 @@ assert.match(workflow, /chain/);
 const toolsAfterWorkflow = readFileSync(join(muonDir, "tools.ts"), "utf8");
 assert.match(toolsAfterWorkflow, /muon_workflow/);
 
+const worktree = readFileSync(join(muonDir, "worktree.ts"), "utf8");
+assert.match(worktree, /prepareMuonWorktree/);
+assert.match(worktree, /checkpointMuonWorktree/);
+assert.match(worktree, /rollbackMuonWorktree/);
+assert.match(worktree, /git worktree/);
+
 console.log("muon scaffold smoke checks passed");

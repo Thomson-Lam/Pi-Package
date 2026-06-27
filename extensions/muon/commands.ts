@@ -90,6 +90,20 @@ export function registerMuonCommands(pi: ExtensionAPI, deps: MuonDeps): void {
         return;
       }
 
+      if (words[0] === "rollback") {
+        const runId = words[1] ?? state.activeRunId;
+        if (!runId || !state.runs[runId]) throw new Error("Usage: /muon rollback <runId>");
+        const run = state.runs[runId];
+        if (!run.worktreePath) throw new Error(`Run ${runId} has no worktreePath`);
+        const targetRef = words[2] ?? "HEAD~1";
+        const { rollbackMuonWorktree } = await import("./worktree.js");
+        const ok = await ctx.ui.confirm("Rollback Muon worktree", `Run: ${runId}\nWorktree: ${run.worktreePath}\nTarget: ${targetRef}`);
+        if (!ok) return;
+        await rollbackMuonWorktree(pi as any, run.worktreePath, targetRef);
+        ctx.ui.notify(`Rolled back ${runId} to ${targetRef}`, "success");
+        return;
+      }
+
       throw new Error("Usage: /muon status | /muon skills off|discover|bootstrap|status");
     },
   });

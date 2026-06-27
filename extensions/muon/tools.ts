@@ -5,8 +5,9 @@ import { MAX_PARALLEL_HARD_CAP } from "./constants.js";
 import { discoverMuonAgents } from "./agents.js";
 import { createRunLedger, completeRunLedger } from "./ledger.js";
 import { runMuonAgentChain, runMuonAgentsParallel, runSingleMuonAgent } from "./runner.js";
-import type { AgentScope, MuonState } from "./types.js";
+import type { AgentScope, MuonState, WorktreeMode } from "./types.js";
 import { renderMuonSubagentResult } from "./render.js";
+import { checkpointMuonWorktree, prepareMuonWorktree } from "./worktree.js";
 
 export interface MuonToolDeps {
   getState: () => MuonState;
@@ -50,6 +51,7 @@ const MuonWorkflowParams = Type.Object({
   agentScope: Type.Optional(AgentScopeSchema),
   maxParallel: Type.Optional(Type.Number({ default: 2 })),
   maxDepth: Type.Optional(Type.Number({ default: 1 })),
+  worktreeMode: Type.Optional(StringEnum(["none", "shared-run"] as const, { default: "none" })),
 });
 
 function runId(): string {
@@ -137,6 +139,7 @@ export function registerMuonTools(pi: ExtensionAPI, deps: MuonToolDeps): void {
       const agentScope = (params.agentScope ?? state.config.defaultAgentScope) as AgentScope;
       const maxParallel = Math.max(1, Math.min(params.maxParallel ?? state.config.maxParallel, MAX_PARALLEL_HARD_CAP));
       const maxDepth = params.maxDepth ?? state.config.maxDepth;
+      const worktreeMode = (params.worktreeMode ?? state.config.worktreeMode) as WorktreeMode;
       const depth = currentDepth();
       if (depth >= maxDepth) throw new Error(`Muon maxDepth reached: depth ${depth}, maxDepth ${maxDepth}`);
 
@@ -148,8 +151,21 @@ export function registerMuonTools(pi: ExtensionAPI, deps: MuonToolDeps): void {
         draft.runs[id] = { runId: id, name: params.name, status: "running", startedAt: ledger.startedAt, updatedAt: Date.now(), runDir: ledger.runDir, ledgerPath: ledger.ledgerPath, workflowPath: ledger.workflowPath };
       }, ctx);
 
+      let defaultCwd = ctx.cwd;
+      let worktree: Awaited<ReturnType<typeof prepareMuonWorktree>> = undefined;
+      if (worktreeMode === "shared-run") {
+        worktree = await prepareMuonWorktree(pi as any, ctx.cwd, id, params.name);
+        if (worktree) {
+          defaultCwd = worktree.worktreePath;
+          deps.setState((draft) => {
+            draft.runs[id].worktreePath = worktree?.worktreePath;
+            draft.runs[id].branchName = worktree?.branchName;
+          }, ctx);
+        }
+      }
+
       const result = await runMuonWorkflow({
-        defaultCwd: ctx.cwd,
+        defaultCwd,
         agents: discovery.agents,
         ledger,
         phases: params.phases as any,
@@ -157,7 +173,10 @@ export function registerMuonTools(pi: ExtensionAPI, deps: MuonToolDeps): void {
         maxDepth,
         maxParallel,
         signal,
-        onPhaseUpdate: (phase, results) => onUpdate?.({ content: [{ type: "text", text: `Phase ${phase.id} complete: ${results.length} result(s)` }], details: { runId: id, phaseId: phase.id, ledgerPath: ledger.ledgerPath } }),
+        onPhaseUpdate: (phase, results) => {
+          if (worktree) checkpointMuonWorktree(pi as any, worktree, phase.id).catch(() => undefined);
+          onUpdate?.({ content: [{ type: "text", text: `Phase ${phase.id} complete: ${results.length} result(s)` }], details: { runId: id, phaseId: phase.id, ledgerPath: ledger.ledgerPath } });
+        },
       });
 
       const status = result.failed ? "failed" : "succeeded";
