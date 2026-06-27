@@ -104,6 +104,21 @@ export function registerMuonCommands(pi: ExtensionAPI, deps: MuonDeps): void {
         return;
       }
 
+      if (words[0] === "runs") {
+        const runs = Object.values(state.runs).sort((a, b) => b.startedAt - a.startedAt);
+        if (runs.length === 0) { ctx.ui.notify("No Muon runs in this session", "info"); return; }
+        ctx.ui.notify(runs.map((r) => `${r.runId} ${r.status} ${r.name}\n  ${r.ledgerPath}`).join("\n"), "info");
+        return;
+      }
+
+      if (words[0] === "open") {
+        const runId = words[1] ?? state.activeRunId;
+        if (!runId || !state.runs[runId]) throw new Error("Usage: /muon open <runId>");
+        const run = state.runs[runId];
+        await ctx.ui.editor(`Muon run ${runId}`, `Ledger: ${run.ledgerPath}\nRun dir: ${run.runDir}\nWorkflow: ${run.workflowPath ?? "—"}\nWorktree: ${run.worktreePath ?? "—"}\n`);
+        return;
+      }
+
       throw new Error("Usage: /muon status | /muon skills off|discover|bootstrap|status");
     },
   });

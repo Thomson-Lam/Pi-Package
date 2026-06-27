@@ -90,4 +90,11 @@ assert.match(worktree, /checkpointMuonWorktree/);
 assert.match(worktree, /rollbackMuonWorktree/);
 assert.match(worktree, /git worktree/);
 
+const commandsAfterRuns = readFileSync(join(muonDir, "commands.ts"), "utf8");
+assert.match(commandsAfterRuns, /runs/);
+assert.match(commandsAfterRuns, /open/);
+
+const indexAfterRender = readFileSync(join(muonDir, "index.ts"), "utf8");
+assert.match(indexAfterRender, /renderMuonSubagentResult/);
+
 console.log("muon scaffold smoke checks passed");
