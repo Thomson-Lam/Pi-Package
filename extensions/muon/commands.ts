@@ -224,7 +224,12 @@ async function runMuonAction(pi: ExtensionAPI, deps: MuonDeps, ctx: ExtensionCom
       draft.config.superpowersMode = mode;
       draft.injectBootstrapThisSession = true;
     }, ctx);
-    ctx.ui.notify(`Muon skills mode set to ${mode}. Run /reload so Pi refreshes bundled skills.`, "success");
+    ctx.ui.notify(
+      mode === "on"
+        ? "Muon skills mode set to on. Skill-first bootstrap will be injected on your next prompt."
+        : "Muon skills mode set to off. Bundled skills remain discoverable, but bootstrap injection is disabled.",
+      "success",
+    );
     return;
   }
 

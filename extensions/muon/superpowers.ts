@@ -11,8 +11,9 @@ export function resetSuperpowersBootstrap(state: MuonState): void {
   state.injectBootstrapThisSession = true;
 }
 
-export function discoverSuperpowersResources(state: MuonState): { skillPaths?: string[] } {
-  if (state.config.superpowersMode === "off") return {};
+export function discoverSuperpowersResources(_state: MuonState): { skillPaths?: string[] } {
+  // Bundled Muon skills are always discoverable once the extension is loaded.
+  // /muon skills on|off controls bootstrap injection, not skill catalog availability.
   return { skillPaths: [MUON_SKILLS_DIR] };
 }
 
