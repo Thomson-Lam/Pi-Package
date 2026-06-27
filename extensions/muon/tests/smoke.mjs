@@ -97,4 +97,10 @@ assert.match(commandsAfterRuns, /open/);
 const indexAfterRender = readFileSync(join(muonDir, "index.ts"), "utf8");
 assert.match(indexAfterRender, /renderMuonSubagentResult/);
 
+const readme = readFileSync(join(muonDir, "README.md"), "utf8");
+assert.match(readme, /Superpowers modes/);
+assert.match(readme, /muon_subagent/);
+assert.match(readme, /muon_workflow/);
+assert.match(readme, /Rollback/);
+
 console.log("muon scaffold smoke checks passed");
