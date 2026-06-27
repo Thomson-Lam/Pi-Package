@@ -7,6 +7,7 @@ Private Pi package bundling personal extensions and skills for reproducing the s
 - `extensions/` — global Pi extensions
 - `skills/` — global Pi skills
 - `settings.template.json` — non-secret settings template
+- `scripts/` — setup scripts for installing companion npm Pi packages and this package by tag
 
 ## Install from GitHub
 
@@ -24,6 +25,30 @@ pi install git:git@github.com:Thomson-Lam/Pi-Package.git@v0.1.0
 
 Then restart Pi or run `/reload`.
 
+## Companion npm Pi packages
+
+This repo bundles personal extensions and skills, but some useful extensions are installed separately from the npm registry. The helper scripts install the current npm Pi package set:
+
+- `npm:pi-interactive-shell` — interactive terminal overlays, subagent dispatch, and monitor sessions.
+- `npm:pi-opencode-bridge` — OpenCode provider/model bridge for Pi.
+- `npm:@nerisma/pi-tool-border` — theme-colored left border on tool output.
+- `npm:@nerisma/pi-turn-usage-notifications` — per-turn token and cost notifications.
+- `npm:@javargasm/pi-usage-bars` — footer usage bars and `/usage` command for supported providers.
+
+On macOS/Linux:
+
+```bash
+./scripts/install-npm-packages.sh
+```
+
+On Windows PowerShell:
+
+```powershell
+.\scripts\install-npm-packages.ps1
+```
+
+Then restart Pi or run `/reload`.
+
 ## Windows setup
 
 1. Install Node.js.
@@ -35,7 +60,13 @@ npm install -g --ignore-scripts @earendil-works/pi-coding-agent
 ```
 
 4. Install this package with one of the `pi install git:...` commands above.
-5. Run `pi`, then authenticate locally with `/login`.
+5. Install companion npm Pi packages:
+
+```powershell
+.\scripts\install-npm-packages.ps1
+```
+
+6. Run `pi`, then authenticate locally with `/login`.
 
 If Pi cannot find bash on Windows, add this to `~/.pi/agent/settings.json`:
 
