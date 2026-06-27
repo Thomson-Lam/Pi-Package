@@ -74,4 +74,14 @@ assert.match(tools, /confirmProjectAgents/);
 const render = readFileSync(join(muonDir, "render.ts"), "utf8");
 assert.match(render, /renderMuonSubagentResult/);
 
+const workflow = readFileSync(join(muonDir, "workflow.ts"), "utf8");
+assert.match(workflow, /runMuonWorkflow/);
+assert.match(workflow, /phases/);
+assert.match(workflow, /single/);
+assert.match(workflow, /parallel/);
+assert.match(workflow, /chain/);
+
+const toolsAfterWorkflow = readFileSync(join(muonDir, "tools.ts"), "utf8");
+assert.match(toolsAfterWorkflow, /muon_workflow/);
+
 console.log("muon scaffold smoke checks passed");

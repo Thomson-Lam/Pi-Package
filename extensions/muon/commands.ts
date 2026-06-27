@@ -73,6 +73,23 @@ export function registerMuonCommands(pi: ExtensionAPI, deps: MuonDeps): void {
         return;
       }
 
+      if (words[0] === "workflow") {
+        const template = JSON.stringify({
+          name: "example-workflow",
+          objective: "Describe the goal",
+          maxParallel: state.config.maxParallel,
+          maxDepth: state.config.maxDepth,
+          phases: [
+            { id: "scout", title: "Inspect relevant files", kind: "single", agent: "scout", task: "Find relevant files and summarize architecture." },
+            { id: "review", title: "Review findings", kind: "single", agent: "reviewer", task: "Review the scout findings and list risks." }
+          ]
+        }, null, 2);
+        const edited = await ctx.ui.editor("muon_workflow JSON", template);
+        if (!edited?.trim()) return;
+        pi.sendUserMessage(`Call muon_workflow with this JSON exactly:\n\n\`\`\`json\n${edited.trim()}\n\`\`\``);
+        return;
+      }
+
       throw new Error("Usage: /muon status | /muon skills off|discover|bootstrap|status");
     },
   });

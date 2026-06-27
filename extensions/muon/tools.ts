@@ -33,6 +33,25 @@ const MuonSubagentParams = Type.Object({
   maxDepth: Type.Optional(Type.Number({ default: 1 })),
 });
 
+const WorkflowPhase = Type.Object({
+  id: Type.String(),
+  title: Type.String(),
+  kind: StringEnum(["single", "parallel", "chain"] as const),
+  agent: Type.Optional(Type.String()),
+  task: Type.Optional(Type.String()),
+  tasks: Type.Optional(Type.Array(TaskItem)),
+  chain: Type.Optional(Type.Array(TaskItem)),
+});
+
+const MuonWorkflowParams = Type.Object({
+  name: Type.String(),
+  objective: Type.String(),
+  phases: Type.Array(WorkflowPhase),
+  agentScope: Type.Optional(AgentScopeSchema),
+  maxParallel: Type.Optional(Type.Number({ default: 2 })),
+  maxDepth: Type.Optional(Type.Number({ default: 1 })),
+});
+
 function runId(): string {
   return Math.random().toString(36).slice(2, 10);
 }
@@ -103,6 +122,49 @@ export function registerMuonTools(pi: ExtensionAPI, deps: MuonToolDeps): void {
         deps.setState((draft) => { draft.runs[id].status = "failed"; draft.runs[id].updatedAt = Date.now(); }, ctx);
         throw error;
       }
+    },
+    renderResult: renderMuonSubagentResult as any,
+  });
+
+  pi.registerTool({
+    name: "muon_workflow",
+    label: "Muon Workflow",
+    description: "Run a declarative multi-phase Muon workflow. The main agent should use this instead of manually orchestrating many subagent calls.",
+    parameters: MuonWorkflowParams,
+    async execute(_toolCallId, params, signal, onUpdate, ctx) {
+      const { runMuonWorkflow } = await import("./workflow.js");
+      const state = deps.getState();
+      const agentScope = (params.agentScope ?? state.config.defaultAgentScope) as AgentScope;
+      const maxParallel = Math.max(1, Math.min(params.maxParallel ?? state.config.maxParallel, MAX_PARALLEL_HARD_CAP));
+      const maxDepth = params.maxDepth ?? state.config.maxDepth;
+      const depth = currentDepth();
+      if (depth >= maxDepth) throw new Error(`Muon maxDepth reached: depth ${depth}, maxDepth ${maxDepth}`);
+
+      const discovery = discoverMuonAgents(ctx.cwd, agentScope);
+      const id = runId();
+      const ledger = await createRunLedger({ runId: id, name: params.name, workflow: params });
+      deps.setState((draft) => {
+        draft.activeRunId = id;
+        draft.runs[id] = { runId: id, name: params.name, status: "running", startedAt: ledger.startedAt, updatedAt: Date.now(), runDir: ledger.runDir, ledgerPath: ledger.ledgerPath, workflowPath: ledger.workflowPath };
+      }, ctx);
+
+      const result = await runMuonWorkflow({
+        defaultCwd: ctx.cwd,
+        agents: discovery.agents,
+        ledger,
+        phases: params.phases as any,
+        depth,
+        maxDepth,
+        maxParallel,
+        signal,
+        onPhaseUpdate: (phase, results) => onUpdate?.({ content: [{ type: "text", text: `Phase ${phase.id} complete: ${results.length} result(s)` }], details: { runId: id, phaseId: phase.id, ledgerPath: ledger.ledgerPath } }),
+      });
+
+      const status = result.failed ? "failed" : "succeeded";
+      await completeRunLedger(ledger, status);
+      deps.setState((draft) => { draft.runs[id].status = status; draft.runs[id].updatedAt = Date.now(); }, ctx);
+      const summary = result.phaseResults.map((p) => `## ${p.phase.id}: ${p.phase.title}\n${p.results.map((r) => `- ${r.agent}: ${r.exitCode === 0 ? "ok" : `exit ${r.exitCode}`} (${r.output.slice(0, 160).replace(/\n/g, " ")})`).join("\n")}`).join("\n\n");
+      return { content: [{ type: "text", text: `Muon workflow ${id} ${status}\nLedger: ${ledger.ledgerPath}\n\n${summary}` }], details: { runId: id, runDir: ledger.runDir, ledgerPath: ledger.ledgerPath, result } };
     },
     renderResult: renderMuonSubagentResult as any,
   });
