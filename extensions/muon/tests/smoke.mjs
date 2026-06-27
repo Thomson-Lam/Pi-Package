@@ -66,4 +66,12 @@ assert.match(runner, /runSingleMuonAgent/);
 assert.match(runner, /runMuonAgentsParallel/);
 assert.match(runner, /runMuonAgentChain/);
 
+const tools = readFileSync(join(muonDir, "tools.ts"), "utf8");
+assert.match(tools, /muon_subagent/);
+assert.match(tools, /StringEnum/);
+assert.match(tools, /confirmProjectAgents/);
+
+const render = readFileSync(join(muonDir, "render.ts"), "utf8");
+assert.match(render, /renderMuonSubagentResult/);
+
 console.log("muon scaffold smoke checks passed");

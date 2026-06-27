@@ -65,6 +65,14 @@ export function registerMuonCommands(pi: ExtensionAPI, deps: MuonDeps): void {
         return;
       }
 
+      if (words[0] === "subagent") {
+        const template = JSON.stringify({ agent: "scout", task: "Describe what to inspect", agentScope: state.config.defaultAgentScope, maxParallel: state.config.maxParallel, maxDepth: state.config.maxDepth }, null, 2);
+        const edited = await ctx.ui.editor("muon_subagent JSON", template);
+        if (!edited?.trim()) return;
+        pi.sendUserMessage(`Call muon_subagent with this JSON exactly:\n\n\`\`\`json\n${edited.trim()}\n\`\`\``);
+        return;
+      }
+
       throw new Error("Usage: /muon status | /muon skills off|discover|bootstrap|status");
     },
   });
