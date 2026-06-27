@@ -57,4 +57,13 @@ assert.match(ledger, /appendLedgerEvent/);
 assert.match(ledger, /ledger\.md/);
 assert.match(ledger, /workflow\.json/);
 
+const runner = readFileSync(join(muonDir, "runner.ts"), "utf8");
+assert.match(runner, /spawn/);
+assert.match(runner, /--mode/);
+assert.match(runner, /json/);
+assert.match(runner, /MUON_DEPTH/);
+assert.match(runner, /runSingleMuonAgent/);
+assert.match(runner, /runMuonAgentsParallel/);
+assert.match(runner, /runMuonAgentChain/);
+
 console.log("muon scaffold smoke checks passed");
