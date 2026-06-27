@@ -71,7 +71,8 @@ function parseMuonAction(args: string): ParsedMuon {
 
   if (verb === "skills") {
     const mode = rest[0];
-    if (!mode || mode === "status") return { kind: "action", action: { kind: "skills", mode: "status" } };
+    if (!mode) return { kind: "action", action: { kind: "skills" } };
+    if (mode === "status") return { kind: "action", action: { kind: "skills", mode: "status" } };
     if (!isSuperpowersMode(mode)) return { kind: "error", message: "Usage: /muon skills on|off|status" };
     return { kind: "action", action: { kind: "skills", mode } };
   }
@@ -145,6 +146,26 @@ async function pickMuonAction(ctx: ExtensionCommandContext): Promise<MuonAction 
   return { kind: selected as MuonAction["kind"] };
 }
 
+async function pickMuonSkillsAction(ctx: ExtensionCommandContext, state: MuonState): Promise<MuonAction | undefined> {
+  const selected = await selectModal(ctx, `Muon Skills (${state.config.superpowersMode})`, [
+    {
+      value: "on",
+      label: state.config.superpowersMode === "on" ? "On ✓" : "On",
+      description: "Expose bundled skills and inject using-superpowers once per session",
+    },
+    {
+      value: "off",
+      label: state.config.superpowersMode === "off" ? "Off ✓" : "Off",
+      description: "Disable bundled skill discovery and bootstrap injection",
+    },
+    { value: "status", label: "Status", description: "Show current skills mode and bundled skill source" },
+    { value: "help", label: "Help", description: "Show Muon help" },
+  ]);
+  if (!selected) return undefined;
+  if (selected === "help") return { kind: "help" };
+  return { kind: "skills", mode: selected as "on" | "off" | "status" };
+}
+
 async function showMuonHelp(ctx: ExtensionCommandContext): Promise<void> {
   await ctx.ui.custom<void>(
     (tui, theme, _keybindings, done) => {
@@ -191,7 +212,13 @@ async function runMuonAction(pi: ExtensionAPI, deps: MuonDeps, ctx: ExtensionCom
   }
 
   if (action.kind === "skills") {
-    const mode = action.mode ?? "status";
+    const mode = action.mode;
+    if (!mode) {
+      const picked = await pickMuonSkillsAction(ctx, state);
+      if (!picked) return;
+      await runMuonAction(pi, deps, ctx, picked);
+      return;
+    }
     if (mode === "status") {
       ctx.ui.notify(`Muon skills mode: ${state.config.superpowersMode}\nSource: bundled extensions/muon/skills`, "info");
       return;

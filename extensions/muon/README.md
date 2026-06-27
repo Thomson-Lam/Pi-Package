@@ -20,6 +20,7 @@ Default is `off`. After changing skills mode, run `/reload` so Pi refreshes disc
 /muon                 # open the Muon action menu
 /muon help            # show UI-only help
 /muon status
+/muon skills          # open on/off skills modal
 /muon skills on|off|status
 /muon agents [user|project|both]
 /muon subagent        # opens JSON editor, then asks main agent to call muon_subagent
@@ -29,7 +30,7 @@ Default is `off`. After changing skills mode, run `/reload` so Pi refreshes disc
 /muon rollback <runId> [targetRef]
 ```
 
-The `/muon` menu supports `j`/`k` navigation, Enter to select, `h`/`?` for help, and Esc to cancel.
+The `/muon` menu and `/muon skills` modal support `j`/`k` navigation, Enter to select, `h`/`?` for help, and Esc to cancel.
 
 ## Bundled skills
 

@@ -49,6 +49,8 @@ const commands = readFileSync(join(muonDir, "commands.ts"), "utf8");
 assert.match(commands, /muon/);
 assert.match(commands, /skills/);
 assert.match(commands, /on\|off/);
+assert.match(commands, /pickMuonSkillsAction/);
+assert.match(commands, /Muon Skills/);
 assert.doesNotMatch(commands, /skills off\|discover\|bootstrap/);
 assert.doesNotMatch(commands, /skills on\|off\|discover\|bootstrap/);
 
