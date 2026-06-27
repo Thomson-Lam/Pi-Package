@@ -6,7 +6,6 @@ export function createInitialMuonState(): MuonState {
   return {
     config: {
       superpowersMode: "off",
-      superpowersSkillsPath: "/Users/tlam/superpowers/skills",
       maxParallel: MAX_PARALLEL_DEFAULT,
       maxDepth: MAX_DEPTH_DEFAULT,
       defaultAgentScope: "user",

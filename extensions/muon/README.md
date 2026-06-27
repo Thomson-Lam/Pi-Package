@@ -1,29 +1,58 @@
 # Muon
 
-Muon is a personal Pi extension for optional Superpowers skill bootstrapping, transparent subagent orchestration, declarative workflows, worktree checkpoints, and rollback-aware monitoring.
+Muon is a personal Pi extension for bundled skill-first workflows, transparent subagent orchestration, declarative workflows, worktree checkpoints, and rollback-aware monitoring.
 
-## Superpowers modes
+## Skills mode
+
+Muon includes a self-contained copy of the Superpowers-style skills under `extensions/muon/skills/`.
 
 ```text
-/muon skills off        # no Superpowers discovery or bootstrap
-/muon skills discover   # expose /Users/tlam/superpowers/skills as Pi skills
-/muon skills bootstrap  # discover skills and inject using-superpowers bootstrap
+/muon skills off      # no bundled skill discovery or bootstrap injection
+/muon skills on       # expose bundled Muon skills and inject using-superpowers once per session
 /muon skills status
 ```
 
-Default is `off`.
+Default is `off`. After changing skills mode, run `/reload` so Pi refreshes discovered skills.
 
 ## Manual commands
 
 ```text
+/muon                 # open the Muon action menu
+/muon help            # show UI-only help
 /muon status
+/muon skills on|off|status
 /muon agents [user|project|both]
-/muon subagent          # opens JSON editor, then asks main agent to call muon_subagent
-/muon workflow          # opens JSON editor, then asks main agent to call muon_workflow
+/muon subagent        # opens JSON editor, then asks main agent to call muon_subagent
+/muon workflow        # opens JSON editor, then asks main agent to call muon_workflow
 /muon runs
 /muon open <runId>
 /muon rollback <runId> [targetRef]
 ```
+
+The `/muon` menu supports `j`/`k` navigation, Enter to select, `h`/`?` for help, and Esc to cancel.
+
+## Bundled skills
+
+The bundled skill tree is copied from Superpowers and includes:
+
+```text
+using-superpowers
+brainstorming
+writing-plans
+executing-plans
+subagent-driven-development
+test-driven-development
+systematic-debugging
+verification-before-completion
+using-git-worktrees
+requesting-code-review
+receiving-code-review
+finishing-a-development-branch
+dispatching-parallel-agents
+writing-skills
+```
+
+When skills mode is `on`, Muon returns `extensions/muon/skills` through Pi resource discovery and injects `using-superpowers` into context once per session.
 
 ## muon_subagent
 

@@ -34,6 +34,10 @@ assert.match(index, /registerMuonTools/);
 const constants = readFileSync(join(muonDir, "constants.ts"), "utf8");
 assert.match(constants, /MUON_EXTENSION_NAME/);
 assert.match(constants, /MAX_PARALLEL_HARD_CAP = 8/);
+assert.match(constants, /MUON_SKILLS_DIR/);
+
+assert.equal(existsSync(join(muonDir, "skills", "using-superpowers", "SKILL.md")), true, "missing bundled using-superpowers skill");
+assert.equal(existsSync(join(muonDir, "skills", "writing-plans", "SKILL.md")), true, "missing bundled writing-plans skill");
 
 const superpowers = readFileSync(join(muonDir, "superpowers.ts"), "utf8");
 assert.match(superpowers, /discoverSuperpowersResources/);
@@ -44,7 +48,9 @@ assert.match(superpowers, /stripFrontmatter/);
 const commands = readFileSync(join(muonDir, "commands.ts"), "utf8");
 assert.match(commands, /muon/);
 assert.match(commands, /skills/);
-assert.match(commands, /bootstrap/);
+assert.match(commands, /on\|off/);
+assert.doesNotMatch(commands, /skills off\|discover\|bootstrap/);
+assert.doesNotMatch(commands, /skills on\|off\|discover\|bootstrap/);
 
 const agents = readFileSync(join(muonDir, "agents.ts"), "utf8");
 assert.match(agents, /discoverMuonAgents/);
@@ -98,7 +104,8 @@ const indexAfterRender = readFileSync(join(muonDir, "index.ts"), "utf8");
 assert.match(indexAfterRender, /renderMuonSubagentResult/);
 
 const readme = readFileSync(join(muonDir, "README.md"), "utf8");
-assert.match(readme, /Superpowers modes/);
+assert.match(readme, /Skills mode/);
+assert.match(readme, /Bundled skills/);
 assert.match(readme, /muon_subagent/);
 assert.match(readme, /muon_workflow/);
 assert.match(readme, /Rollback/);

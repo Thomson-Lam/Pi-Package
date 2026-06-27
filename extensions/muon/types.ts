@@ -1,11 +1,10 @@
-export type SuperpowersMode = "off" | "discover" | "bootstrap";
+export type SuperpowersMode = "off" | "on";
 export type AgentScope = "user" | "project" | "both";
 export type WorkflowPhaseKind = "single" | "parallel" | "chain";
 export type WorktreeMode = "none" | "shared-run";
 
 export interface MuonConfig {
   superpowersMode: SuperpowersMode;
-  superpowersSkillsPath?: string;
   maxParallel: number;
   maxDepth: number;
   defaultAgentScope: AgentScope;

@@ -10,12 +10,12 @@ export interface MuonDeps {
 
 const HELP_TEXT = `# /muon
 
-Muon is a personal Pi extension for optional Superpowers skill bootstrapping, transparent subagent orchestration, declarative workflows, worktree checkpoints, and rollback-aware monitoring.
+Muon is a personal Pi extension for bundled skill-first workflows, transparent subagent orchestration, declarative workflows, worktree checkpoints, and rollback-aware monitoring.
 
 ## Actions
 
 - Status — show Muon configuration and active run.
-- Skills — set or view Superpowers mode (off / discover / bootstrap).
+- Skills — turn Muon's bundled skill-first workflow on or off.
 - Agents — list available agent definitions by scope (user / project / both).
 - Subagent — open a JSON editor to draft a muon_subagent tool call.
 - Workflow — open a JSON editor to draft a muon_workflow tool call.
@@ -29,7 +29,7 @@ Muon is a personal Pi extension for optional Superpowers skill bootstrapping, tr
 \`/muon\` opens this menu. You can also invoke actions directly:
 
 \`/muon status\`
-\`/muon skills off|discover|bootstrap|status\`
+\`/muon skills on|off|status\`
 \`/muon agents [user|project|both]\`
 \`/muon subagent\`
 \`/muon workflow\`
@@ -42,7 +42,7 @@ This help is rendered in a modal and is not injected into the current agent sess
 
 type MuonAction =
   | { kind: "status" }
-  | { kind: "skills"; mode?: "off" | "discover" | "bootstrap" | "status" }
+  | { kind: "skills"; mode?: "on" | "off" | "status" }
   | { kind: "agents"; scope?: "user" | "project" | "both" }
   | { kind: "subagent" }
   | { kind: "workflow" }
@@ -54,7 +54,7 @@ type MuonAction =
 type ParsedMuon = { kind: "menu" } | { kind: "action"; action: MuonAction } | { kind: "error"; message: string };
 
 function isSuperpowersMode(value: string): value is SuperpowersMode {
-  return value === "off" || value === "discover" || value === "bootstrap";
+  return value === "off" || value === "on";
 }
 
 function parseMuonAction(args: string): ParsedMuon {
@@ -72,7 +72,7 @@ function parseMuonAction(args: string): ParsedMuon {
   if (verb === "skills") {
     const mode = rest[0];
     if (!mode || mode === "status") return { kind: "action", action: { kind: "skills", mode: "status" } };
-    if (!isSuperpowersMode(mode)) return { kind: "error", message: "Usage: /muon skills off|discover|bootstrap|status" };
+    if (!isSuperpowersMode(mode)) return { kind: "error", message: "Usage: /muon skills on|off|status" };
     return { kind: "action", action: { kind: "skills", mode } };
   }
 
@@ -130,7 +130,7 @@ async function selectModal(ctx: ExtensionCommandContext, title: string, items: S
 async function pickMuonAction(ctx: ExtensionCommandContext): Promise<MuonAction | undefined> {
   const selected = await selectModal(ctx, "Muon", [
     { value: "status", label: "Status", description: "Show Muon configuration and active run" },
-    { value: "skills", label: "Skills", description: "Set or view Superpowers mode" },
+    { value: "skills", label: "Skills", description: "Turn bundled skill-first workflow on/off" },
     { value: "agents", label: "Agents", description: "List available agents" },
     { value: "subagent", label: "Subagent", description: "Draft a muon_subagent tool call" },
     { value: "workflow", label: "Workflow", description: "Draft a muon_workflow tool call" },
@@ -178,7 +178,7 @@ async function runMuonAction(pi: ExtensionAPI, deps: MuonDeps, ctx: ExtensionCom
       [
         "Muon status",
         `skills: ${state.config.superpowersMode}`,
-        `skills path: ${state.config.superpowersSkillsPath ?? "—"}`,
+        `skills source: bundled Muon skills`,
         `maxParallel: ${state.config.maxParallel}`,
         `maxDepth: ${state.config.maxDepth}`,
         `agentScope: ${state.config.defaultAgentScope}`,
@@ -193,14 +193,14 @@ async function runMuonAction(pi: ExtensionAPI, deps: MuonDeps, ctx: ExtensionCom
   if (action.kind === "skills") {
     const mode = action.mode ?? "status";
     if (mode === "status") {
-      ctx.ui.notify(`Superpowers mode: ${state.config.superpowersMode}\nPath: ${state.config.superpowersSkillsPath ?? "—"}`, "info");
+      ctx.ui.notify(`Muon skills mode: ${state.config.superpowersMode}\nSource: bundled extensions/muon/skills`, "info");
       return;
     }
     deps.setState((draft) => {
       draft.config.superpowersMode = mode;
       draft.injectBootstrapThisSession = true;
     }, ctx);
-    ctx.ui.notify(`Muon Superpowers mode set to ${mode}. Run /reload if skill discovery paths changed.`, "success");
+    ctx.ui.notify(`Muon skills mode set to ${mode}. Run /reload so Pi refreshes bundled skills.`, "success");
     return;
   }
 

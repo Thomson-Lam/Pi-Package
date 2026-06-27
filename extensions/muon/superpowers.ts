@@ -1,6 +1,6 @@
 import { readFileSync } from "node:fs";
 import { resolve } from "node:path";
-import { MUON_BOOTSTRAP_MARKER } from "./constants.js";
+import { MUON_BOOTSTRAP_MARKER, MUON_SKILLS_DIR } from "./constants.js";
 import type { MuonState } from "./types.js";
 
 const EXTREMELY_IMPORTANT_MARKER = "<EXTREMELY_IMPORTANT>";
@@ -13,19 +13,18 @@ export function resetSuperpowersBootstrap(state: MuonState): void {
 
 export function discoverSuperpowersResources(state: MuonState): { skillPaths?: string[] } {
   if (state.config.superpowersMode === "off") return {};
-  const skillsPath = state.config.superpowersSkillsPath;
-  return skillsPath ? { skillPaths: [skillsPath] } : {};
+  return { skillPaths: [MUON_SKILLS_DIR] };
 }
 
 export function maybeInjectSuperpowersBootstrap(
   event: { messages: unknown[] },
   state: MuonState,
 ): { messages: unknown[] } | undefined {
-  if (state.config.superpowersMode !== "bootstrap") return undefined;
+  if (state.config.superpowersMode !== "on") return undefined;
   if (!state.injectBootstrapThisSession) return undefined;
   if (event.messages.some(messageContainsBootstrap)) return undefined;
 
-  const bootstrap = getBootstrapContent(state);
+  const bootstrap = getBootstrapContent();
   if (!bootstrap) return undefined;
 
   const bootstrapMessage = {
@@ -38,11 +37,8 @@ export function maybeInjectSuperpowersBootstrap(
   return { messages: [...event.messages.slice(0, insertAt), bootstrapMessage, ...event.messages.slice(insertAt)] };
 }
 
-function getBootstrapContent(state: MuonState): string | null {
-  const skillsPath = state.config.superpowersSkillsPath;
-  if (!skillsPath) return null;
-
-  const bootstrapPath = resolve(skillsPath, "using-superpowers", "SKILL.md");
+function getBootstrapContent(): string | null {
+  const bootstrapPath = resolve(MUON_SKILLS_DIR, "using-superpowers", "SKILL.md");
   if (cachedBootstrap !== undefined && cachedBootstrapPath === bootstrapPath) return cachedBootstrap;
 
   try {
@@ -52,7 +48,10 @@ function getBootstrapContent(state: MuonState): string | null {
     cachedBootstrap = `${EXTREMELY_IMPORTANT_MARKER}
 ${MUON_BOOTSTRAP_MARKER}
 
-You have Muon with optional Superpowers support enabled.
+You have Muon skill-first mode enabled.
+
+Muon's bundled skills are self-contained in:
+${MUON_SKILLS_DIR}
 
 The using-superpowers skill content is included below and is already loaded for this Pi session. Follow it now. Do not try to load using-superpowers again.
 
@@ -60,7 +59,7 @@ ${body}
 
 ## Muon/Pi tool mapping
 
-Pi has native skills. When Superpowers says to invoke a skill, load the relevant SKILL.md with read or let the human invoke /skill:name.
+Pi has native skills. When Superpowers says to invoke a skill, load the relevant bundled SKILL.md with read or let the human invoke /skill:name.
 
 Muon provides muon_subagent and muon_workflow when active. Use muon_workflow for structured multi-agent orchestration when the user has asked for it or when a plan explicitly calls for transparent subagent orchestration.
 
