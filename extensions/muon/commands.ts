@@ -53,6 +53,18 @@ export function registerMuonCommands(pi: ExtensionAPI, deps: MuonDeps): void {
         return;
       }
 
+      if (words[0] === "agents") {
+        const requested = (words[1] ?? state.config.defaultAgentScope) as "user" | "project" | "both";
+        if (requested !== "user" && requested !== "project" && requested !== "both") {
+          throw new Error("Usage: /muon agents [user|project|both]");
+        }
+        const { discoverMuonAgents } = await import("./agents.js");
+        const discovery = discoverMuonAgents(ctx.cwd, requested);
+        const lines = discovery.agents.map((a) => `- ${a.name} (${a.source}) ${a.model ? `[${a.model}] ` : ""}${a.description}`);
+        ctx.ui.notify(lines.length > 0 ? `Muon agents (${requested}):\n${lines.join("\n")}` : `No agents found for scope ${requested}`, "info");
+        return;
+      }
+
       throw new Error("Usage: /muon status | /muon skills off|discover|bootstrap|status");
     },
   });

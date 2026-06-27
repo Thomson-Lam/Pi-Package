@@ -46,4 +46,9 @@ assert.match(commands, /muon/);
 assert.match(commands, /skills/);
 assert.match(commands, /bootstrap/);
 
+const agents = readFileSync(join(muonDir, "agents.ts"), "utf8");
+assert.match(agents, /discoverMuonAgents/);
+assert.match(agents, /findNearestProjectAgentsDir/);
+assert.match(agents, /parseFrontmatter/);
+
 console.log("muon scaffold smoke checks passed");
