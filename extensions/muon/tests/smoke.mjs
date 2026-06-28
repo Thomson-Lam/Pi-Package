@@ -114,4 +114,37 @@ assert.match(readme, /muon_subagent/);
 assert.match(readme, /muon_workflow/);
 assert.match(readme, /Rollback/);
 
+const skillsetsDir = join(muonDir, "skillsets");
+assert.equal(
+  existsSync(join(skillsetsDir, "muon", "using-muon", "SKILL.md")),
+  true,
+  "missing using-muon skill"
+);
+assert.equal(
+  existsSync(join(skillsetsDir, "muon", "yagni-scope-guard", "SKILL.md")),
+  true,
+  "missing yagni-scope-guard skill"
+);
+assert.equal(
+  existsSync(join(skillsetsDir, "ponytail", "ponytail", "SKILL.md")),
+  true,
+  "missing ponytail skill"
+);
+assert.equal(
+  existsSync(join(skillsetsDir, "ponytail", "ponytail-review", "SKILL.md")),
+  true,
+  "missing ponytail-review skill"
+);
+assert.equal(
+  existsSync(join(skillsetsDir, "superpowers", "using-superpowers", "SKILL.md")),
+  true,
+  "missing moved using-superpowers skill"
+);
+assert.equal(
+  existsSync(join(skillsetsDir, "superpowers", "writing-plans", "SKILL.md")),
+  true,
+  "missing moved writing-plans skill"
+);
+assert.equal(existsSync(join(muonDir, "skills")), false, "stale extensions/muon/skills directory should be removed");
+
 console.log("muon scaffold smoke checks passed");
