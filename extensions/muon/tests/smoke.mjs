@@ -76,6 +76,16 @@ assert.doesNotMatch(skillsPicker, /value: "status"/);
 assert.doesNotMatch(skillsPicker, /value: "help"/);
 assert.doesNotMatch(commands, /skills off\|discover\|bootstrap/);
 assert.doesNotMatch(commands, /skills on\|off\|discover\|bootstrap/);
+assert.match(commands, /skillset off\|auto\|ponytail\|superpowers\|status/);
+assert.match(commands, /type MuonAction =[\s\S]*kind: "skillset"/);
+assert.match(commands, /function isMuonSkillset/);
+assert.match(commands, /pickMuonSkillsetAction/);
+assert.match(commands, /Auto/);
+assert.match(commands, /Ponytail/);
+assert.match(commands, /Superpowers/);
+assert.match(commands, /state\.config\.skillset/);
+assert.doesNotMatch(commands, /state\.config\.superpowersMode/);
+assert.doesNotMatch(commands, /isSuperpowersMode/);
 
 const agents = readFileSync(join(muonDir, "agents.ts"), "utf8");
 assert.match(agents, /discoverMuonAgents/);

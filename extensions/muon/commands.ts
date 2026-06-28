@@ -1,7 +1,7 @@
 import type { ExtensionAPI, ExtensionCommandContext, ExtensionContext } from "@earendil-works/pi-coding-agent";
 import { DynamicBorder } from "@earendil-works/pi-coding-agent";
 import { Container, type SelectItem, SelectList, Text } from "@earendil-works/pi-tui";
-import type { MuonState, SuperpowersMode } from "./types.js";
+import type { MuonSkillset, MuonState } from "./types.js";
 
 export interface MuonDeps {
   getState: () => MuonState;
@@ -15,7 +15,7 @@ Muon is a personal Pi extension for bundled skill-first workflows, transparent s
 ## Actions
 
 - Status — show Muon configuration and active run.
-- Skills — turn Muon's bundled skill-first workflow on or off.
+- Skillset — choose which bundled skill catalog Muon exposes.
 - Agents — list available agent definitions by scope (user / project / both).
 - Subagent — open a JSON editor to draft a muon_subagent tool call.
 - Workflow — open a JSON editor to draft a muon_workflow tool call.
@@ -29,7 +29,8 @@ Muon is a personal Pi extension for bundled skill-first workflows, transparent s
 \`/muon\` opens this menu. You can also invoke actions directly:
 
 \`/muon status\`
-\`/muon skills on|off|status\`
+\`/muon skillset off|auto|ponytail|superpowers|status\`
+\`/muon skills off|auto|ponytail|superpowers|status\` # alias
 \`/muon agents [user|project|both]\`
 \`/muon subagent\`
 \`/muon workflow\`
@@ -38,11 +39,18 @@ Muon is a personal Pi extension for bundled skill-first workflows, transparent s
 \`/muon rollback <runId> [targetRef]\`
 \`/muon help\`
 
-This help is rendered in a modal and is not injected into the current agent session.`;
+This help is rendered in a modal and is not injected into the current agent session.
+
+## Skillsets
+
+- \`off\` — expose no bundled Muon skills.
+- \`auto\` — expose Muon router, Ponytail, and Superpowers skills.
+- \`ponytail\` — expose Muon router and Ponytail skills only.
+- \`superpowers\` — expose Muon router and Superpowers skills only.`;
 
 type MuonAction =
   | { kind: "status" }
-  | { kind: "skills"; mode?: "on" | "off" | "status" }
+  | { kind: "skillset"; mode?: MuonSkillset | "status" }
   | { kind: "agents"; scope?: "user" | "project" | "both" }
   | { kind: "subagent" }
   | { kind: "workflow" }
@@ -53,8 +61,13 @@ type MuonAction =
 
 type ParsedMuon = { kind: "menu" } | { kind: "action"; action: MuonAction } | { kind: "error"; message: string };
 
-function isSuperpowersMode(value: string): value is SuperpowersMode {
-  return value === "off" || value === "on";
+function isMuonSkillset(value: string): value is MuonSkillset {
+  return (
+    value === "off" ||
+    value === "auto" ||
+    value === "ponytail" ||
+    value === "superpowers"
+  );
 }
 
 function parseMuonAction(args: string): ParsedMuon {
@@ -69,12 +82,17 @@ function parseMuonAction(args: string): ParsedMuon {
   if (verb === "subagent") return { kind: "action", action: { kind: "subagent" } };
   if (verb === "workflow") return { kind: "action", action: { kind: "workflow" } };
 
-  if (verb === "skills") {
+  if (verb === "skillset" || verb === "skills") {
     const mode = rest[0];
-    if (!mode) return { kind: "action", action: { kind: "skills" } };
-    if (mode === "status") return { kind: "action", action: { kind: "skills", mode: "status" } };
-    if (!isSuperpowersMode(mode)) return { kind: "error", message: "Usage: /muon skills on|off|status" };
-    return { kind: "action", action: { kind: "skills", mode } };
+    if (!mode) return { kind: "action", action: { kind: "skillset" } };
+    if (mode === "status")
+      return { kind: "action", action: { kind: "skillset", mode: "status" } };
+    if (!isMuonSkillset(mode))
+      return {
+        kind: "error",
+        message: "Usage: /muon skillset off|auto|ponytail|superpowers|status"
+      };
+    return { kind: "action", action: { kind: "skillset", mode } };
   }
 
   if (verb === "agents") {
@@ -88,7 +106,7 @@ function parseMuonAction(args: string): ParsedMuon {
   if (verb === "open") return { kind: "action", action: { kind: "open", runId: rest[0] } };
   if (verb === "rollback") return { kind: "action", action: { kind: "rollback", runId: rest[0], targetRef: rest[1] } };
 
-  return { kind: "error", message: "Usage: /muon [status|skills|agents|subagent|workflow|runs|open|rollback|help]" };
+  return { kind: "error", message: "Usage: /muon [status|skillset|skills|agents|subagent|workflow|runs|open|rollback|help]" };
 }
 
 async function selectModal(ctx: ExtensionCommandContext, title: string, items: SelectItem[]): Promise<string | undefined> {
@@ -131,7 +149,7 @@ async function selectModal(ctx: ExtensionCommandContext, title: string, items: S
 async function pickMuonAction(ctx: ExtensionCommandContext): Promise<MuonAction | undefined> {
   const selected = await selectModal(ctx, "Muon", [
     { value: "status", label: "Status", description: "Show Muon configuration and active run" },
-    { value: "skills", label: "Skills", description: "Turn bundled skill-first workflow on/off" },
+    { value: "skillset", label: "Skillset", description: "Choose off, auto, ponytail, or superpowers catalog" },
     { value: "agents", label: "Agents", description: "List available agents" },
     { value: "subagent", label: "Subagent", description: "Draft a muon_subagent tool call" },
     { value: "workflow", label: "Workflow", description: "Draft a muon_workflow tool call" },
@@ -146,21 +164,41 @@ async function pickMuonAction(ctx: ExtensionCommandContext): Promise<MuonAction 
   return { kind: selected as MuonAction["kind"] };
 }
 
-async function pickMuonSkillsAction(ctx: ExtensionCommandContext, state: MuonState): Promise<MuonAction | undefined> {
-  const selected = await selectModal(ctx, `Muon Skills (${state.config.superpowersMode})`, [
-    {
-      value: "on",
-      label: state.config.superpowersMode === "on" ? "On ✓" : "On",
-      description: "Expose bundled skills in the skill catalog",
-    },
-    {
-      value: "off",
-      label: state.config.superpowersMode === "off" ? "Off ✓" : "Off",
-      description: "Remove bundled skills from the skill catalog",
-    },
-  ]);
+async function pickMuonSkillsetAction(
+  ctx: ExtensionCommandContext,
+  state: MuonState
+): Promise<MuonAction | undefined> {
+  const selected = await selectModal(
+    ctx,
+    `Muon Skillset (${state.config.skillset})`,
+    [
+      {
+        value: "off",
+        label: state.config.skillset === "off" ? "Off ✓" : "Off",
+        description: "Expose no bundled Muon skills"
+      },
+      {
+        value: "auto",
+        label: state.config.skillset === "auto" ? "Auto ✓" : "Auto",
+        description: "Expose Muon router, Ponytail, and Superpowers skills"
+      },
+      {
+        value: "ponytail",
+        label: state.config.skillset === "ponytail" ? "Ponytail ✓" : "Ponytail",
+        description: "Expose Muon router and Ponytail skills only"
+      },
+      {
+        value: "superpowers",
+        label:
+          state.config.skillset === "superpowers"
+            ? "Superpowers ✓"
+            : "Superpowers",
+        description: "Expose Muon router and Superpowers skills only"
+      }
+    ]
+  );
   if (!selected) return undefined;
-  return { kind: "skills", mode: selected as "on" | "off" };
+  return { kind: "skillset", mode: selected as MuonSkillset };
 }
 
 async function showMuonHelp(ctx: ExtensionCommandContext): Promise<void> {
@@ -195,8 +233,8 @@ async function runMuonAction(pi: ExtensionAPI, deps: MuonDeps, ctx: ExtensionCom
     ctx.ui.notify(
       [
         "Muon status",
-        `skills: ${state.config.superpowersMode}`,
-        `skills source: bundled Muon skills`,
+        `skillset: ${state.config.skillset}`,
+        `skill roots: ${state.config.skillset === "off" ? "none" : "extensions/muon/skillsets as configured"}`,
         `maxParallel: ${state.config.maxParallel}`,
         `maxDepth: ${state.config.maxDepth}`,
         `agentScope: ${state.config.defaultAgentScope}`,
@@ -208,27 +246,25 @@ async function runMuonAction(pi: ExtensionAPI, deps: MuonDeps, ctx: ExtensionCom
     return;
   }
 
-  if (action.kind === "skills") {
+  if (action.kind === "skillset") {
     const mode = action.mode;
     if (!mode) {
-      const picked = await pickMuonSkillsAction(ctx, state);
+      const picked = await pickMuonSkillsetAction(ctx, state);
       if (!picked) return;
       await runMuonAction(pi, deps, ctx, picked);
       return;
     }
     if (mode === "status") {
-      ctx.ui.notify(`Muon skills mode: ${state.config.superpowersMode}\nSource: bundled extensions/muon/skills`, "info");
+      ctx.ui.notify(
+        `Muon skillset: ${state.config.skillset}\nSources: extensions/muon/skillsets`,
+        "info"
+      );
       return;
     }
     deps.setState((draft) => {
-      draft.config.superpowersMode = mode;
+      draft.config.skillset = mode;
     }, ctx);
-    ctx.ui.notify(
-      mode === "on"
-        ? "Muon skills mode set to on. Reloading to apply…"
-        : "Muon skills mode set to off. Reloading to apply…",
-      "success",
-    );
+    ctx.ui.notify(`Muon skillset set to ${mode}. Reloading to apply…`, "success");
     await ctx.reload();
     return;
   }
@@ -304,7 +340,18 @@ export function registerMuonCommands(pi: ExtensionAPI, deps: MuonDeps): void {
   pi.registerCommand("muon", {
     description: "Open Muon menu",
     getArgumentCompletions: (prefix) => {
-      const items = ["status", "skills", "agents", "subagent", "workflow", "runs", "open", "rollback", "help"];
+      const items = [
+        "status",
+        "skillset",
+        "skills",
+        "agents",
+        "subagent",
+        "workflow",
+        "runs",
+        "open",
+        "rollback",
+        "help"
+      ];
       return items.filter((item) => item.startsWith(prefix.trimStart())).map((value) => ({ value, label: value }));
     },
     handler: async (args, ctx) => {
