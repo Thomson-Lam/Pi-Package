@@ -40,7 +40,28 @@ assert.equal(existsSync(join(muonDir, "skills", "using-superpowers", "SKILL.md")
 assert.equal(existsSync(join(muonDir, "skills", "writing-plans", "SKILL.md")), true, "missing bundled writing-plans skill");
 
 const superpowers = readFileSync(join(muonDir, "superpowers.ts"), "utf8");
-assert.match(superpowers, /discoverSuperpowersResources/);
+assert.match(constants, /MUON_SKILLSETS_DIR/);
+assert.match(constants, /MUON_ROUTER_SKILLS_DIR/);
+assert.match(constants, /MUON_PONYTAIL_SKILLS_DIR/);
+assert.match(constants, /MUON_SUPERPOWERS_SKILLS_DIR/);
+assert.match(constants, /join\(MUON_SKILLSETS_DIR, "superpowers"\)/);
+
+const types = readFileSync(join(muonDir, "types.ts"), "utf8");
+assert.match(
+  types,
+  /export type MuonSkillset = "off" \| "auto" \| "ponytail" \| "superpowers"/
+);
+assert.match(types, /skillset: MuonSkillset/);
+assert.doesNotMatch(types, /SuperpowersMode/);
+
+assert.match(superpowers, /getSkillsetPaths/);
+assert.match(superpowers, /case "auto"/);
+assert.match(superpowers, /case "ponytail"/);
+assert.match(superpowers, /case "superpowers"/);
+assert.doesNotMatch(superpowers, /MUON_SKILLS_DIR/);
+
+const superpowers2 = readFileSync(join(muonDir, "superpowers.ts"), "utf8");
+assert.match(superpowers2, /discoverSuperpowersResources/);
 
 const commands = readFileSync(join(muonDir, "commands.ts"), "utf8");
 assert.match(commands, /muon/);

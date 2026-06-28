@@ -5,7 +5,7 @@ import type { MuonPersistedState, MuonState } from "./types.js";
 export function createInitialMuonState(): MuonState {
   return {
     config: {
-      superpowersMode: "off",
+      skillset: "off",
       maxParallel: MAX_PARALLEL_DEFAULT,
       maxDepth: MAX_DEPTH_DEFAULT,
       defaultAgentScope: "user",
@@ -21,7 +21,13 @@ export function restoreMuonState(ctx: ExtensionContext): MuonState {
   for (const entry of ctx.sessionManager.getEntries()) {
     if (entry.type !== "custom" || entry.customType !== MUON_STATE_ENTRY_TYPE || !entry.data) continue;
     const data = entry.data as Partial<MuonPersistedState>;
-    state.config = { ...state.config, ...(data.config ?? {}) };
+    const config = data.config as
+      | (Partial<MuonPersistedState["config"]> & { superpowersMode?: "off" | "on" })
+      | undefined;
+    state.config = { ...state.config, ...(config ?? {}) };
+    if (config?.superpowersMode && !("skillset" in config)) {
+      state.config.skillset = config.superpowersMode === "on" ? "auto" : "off";
+    }
     state.activeRunId = data.activeRunId ?? state.activeRunId;
     state.runs = data.runs && typeof data.runs === "object" ? data.runs : state.runs;
   }
@@ -33,7 +39,7 @@ export function persistMuonState(pi: ExtensionAPI, state: MuonState): void {
 }
 
 export function updateMuonStatus(ctx: ExtensionContext, state: MuonState): void {
-  const mode = state.config.superpowersMode;
+  const mode = state.config.skillset;
   const active = state.activeRunId ? state.runs[state.activeRunId] : undefined;
   const status = active ? `${active.status}:${active.name}` : `skills:${mode}`;
   ctx.ui.setStatus(MUON_EXTENSION_NAME, ctx.ui.theme.fg(active?.status === "failed" ? "error" : "accent", `muon ${status}`));
