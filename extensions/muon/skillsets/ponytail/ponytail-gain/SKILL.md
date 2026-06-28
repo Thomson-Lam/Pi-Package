@@ -8,6 +8,8 @@ description: >
   "ponytail scoreboard".
 ---
 
+If `using-muon` has not been invoked yet, invoke it first to ensure proper Muon skill routing and usage.
+
 # Ponytail Gain
 
 Display this scoreboard when invoked. One-shot: do NOT change mode, write flag

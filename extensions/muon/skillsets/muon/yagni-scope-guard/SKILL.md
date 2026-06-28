@@ -1,12 +1,20 @@
 ---
 name: yagni-scope-guard
-description: Use when Superpowers brainstorming or planning may expand scope, add speculative features, or over-engineer requirements
+description: >
+  Use to enhance superpowers-brainstorming as a supporting scope-creep
+  tightening guard.
 ---
 
 # YAGNI Scope Guard
 
-Scaffold for a Muon-owned scope guard. The user will edit this skill manually.
+Supporting skill for Superpowers brainstorming. Use it to tighten scope when
+brainstorming starts drifting into speculative requirements or premature
+expansion.
 
-Keep Superpowers designs and plans tied to the explicit goal. Challenge speculative requirements, prefer existing code and platform features, and name what is intentionally skipped with the trigger for revisiting it.
+Keep Superpowers designs and plans tied to the explicit goal. Challenge
+speculative requirements, prefer existing code and platform features, and name
+what is intentionally skipped with the trigger for revisiting it.
 
-This skill constrains scope; it does not replace Superpowers brainstorming, planning, TDD, review, or verification workflows.
+This skill supports Superpowers brainstorming only; it is not a standalone
+controller and does not replace brainstorming, planning, TDD, review, or
+verification workflows.

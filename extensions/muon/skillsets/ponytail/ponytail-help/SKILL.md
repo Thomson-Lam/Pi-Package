@@ -6,6 +6,8 @@ description: >
   "ponytail help", "what ponytail commands", "how do I use ponytail".
 ---
 
+If `using-muon` has not been invoked yet, invoke it first to ensure proper Muon skill routing and usage.
+
 # Ponytail Help
 
 Display this reference card when invoked. One-shot, do NOT change mode,
