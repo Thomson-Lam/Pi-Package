@@ -2,17 +2,33 @@
 
 Muon is a personal Pi extension for bundled skill-first workflows, transparent subagent orchestration, declarative workflows, worktree checkpoints, and rollback-aware monitoring.
 
-## Skills mode
+## Skillsets
 
-Muon includes a self-contained copy of the Superpowers-style skills under `extensions/muon/skills/`.
+Muon uses static skill roots from `extensions/muon/skillsets/`.
 
 ```text
-/muon skills off      # hide bundled skills from the skill catalog
-/muon skills on       # expose bundled skills in the skill catalog
-/muon skills status
+/muon skillset off           # expose no bundled Muon skills
+/muon skillset auto          # expose using-muon + Ponytail + Superpowers
+/muon skillset ponytail      # expose using-muon + Ponytail only
+/muon skillset superpowers   # expose using-muon + Superpowers only
+/muon skillset status
 ```
 
-Default is `off`. Toggling skills mode does not require `/reload`.
+`/muon skills ...` is kept as an alias for `/muon skillset ...`.
+
+Default is `off`. Changing skillsets reloads the session so Pi refreshes the
+skill catalog.
+
+| Skillset      | Exposed skill roots                                                       |
+| ------------- | ------------------------------------------------------------------------- |
+| `off`         | none                                                                      |
+| `auto`        | `skillsets/muon`, `skillsets/ponytail`, `skillsets/superpowers` |
+| `ponytail`    | `skillsets/muon`, `skillsets/ponytail`                          |
+| `superpowers` | `skillsets/muon`, `skillsets/superpowers`                       |
+
+`using-muon` routes between available skills. In `superpowers` mode,
+`yagni-scope-guard` is available to constrain scope creep without exposing
+Ponytail.
 
 ## Manual commands
 
@@ -20,8 +36,9 @@ Default is `off`. Toggling skills mode does not require `/reload`.
 /muon                 # open the Muon action menu
 /muon help            # show UI-only help
 /muon status
-/muon skills          # open on/off skills modal
-/muon skills on|off|status
+/muon skillset        # open skillset modal
+/muon skillset off|auto|ponytail|superpowers|status
+/muon skills off|auto|ponytail|superpowers|status  # alias
 /muon agents [user|project|both]
 /muon subagent        # opens JSON editor, then asks main agent to call muon_subagent
 /muon workflow        # opens JSON editor, then asks main agent to call muon_workflow
@@ -30,30 +47,41 @@ Default is `off`. Toggling skills mode does not require `/reload`.
 /muon rollback <runId> [targetRef]
 ```
 
-The `/muon` menu supports `j`/`k` navigation, Enter to select, `h`/`?` for help, and Esc to cancel. The `/muon skills` modal supports `j`/`k` navigation, Enter to select On or Off, and Esc to cancel.
+The `/muon` menu supports `j`/`k` navigation, Enter to select, `h`/`?` for help, and Esc to cancel. The `/muon skillset` modal supports `j`/`k` navigation, Enter to select a mode, and Esc to cancel.
 
 ## Bundled skills
 
-The bundled skill tree is copied from Superpowers and includes:
+Muon exposes selected roots through Pi resource discovery.
 
 ```text
-using-superpowers
-brainstorming
-writing-plans
-executing-plans
-subagent-driven-development
-test-driven-development
-systematic-debugging
-verification-before-completion
-using-git-worktrees
-requesting-code-review
-receiving-code-review
-finishing-a-development-branch
-dispatching-parallel-agents
-writing-skills
-```
+skillsets/muon/
+  using-muon
+  yagni-scope-guard
 
-Muon exposes `extensions/muon/skills` through Pi resource discovery when skills mode is `on`.
+skillsets/ponytail/
+  ponytail
+  ponytail-review
+  ponytail-audit
+  ponytail-debt
+  ponytail-gain
+  ponytail-help
+
+skillsets/superpowers/
+  using-superpowers
+  brainstorming
+  writing-plans
+  executing-plans
+  subagent-driven-development
+  test-driven-development
+  systematic-debugging
+  verification-before-completion
+  using-git-worktrees
+  requesting-code-review
+  receiving-code-review
+  finishing-a-development-branch
+  dispatching-parallel-agents
+  writing-skills
+```
 
 ## muon_subagent
 
