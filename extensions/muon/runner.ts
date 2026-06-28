@@ -7,6 +7,7 @@ import { withFileMutationQueue } from "@earendil-works/pi-coding-agent";
 import type { AgentConfig } from "./agents.js";
 import type { RunLedger } from "./ledger.js";
 import { appendLedgerEvent, writeAgentArtifact } from "./ledger.js";
+import { resolveMuonSubagentSkill } from "./subagent-skills.js";
 
 export interface MuonAgentTask {
   agent: string;
@@ -84,6 +85,10 @@ export async function runSingleMuonAgent(input: RunAgentInput): Promise<MuonAgen
   const args: string[] = ["--mode", "json", "-p", "--no-session"];
   if (agent.model) args.push("--model", agent.model);
   if (agent.tools && agent.tools.length > 0) args.push("--tools", agent.tools.join(","));
+  if (agent.skills && agent.skills.length > 0) {
+    args.push("--no-skills");
+    for (const skill of agent.skills) args.push("--skill", resolveMuonSubagentSkill(skill));
+  }
 
   let tmpPromptDir: string | null = null;
   let tmpPromptPath: string | null = null;

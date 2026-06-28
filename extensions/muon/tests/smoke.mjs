@@ -13,6 +13,7 @@ const requiredFiles = [
   "superpowers.ts",
   "agents.ts",
   "runner.ts",
+  "subagent-skills.ts",
   "ledger.ts",
   "worktree.ts",
   "workflow.ts",
@@ -153,6 +154,8 @@ const agents = readFileSync(join(muonDir, "agents.ts"), "utf8");
 assert.match(agents, /discoverMuonAgents/);
 assert.match(agents, /findNearestProjectAgentsDir/);
 assert.match(agents, /parseFrontmatter/);
+assert.match(agents, /skills\?: string\[\]/);
+assert.match(agents, /frontmatter\.skills/);
 
 const ledger = readFileSync(join(muonDir, "ledger.ts"), "utf8");
 assert.match(ledger, /createRunLedger/);
@@ -168,6 +171,9 @@ assert.match(runner, /MUON_DEPTH/);
 assert.match(runner, /runSingleMuonAgent/);
 assert.match(runner, /runMuonAgentsParallel/);
 assert.match(runner, /runMuonAgentChain/);
+assert.match(runner, /--no-skills/);
+assert.match(runner, /--skill/);
+assert.match(runner, /resolveMuonSubagentSkill/);
 
 const tools = readFileSync(join(muonDir, "tools.ts"), "utf8");
 assert.match(tools, /muon_subagent/);
@@ -191,6 +197,11 @@ assert.match(worktree, /checkpointMuonWorktree/);
 assert.match(worktree, /rollbackMuonWorktree/);
 assert.match(worktree, /git worktree/);
 
+const subagentSkills = readFileSync(join(muonDir, "subagent-skills.ts"), "utf8");
+assert.match(subagentSkills, /resolveMuonSubagentSkill/);
+assert.match(subagentSkills, /ponytail/);
+assert.match(subagentSkills, /MUON_PONYTAIL_SKILLS_DIR/);
+
 const readme = readFileSync(join(muonDir, "README.md"), "utf8");
 assert.match(readme, /Skillsets/);
 assert.match(readme, /skillsets\/superpowers/);
@@ -201,5 +212,6 @@ assert.match(readme, /superpowers/);
 assert.match(readme, /muon_subagent/);
 assert.match(readme, /muon_workflow/);
 assert.match(readme, /Rollback/);
+assert.match(readme, /skills: ponytail/);
 
 console.log("muon skillset smoke checks passed");

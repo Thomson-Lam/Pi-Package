@@ -87,6 +87,22 @@ skillsets/superpowers/
 
 Use for one-off transparent delegation. Exactly one mode must be supplied.
 
+### Agent-defined subagent skills
+
+Muon agents can declare an explicit skill catalog in agent frontmatter:
+
+```md
+---
+name: worker
+description: Implements code changes
+skills: ponytail
+---
+```
+
+When `skills` is set, Muon launches that subagent with only the declared skill roots. Currently supported values:
+
+- `ponytail`
+
 Single:
 
 ```json
