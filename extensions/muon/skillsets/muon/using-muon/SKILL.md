@@ -1,9 +1,10 @@
 ---
 name: using-muon
 description: >
-  Use as this a manual for using all development tasks and standard workflow
-  practices, including planning, brainstorming, review, debugging, execution,
-  verification, and orchestration
+  Use this as a manual for using Ponytail (concrete implementation,
+  simplification, over-engineering cutting from a code-first view) and
+  Superpowers (planning, orchestration, structured multi process development
+  workflow) skills.
 ---
 
 # Using Muon
