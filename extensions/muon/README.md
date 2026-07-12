@@ -21,9 +21,9 @@ Default is `off`. Changing skills mutates the system prompt skill ledger and inv
 | ----------------------- | ------------------- |
 | `ponytail` profile      | `skillsets/muon`, `skillsets/ponytail` |
 | `superpowers` profile   | `skillsets/muon`, `skillsets/superpowers` |
-| `cindex`                | `skills/cindex` |
-| `handoff`               | `extensions/handoff/skills/handoff` |
-| `ipynb-toolshed`        | `skills/ipynb_toolshed` |
+| `cindex`                | `skillsets/standalone/cindex` |
+| `handoff`               | `skillsets/standalone/handoff` |
+| `ipynb-toolshed`        | `skillsets/standalone/ipynb_toolshed` |
 
 `using-muon` routes between available skills when a profile exposes the Muon router. In `superpowers` mode, `yagni-scope-guard` is available to constrain scope creep without exposing Ponytail.
 
@@ -73,6 +73,11 @@ skillsets/ponytail/
   ponytail-debt
   ponytail-gain
   ponytail-help
+
+skillsets/standalone/
+  cindex
+  handoff
+  ipynb_toolshed
 
 skillsets/superpowers/
   using-superpowers

@@ -61,6 +61,11 @@ assert.equal(
   "missing moved writing-plans skill"
 );
 assert.equal(existsSync(join(muonDir, "skills")), false, "stale extensions/muon/skills directory should be removed");
+assert.equal(existsSync(join(root, "skills")), false, "top-level skills directory should not contain stray standalone skills");
+assert.equal(existsSync(join(root, "extensions", "handoff", "skills")), false, "handoff extension should not contain stray standalone skills");
+assert.equal(existsSync(join(skillsetsDir, "standalone", "cindex", "SKILL.md")), true, "missing standalone cindex skill under Muon");
+assert.equal(existsSync(join(skillsetsDir, "standalone", "handoff", "SKILL.md")), true, "missing standalone handoff skill under Muon");
+assert.equal(existsSync(join(skillsetsDir, "standalone", "ipynb_toolshed", "SKILL.md")), true, "missing standalone ipynb_toolshed skill under Muon");
 
 const usingMuon = readFileSync(
   join(skillsetsDir, "muon", "using-muon", "SKILL.md"),
