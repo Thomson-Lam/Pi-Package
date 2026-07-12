@@ -5,7 +5,7 @@ Private Pi package bundling personal extensions and skills for reproducing the s
 ## Contents
 
 - `extensions/` — global Pi extensions
-- `skills/` — global Pi skills
+- `skills/` — Muon-governed Pi skills (exposed via `/muon skills`)
 - `settings.template.json` — non-secret settings template
 - `scripts/` — setup scripts for installing companion npm Pi packages and this package by tag
 

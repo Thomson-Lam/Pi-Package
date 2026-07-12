@@ -1,10 +1,19 @@
 export type MuonSkillset = "off" | "auto" | "ponytail" | "superpowers";
+export type MuonSkillId =
+  | "ponytail"
+  | "superpowers"
+  | "cindex"
+  | "handoff"
+  | "ipynb-toolshed";
 export type AgentScope = "user" | "project" | "both";
 export type WorkflowPhaseKind = "single" | "parallel" | "chain";
 export type WorktreeMode = "none" | "shared-run";
 
 export interface MuonConfig {
+  /** Legacy profile field kept for old session entries and `/muon skillset` compatibility. */
   skillset: MuonSkillset;
+  /** Muon-governed skill/profile ids exposed through resources_discover. */
+  enabledSkills: MuonSkillId[];
   maxParallel: number;
   maxDepth: number;
   defaultAgentScope: AgentScope;

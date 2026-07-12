@@ -1,7 +1,6 @@
 ---
 name: cindex
 description: Create, update, or audit lightweight INDEX.md file navigation pointers for both humans and agents to know where to look when navigating the codebase.
-disable-model-invocation: true
 ---
 
 # Code Index

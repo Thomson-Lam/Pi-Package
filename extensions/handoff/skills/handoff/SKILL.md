@@ -1,7 +1,6 @@
 ---
 name: handoff
 description: Create/update a handoff file for current work and context.
-disable-model-invocation: true
 ---
 
 # Handoff

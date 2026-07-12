@@ -1,11 +1,13 @@
 import type { ExtensionAPI, ExtensionContext } from "@earendil-works/pi-coding-agent";
 import { MAX_DEPTH_DEFAULT, MAX_PARALLEL_DEFAULT, MUON_EXTENSION_NAME, MUON_STATE_ENTRY_TYPE } from "./constants.js";
+import { formatEnabledSkills, normalizeMuonSkillIds, skillIdsToLegacySkillset, skillsetToSkillIds } from "./skills.js";
 import type { MuonPersistedState, MuonState } from "./types.js";
 
 export function createInitialMuonState(): MuonState {
   return {
     config: {
       skillset: "off",
+      enabledSkills: [],
       maxParallel: MAX_PARALLEL_DEFAULT,
       maxDepth: MAX_DEPTH_DEFAULT,
       defaultAgentScope: "user",
@@ -28,6 +30,12 @@ export function restoreMuonState(ctx: ExtensionContext): MuonState {
     if (config?.superpowersMode && !("skillset" in config)) {
       state.config.skillset = config.superpowersMode === "on" ? "auto" : "off";
     }
+    if (Array.isArray(config?.enabledSkills)) {
+      state.config.enabledSkills = normalizeMuonSkillIds(config.enabledSkills);
+      state.config.skillset = skillIdsToLegacySkillset(state.config.enabledSkills);
+    } else if (config?.skillset) {
+      state.config.enabledSkills = skillsetToSkillIds(state.config.skillset);
+    }
     state.activeRunId = data.activeRunId ?? state.activeRunId;
     state.runs = data.runs && typeof data.runs === "object" ? data.runs : state.runs;
   }
@@ -39,8 +47,7 @@ export function persistMuonState(pi: ExtensionAPI, state: MuonState): void {
 }
 
 export function updateMuonStatus(ctx: ExtensionContext, state: MuonState): void {
-  const mode = state.config.skillset;
   const active = state.activeRunId ? state.runs[state.activeRunId] : undefined;
-  const status = active ? `${active.status}:${active.name}` : `skills:${mode}`;
+  const status = active ? `${active.status}:${active.name}` : `skills:${formatEnabledSkills(state.config.enabledSkills)}`;
   ctx.ui.setStatus(MUON_EXTENSION_NAME, ctx.ui.theme.fg(active?.status === "failed" ? "error" : "accent", `muon ${status}`));
 }

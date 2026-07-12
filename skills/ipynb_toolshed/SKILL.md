@@ -7,11 +7,11 @@ description: Read and edit toolshed for working with ipynb efficiently over hand
 Use this skill for `.ipynb` files, and for invoking the bundled CLIs over reading or editing raw notebook JSON. 
 
 ## Scripts
-The scripts exist at: `~/.pi/agent/skills/ipynb_toolshed/scripts/`. For all example usages listed, `<PATH>` refers to this specified path. When invoking scripts, use the global skill path from any project directory.
+The scripts live next to this `SKILL.md` in `scripts/`. Resolve relative paths from the skill directory and use that absolute path from any project directory. In examples, `<PATH>` is the absolute path to this skill's `scripts/` directory.
 
 Available scripts:
 - `inspect_ipynb.py`: compact reader; prints cell indexes and source_sha256 edit handles
-- `inspect_ipynb.py`: safe writer; replaces one whole cell source by cell index + expected hash
+- `edit_ipynb.py`: safe writer; replaces one whole cell source by cell index + expected hash
 
 Cell numbers are zero-based. For help with usage, invoke:
 ```bash

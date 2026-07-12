@@ -11,6 +11,7 @@ const requiredFiles = [
   "types.ts",
   "state.ts",
   "superpowers.ts",
+  "skills.ts",
   "agents.ts",
   "runner.ts",
   "subagent-skills.ts",
@@ -19,6 +20,7 @@ const requiredFiles = [
   "workflow.ts",
   "tools.ts",
   "commands.ts",
+  "skill-dump.ts",
   "render.ts",
   "README.md"
 ];
@@ -76,7 +78,7 @@ const scopeGuard = readFileSync(
   "utf8"
 );
 assert.match(scopeGuard, /name: yagni-scope-guard/);
-assert.match(scopeGuard, /Scaffold/);
+assert.match(scopeGuard, /scope-creep/);
 
 const routedSuperpowers = readFileSync(
   join(skillsetsDir, "superpowers", "using-superpowers", "SKILL.md"),
@@ -84,7 +86,7 @@ const routedSuperpowers = readFileSync(
 );
 assert.match(
   routedSuperpowers,
-  /description: Use when Muon selects the full Superpowers workflow/
+  /Use when Superpowers workflow or skills are needed/
 );
 assert.doesNotMatch(
   routedSuperpowers.split("---")[1],
@@ -104,6 +106,9 @@ assert.match(constants, /MUON_SKILLSETS_DIR/);
 assert.match(constants, /MUON_ROUTER_SKILLS_DIR/);
 assert.match(constants, /MUON_PONYTAIL_SKILLS_DIR/);
 assert.match(constants, /MUON_SUPERPOWERS_SKILLS_DIR/);
+assert.match(constants, /MUON_CINDEX_SKILL_DIR/);
+assert.match(constants, /MUON_IPYNB_TOOLS_SHED_SKILL_DIR/);
+assert.match(constants, /MUON_HANDOFF_SKILL_DIR/);
 assert.match(constants, /join\(MUON_SKILLSETS_DIR, "superpowers"\)/);
 assert.doesNotMatch(constants, /MUON_SKILLS_DIR/);
 
@@ -112,41 +117,55 @@ assert.match(
   types,
   /export type MuonSkillset = "off" \| "auto" \| "ponytail" \| "superpowers"/
 );
+assert.match(types, /export type MuonSkillId/);
 assert.match(types, /skillset: MuonSkillset/);
+assert.match(types, /enabledSkills: MuonSkillId\[\]/);
 assert.doesNotMatch(types, /SuperpowersMode/);
 
 const state = readFileSync(join(muonDir, "state.ts"), "utf8");
 assert.match(state, /skillset: "off"/);
+assert.match(state, /enabledSkills: \[\]/);
 assert.match(state, /superpowersMode/); // backward-compatible restore only
-assert.match(state, /state\.config\.skillset/);
+assert.match(state, /state\.config\.enabledSkills/);
 
 const superpowers = readFileSync(join(muonDir, "superpowers.ts"), "utf8");
 assert.match(superpowers, /discoverSuperpowersResources/);
 assert.match(superpowers, /getSkillsetPaths/);
-assert.match(superpowers, /case "auto"/);
-assert.match(superpowers, /case "ponytail"/);
-assert.match(superpowers, /case "superpowers"/);
-assert.match(
-  superpowers,
-  /MUON_ROUTER_SKILLS_DIR,[\s\S]*MUON_PONYTAIL_SKILLS_DIR,[\s\S]*MUON_SUPERPOWERS_SKILLS_DIR/
-);
-assert.match(superpowers, /MUON_ROUTER_SKILLS_DIR,[\s]*MUON_PONYTAIL_SKILLS_DIR/);
-assert.match(
-  superpowers,
-  /MUON_ROUTER_SKILLS_DIR,[\s]*MUON_SUPERPOWERS_SKILLS_DIR/
-);
+assert.match(superpowers, /resolveEnabledSkillPaths/);
+assert.match(superpowers, /skillsetToSkillIds/);
 assert.doesNotMatch(superpowers, /MUON_SKILLS_DIR/);
+
+const skills = readFileSync(join(muonDir, "skills.ts"), "utf8");
+assert.match(skills, /MUON_SKILL_SOURCES/);
+assert.match(skills, /ipynb-toolshed/);
+assert.doesNotMatch(skills, /pi-interactive-shell/);
+assert.doesNotMatch(skills, /omarchy/);
+assert.match(skills, /resolveEnabledSkillPaths/);
 
 const commands = readFileSync(join(muonDir, "commands.ts"), "utf8");
 assert.match(commands, /muon/);
-assert.match(commands, /skillset off\|auto\|ponytail\|superpowers\|status/);
-assert.match(commands, /verb === "skillset" \|\| verb === "skills"/);
+assert.match(commands, /Usage: \/muon \[status\|skills\|skill-dump\|help\]/);
+assert.match(commands, /skill-dump/);
+assert.match(commands, /verb === "skills"/);
+assert.doesNotMatch(commands, /verb === "agents"/);
+assert.doesNotMatch(commands, /verb === "subagent"/);
+assert.doesNotMatch(commands, /verb === "workflow"/);
+assert.doesNotMatch(commands, /kind: "rollback"/);
+
+const skillDump = readFileSync(join(muonDir, "skill-dump.ts"), "utf8");
+assert.match(skillDump, /dumpMuonSkills/);
+assert.match(skillDump, /\.agents/);
+assert.match(skillDump, /\.claude/);
+assert.match(skillDump, /\.codex/);
 assert.match(commands, /function isMuonSkillset/);
-assert.match(commands, /pickMuonSkillsetAction/);
-assert.match(commands, /Auto/);
+assert.match(commands, /showMuonSkillsToggle/);
+assert.match(commands, /SettingsList/);
+assert.match(commands, /ensureSkillMutationAllowed/);
+assert.match(commands, /getExternalSkillCommands/);
+assert.match(commands, /\(external\)/);
 assert.match(commands, /Ponytail/);
 assert.match(commands, /Superpowers/);
-assert.match(commands, /state\.config\.skillset/);
+assert.match(commands, /state\.config\.enabledSkills/);
 assert.doesNotMatch(commands, /state\.config\.superpowersMode/);
 assert.doesNotMatch(commands, /isSuperpowersMode/);
 
@@ -203,15 +222,16 @@ assert.match(subagentSkills, /ponytail/);
 assert.match(subagentSkills, /MUON_PONYTAIL_SKILLS_DIR/);
 
 const readme = readFileSync(join(muonDir, "README.md"), "utf8");
-assert.match(readme, /Skillsets/);
+assert.match(readme, /Skills/);
 assert.match(readme, /skillsets\/superpowers/);
 assert.match(readme, /off/);
 assert.match(readme, /auto/);
 assert.match(readme, /ponytail/);
 assert.match(readme, /superpowers/);
-assert.match(readme, /muon_subagent/);
-assert.match(readme, /muon_workflow/);
-assert.match(readme, /Rollback/);
-assert.match(readme, /skills: ponytail/);
+assert.doesNotMatch(readme, /muon_subagent/);
+assert.doesNotMatch(readme, /muon_workflow/);
+assert.doesNotMatch(readme, /Rollback/);
+assert.match(readme, /\/muon skills/);
+assert.match(readme, /\/muon skill-dump/);
 
-console.log("muon skillset smoke checks passed");
+console.log("muon skills smoke checks passed");

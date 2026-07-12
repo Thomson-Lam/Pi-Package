@@ -7,12 +7,9 @@ import { readFile, readdir, stat } from "node:fs/promises";
 import { homedir } from "node:os";
 import { basename, dirname, join, relative } from "node:path";
 import { promisify } from "node:util";
-import { fileURLToPath } from "node:url";
 
 const execFileAsync = promisify(execFile);
 
-const here = dirname(fileURLToPath(import.meta.url));
-const SKILLS_DIR = join(here, "skills");
 const GLOBAL_HANDOFFS_DIR = join(homedir(), ".pi", "agent", "handoffs");
 
 type AttachScope = "global" | "local";
@@ -262,10 +259,6 @@ async function runAction(pi: ExtensionAPI, ctx: ExtensionCommandContext, action:
 }
 
 export default function handoffExtension(pi: ExtensionAPI) {
-	pi.on("resources_discover", async () => ({
-		skillPaths: [SKILLS_DIR],
-	}));
-
 	pi.registerCommand("hattach", {
 		description: "Attach a handoff through a UI picker",
 		getArgumentCompletions: (prefix) => {

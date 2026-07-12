@@ -5,8 +5,7 @@
   "keywords": ["pi-package"],
   "type": "module",
   "pi": {
-    "extensions": ["./extensions/*/index.ts"],
-    "skills": ["./skills"]
+    "extensions": ["./extensions/*/index.ts"]
   },
   "peerDependencies": {
     "@earendil-works/pi-coding-agent": "*",
