@@ -24,8 +24,9 @@ Default is `off`. Changing skills mutates the system prompt skill ledger and inv
 | `cindex`                | `skillsets/standalone/cindex` |
 | `handoff`               | `skillsets/standalone/handoff` |
 | `ipynb-toolshed`        | `skillsets/standalone/ipynb_toolshed` |
+| `yagni-scope-guard`     | `skillsets/standalone/yagni-scope-guard` |
 
-`using-muon` routes between available skills when a profile exposes the Muon router. In `superpowers` mode, `yagni-scope-guard` is available to constrain scope creep without exposing Ponytail.
+`using-muon` routes between available skills when a profile exposes the Muon router. `yagni-scope-guard` is an optional standalone helper for constraining Superpowers scope creep.
 
 Pi can also load skills from package `pi.skills`, settings, CLI `--skill`, `~/.pi/agent/skills`, `~/.agents/skills`, project `.pi/skills`, and trusted project/ancestor `.agents/skills`. Muon detects those already-loaded external skills dynamically through Pi command metadata and shows them in `/muon skills` with `(external)`. External rows are not toggleable because extensions cannot remove resources loaded by Pi's own discovery layer; pressing Enter on an external row opens its `SKILL.md` in a tmux popup with Neovim when Pi is running inside tmux. Without tmux, Muon shows a red “No tmux detected” message.
 
@@ -64,7 +65,6 @@ Muon exposes selected roots through Pi resource discovery.
 ```text
 skillsets/muon/
   using-muon
-  yagni-scope-guard
 
 skillsets/ponytail/
   ponytail
@@ -75,6 +75,7 @@ skillsets/standalone/
   cindex
   handoff
   ipynb_toolshed
+  yagni-scope-guard
 
 skillsets/superpowers/
   using-superpowers

@@ -4,7 +4,8 @@ export type MuonSkillId =
   | "superpowers"
   | "cindex"
   | "handoff"
-  | "ipynb-toolshed";
+  | "ipynb-toolshed"
+  | "yagni-scope-guard";
 export type AgentScope = "user" | "project" | "both";
 export type WorkflowPhaseKind = "single" | "parallel" | "chain";
 export type WorktreeMode = "none" | "shared-run";

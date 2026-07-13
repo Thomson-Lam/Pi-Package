@@ -36,11 +36,6 @@ assert.equal(
   "missing using-muon skill"
 );
 assert.equal(
-  existsSync(join(skillsetsDir, "muon", "yagni-scope-guard", "SKILL.md")),
-  true,
-  "missing yagni-scope-guard skill"
-);
-assert.equal(
   existsSync(join(skillsetsDir, "ponytail", "ponytail", "SKILL.md")),
   true,
   "missing ponytail skill"
@@ -66,20 +61,21 @@ assert.equal(existsSync(join(root, "extensions", "handoff", "skills")), false, "
 assert.equal(existsSync(join(skillsetsDir, "standalone", "cindex", "SKILL.md")), true, "missing standalone cindex skill under Muon");
 assert.equal(existsSync(join(skillsetsDir, "standalone", "handoff", "SKILL.md")), true, "missing standalone handoff skill under Muon");
 assert.equal(existsSync(join(skillsetsDir, "standalone", "ipynb_toolshed", "SKILL.md")), true, "missing standalone ipynb_toolshed skill under Muon");
+assert.equal(existsSync(join(skillsetsDir, "standalone", "yagni-scope-guard", "SKILL.md")), true, "missing standalone yagni-scope-guard skill under Muon");
 
 const usingMuon = readFileSync(
   join(skillsetsDir, "muon", "using-muon", "SKILL.md"),
   "utf8"
 );
 assert.match(usingMuon, /name: using-muon/);
-assert.match(usingMuon, /Catalog visibility means a skill is available/);
+assert.match(usingMuon, /visible means available, not mandatory/);
 assert.match(
   usingMuon,
-  /Large, ambiguous, risky, or multi-step implementation/
+  /Large, ambiguous, risky, or multi-step task/
 );
 
 const scopeGuard = readFileSync(
-  join(skillsetsDir, "muon", "yagni-scope-guard", "SKILL.md"),
+  join(skillsetsDir, "standalone", "yagni-scope-guard", "SKILL.md"),
   "utf8"
 );
 assert.match(scopeGuard, /name: yagni-scope-guard/);
@@ -114,6 +110,7 @@ assert.match(constants, /MUON_SUPERPOWERS_SKILLS_DIR/);
 assert.match(constants, /MUON_CINDEX_SKILL_DIR/);
 assert.match(constants, /MUON_IPYNB_TOOLS_SHED_SKILL_DIR/);
 assert.match(constants, /MUON_HANDOFF_SKILL_DIR/);
+assert.match(constants, /MUON_YAGNI_SCOPE_GUARD_SKILL_DIR/);
 assert.match(constants, /join\(MUON_SKILLSETS_DIR, "superpowers"\)/);
 assert.doesNotMatch(constants, /MUON_SKILLS_DIR/);
 
@@ -143,6 +140,7 @@ assert.doesNotMatch(superpowers, /MUON_SKILLS_DIR/);
 const skills = readFileSync(join(muonDir, "skills.ts"), "utf8");
 assert.match(skills, /MUON_SKILL_SOURCES/);
 assert.match(skills, /ipynb-toolshed/);
+assert.match(skills, /yagni-scope-guard/);
 assert.doesNotMatch(skills, /pi-interactive-shell/);
 assert.doesNotMatch(skills, /omarchy/);
 assert.match(skills, /resolveEnabledSkillPaths/);

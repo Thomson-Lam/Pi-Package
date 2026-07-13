@@ -54,7 +54,7 @@ Profiles:
 - \`superpowers\` — expose Muon router and Superpowers skills.
 
 Managed individual skills:
-- \`cindex\`, \`handoff\`, \`ipynb-toolshed\`.
+- \`cindex\`, \`handoff\`, \`ipynb-toolshed\`, \`yagni-scope-guard\`.
 
 External skills discovered by Pi outside Muon are also shown in the skills UI with \`(external)\` and are read-only.
 

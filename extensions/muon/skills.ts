@@ -6,6 +6,7 @@ import {
   MUON_PONYTAIL_SKILLS_DIR,
   MUON_ROUTER_SKILLS_DIR,
   MUON_SUPERPOWERS_SKILLS_DIR,
+  MUON_YAGNI_SCOPE_GUARD_SKILL_DIR,
 } from "./constants.js";
 import type { MuonSkillId, MuonSkillset } from "./types.js";
 
@@ -52,6 +53,13 @@ export const MUON_SKILL_SOURCES: MuonSkillSource[] = [
     kind: "skill",
     description: "Notebook inspection/edit scripts for .ipynb work without raw JSON editing.",
     paths: () => [MUON_IPYNB_TOOLS_SHED_SKILL_DIR],
+  },
+  {
+    id: "yagni-scope-guard",
+    label: "yagni-scope-guard",
+    kind: "skill",
+    description: "Tighten Superpowers brainstorms/plans when scope creep appears.",
+    paths: () => [MUON_YAGNI_SCOPE_GUARD_SKILL_DIR],
   },
 ];
 

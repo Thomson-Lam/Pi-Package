@@ -20,5 +20,6 @@ export const MUON_STANDALONE_SKILLS_DIR = join(MUON_SKILLSETS_DIR, "standalone")
 export const MUON_CINDEX_SKILL_DIR = join(MUON_STANDALONE_SKILLS_DIR, "cindex");
 export const MUON_IPYNB_TOOLS_SHED_SKILL_DIR = join(MUON_STANDALONE_SKILLS_DIR, "ipynb_toolshed");
 export const MUON_HANDOFF_SKILL_DIR = join(MUON_STANDALONE_SKILLS_DIR, "handoff");
+export const MUON_YAGNI_SCOPE_GUARD_SKILL_DIR = join(MUON_STANDALONE_SKILLS_DIR, "yagni-scope-guard");
 export const MUON_ROOT_DIR = join(getAgentDir(), "muon");
 export const MUON_RUNS_DIR = join(MUON_ROOT_DIR, "runs");
