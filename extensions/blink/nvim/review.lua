@@ -63,12 +63,12 @@ local function on_message(message)
     end
   elseif message.type == "version_added" then
     local item, removed_ids = State.add(model, payload.version, pane_active())
-    for _, version_id in ipairs(removed_ids or {}) do ui:evict(version_id) end
     if model.activeVersionId == item.versionId then ui:show_version(item) end
+    for _, version_id in ipairs(removed_ids or {}) do ui:evict(version_id) end
   elseif message.type == "version_evicted" then
     local replacement = State.evict(model, payload.versionId)
-    ui:evict(payload.versionId)
     if replacement then ui:show_version(replacement) else ui:show_waiting() end
+    ui:evict(payload.versionId)
   elseif message.type == "shutdown" then
     client:close()
     vim.cmd("qa!")
