@@ -62,7 +62,8 @@ local function on_message(message)
       show_active()
     end
   elseif message.type == "version_added" then
-    local item = State.add(model, payload.version, pane_active())
+    local item, removed_ids = State.add(model, payload.version, pane_active())
+    for _, version_id in ipairs(removed_ids or {}) do ui:evict(version_id) end
     if model.activeVersionId == item.versionId then ui:show_version(item) end
   elseif message.type == "version_evicted" then
     local replacement = State.evict(model, payload.versionId)

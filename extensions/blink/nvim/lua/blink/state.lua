@@ -15,12 +15,22 @@ local function sort_versions(model)
   table.sort(model.versions, function(a, b) return a.versionId < b.versionId end)
 end
 
+local function file_key(version)
+  return version.fileId or version.displayPath or version.path
+end
+
 function M.replace(model, snapshot)
   model.mode = snapshot.mode or model.mode
   model.versions = {}
   model.by_id = {}
+  local latest_by_file = {}
   for _, version in ipairs(snapshot.versions or {}) do
     local copy = vim.deepcopy(version)
+    local key = file_key(copy) or tostring(copy.versionId)
+    local previous = latest_by_file[key]
+    if not previous or copy.versionId > previous.versionId then latest_by_file[key] = copy end
+  end
+  for _, copy in pairs(latest_by_file) do
     model.by_id[copy.versionId] = copy
     table.insert(model.versions, copy)
   end
@@ -42,17 +52,32 @@ function M.toggle_pin(model)
 end
 
 function M.add(model, version, pane_active)
-  if model.by_id[version.versionId] then return model.by_id[version.versionId] end
+  if model.by_id[version.versionId] then return model.by_id[version.versionId], {} end
   local copy = vim.deepcopy(version)
+  local key = file_key(copy)
+  local removed = {}
+  local active_removed = false
+  if key then
+    for index = #model.versions, 1, -1 do
+      local existing = model.versions[index]
+      if file_key(existing) == key then
+        if existing.versionId > copy.versionId then return existing, {} end
+        table.insert(removed, existing.versionId)
+        if model.activeVersionId == existing.versionId then active_removed = true end
+        model.by_id[existing.versionId] = nil
+        table.remove(model.versions, index)
+      end
+    end
+  end
   model.by_id[copy.versionId] = copy
   table.insert(model.versions, copy)
   sort_versions(model)
-  if pane_active and not model.pinned then
+  if active_removed or (pane_active and not model.pinned) then
     M.set_active(model, copy.versionId)
   else
     copy.unread = true
   end
-  return copy
+  return copy, removed
 end
 
 function M.evict(model, version_id)
