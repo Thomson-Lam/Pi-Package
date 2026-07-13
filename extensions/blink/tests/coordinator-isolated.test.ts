@@ -192,9 +192,9 @@ test("Slow dispositions and Blitz delivery coordinate through isolated tmux and 
   while (((blitz as any).versions.at(-1)?.versionId ?? 0) < 101 && Date.now() < evictionDeadline) {
     await new Promise((resolve) => setTimeout(resolve, 20));
   }
-  assert.equal(blitz.retainedCount, 1);
-  assert.equal((blitz as any).versions[0].versionId, 101, "rolling Blitz keeps only the latest version per file");
-  assert.equal(await readFile((blitz as any).versions[0].originSnapshotPath, "utf8"), "version-100", "latest version diffs against the previous observed state");
+  assert.equal(blitz.retainedCount, 100);
+  assert.equal((blitz as any).versions[0].versionId, 2, "101st rolling diff evicts oldest globally");
+  assert.equal(await readFile((blitz as any).versions.at(-1).originSnapshotPath, "utf8"), "version-100", "latest version diffs against the previous observed state");
   await blitz.cleanup();
 
   assert.equal(aborts, 1, "Slow restoration conflict aborts the active agent once");

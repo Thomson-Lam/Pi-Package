@@ -142,6 +142,7 @@ export class BlinkRuntime {
   private histories = new Map<string, FileHistory>();
   private versions: RetainedVersion[] = [];
   private nextVersionId = 1;
+  private snapshotByteLengths = new Map<string, number>();
   private deliveryTail: Promise<void> = Promise.resolve();
   private pendingSlow?: PendingSlow;
   private slowTerminal?: Promise<void>;
@@ -230,9 +231,9 @@ export class BlinkRuntime {
     }
     const previous = history.versions[history.versions.length - 1];
     if (!previous && origin.revision.kind === "file" && !origin.snapshot) {
-      origin.snapshot = await persistSnapshot(resources.snapshotsDir, origin.revision.bytes);
+      origin.snapshot = this.rememberSnapshot(await persistSnapshot(resources.snapshotsDir, origin.revision.bytes));
     }
-    const snapshot = await persistSnapshot(resources.snapshotsDir, input.bytes);
+    const snapshot = this.rememberSnapshot(await persistSnapshot(resources.snapshotsDir, input.bytes));
     const displayPath = relative(input.ctx.cwd, input.absolutePath) || input.absolutePath;
     const version: RetainedVersion = {
       versionId: input.versionId,
@@ -247,15 +248,8 @@ export class BlinkRuntime {
       originKind: previous ? "file" : origin.revision.kind,
       originSnapshotPath: previous ? previous.snapshot.path : origin.snapshot?.path,
     };
-    const removedForFile = history.versions.splice(0, history.versions.length, version);
-    this.versions = this.versions.filter((item) => item.fileId !== origin.fileId);
+    history.versions.push(version);
     this.versions.push(version);
-    for (const removed of removedForFile) {
-      if (removed.originSnapshotPath && removed.originSnapshotPath !== version.originSnapshotPath) {
-        await rm(removed.originSnapshotPath, { force: true }).catch(() => undefined);
-        if (origin.snapshot?.path === removed.originSnapshotPath) origin.snapshot = undefined;
-      }
-    }
     const evicted = await this.evictToLimits();
     this.updateStatus();
     if (this.closing) return;
@@ -278,21 +272,41 @@ export class BlinkRuntime {
     this.updateStatus();
   }
 
+  private rememberSnapshot(snapshot: Snapshot): Snapshot {
+    this.snapshotByteLengths.set(snapshot.path, snapshot.byteLength);
+    return snapshot;
+  }
+
   private runtimeBytes(): number {
-    let total = this.versions.reduce((sum, version) => sum + version.byteLength, 0);
     const counted = new Set<string>();
-    for (const history of this.histories.values()) {
-      for (const version of history.versions) {
-        if (version.originSnapshotPath && !counted.has(version.originSnapshotPath)) {
-          counted.add(version.originSnapshotPath);
-          total += history.origin.snapshot?.path === version.originSnapshotPath
-            ? history.origin.snapshot.byteLength
-            : version.byteLength;
+    let total = 0;
+    for (const version of this.versions) {
+      for (const path of [version.snapshot.path, version.originSnapshotPath]) {
+        if (path && !counted.has(path)) {
+          counted.add(path);
+          total += this.snapshotByteLengths.get(path) ?? version.snapshot.byteLength;
         }
       }
-      if (history.origin.snapshot && !counted.has(history.origin.snapshot.path)) total += history.origin.snapshot.byteLength;
+    }
+    for (const history of this.histories.values()) {
+      const snapshot = history.origin.snapshot;
+      if (snapshot && !counted.has(snapshot.path)) {
+        counted.add(snapshot.path);
+        total += this.snapshotByteLengths.get(snapshot.path) ?? snapshot.byteLength;
+      }
     }
     return total;
+  }
+
+  private isSnapshotReferenced(path: string): boolean {
+    return this.versions.some((version) => version.snapshot.path === path || version.originSnapshotPath === path);
+  }
+
+  private async forgetSnapshot(path: string | undefined, history?: FileHistory): Promise<void> {
+    if (!path || this.isSnapshotReferenced(path)) return;
+    await rm(path, { force: true }).catch(() => undefined);
+    this.snapshotByteLengths.delete(path);
+    if (history?.origin.snapshot?.path === path) history.origin.snapshot = undefined;
   }
 
   private async evictToLimits(): Promise<number[]> {
@@ -301,18 +315,12 @@ export class BlinkRuntime {
       const version = this.versions.shift();
       if (!version) break;
       evicted.push(version.versionId);
-      await rm(version.snapshot.path, { force: true }).catch(() => undefined);
       const history = this.histories.get(version.fileId);
       if (!history) continue;
       history.versions = history.versions.filter((item) => item.versionId !== version.versionId);
-      if (history.versions.length === 0) {
-        if (version.originSnapshotPath) await rm(version.originSnapshotPath, { force: true }).catch(() => undefined);
-        if (history.origin.snapshot && history.origin.snapshot.path !== version.originSnapshotPath) {
-          await rm(history.origin.snapshot.path, { force: true }).catch(() => undefined);
-        }
-        history.origin.snapshot = undefined;
-        this.histories.delete(version.fileId);
-      }
+      await this.forgetSnapshot(version.snapshot.path, history);
+      await this.forgetSnapshot(version.originSnapshotPath, history);
+      if (history.versions.length === 0) this.histories.delete(version.fileId);
     }
     return evicted;
   }
@@ -705,6 +713,7 @@ export class BlinkRuntime {
       this.versions = [];
       this.pendingSlow = undefined;
       this.recentRequests.clear();
+      this.snapshotByteLengths.clear();
       this.context = undefined;
     })();
     return this.cleanupPromise;

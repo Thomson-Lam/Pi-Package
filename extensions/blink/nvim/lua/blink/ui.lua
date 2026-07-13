@@ -43,6 +43,9 @@ function UI.new(options)
   self.buffers = {}
   self.buffer_state = {}
   self.sinks = {}
+  self.list_buf = nil
+  self.list_win = nil
+  self.list_panel = nil
   return self
 end
 
@@ -80,8 +83,10 @@ function UI:_make_buffer(name, item, lines, has_eol)
   local map_options = { buffer = buf, silent = true }
   vim.keymap.set("n", "]c", function() self:navigate_hunk(buf, 1) end, vim.tbl_extend("force", map_options, { desc = "Blink next change" }))
   vim.keymap.set("n", "[c", function() self:navigate_hunk(buf, -1) end, vim.tbl_extend("force", map_options, { desc = "Blink previous change" }))
-  vim.keymap.set("n", "]f", function() self.send({ type = "navigate_version", payload = { delta = 1 } }) end, vim.tbl_extend("force", map_options, { desc = "Blink next version" }))
-  vim.keymap.set("n", "[f", function() self.send({ type = "navigate_version", payload = { delta = -1 } }) end, vim.tbl_extend("force", map_options, { desc = "Blink previous version" }))
+  vim.keymap.set("n", "]f", function() self.send({ type = "navigate_file", payload = { delta = 1 } }) end, vim.tbl_extend("force", map_options, { desc = "Blink next version for file" }))
+  vim.keymap.set("n", "[f", function() self.send({ type = "navigate_file", payload = { delta = -1 } }) end, vim.tbl_extend("force", map_options, { desc = "Blink previous version for file" }))
+  vim.keymap.set("n", "]n", function() self.send({ type = "navigate_global", payload = { delta = 1 } }) end, vim.tbl_extend("force", map_options, { desc = "Blink next version globally" }))
+  vim.keymap.set("n", "]N", function() self.send({ type = "navigate_global", payload = { delta = -1 } }) end, vim.tbl_extend("force", map_options, { desc = "Blink previous version globally" }))
   vim.keymap.set("n", "<leader>bc", function() self:comment(item, nil) end, vim.tbl_extend("force", map_options, { desc = "Blink comment" }))
   vim.keymap.set("x", "<leader>bc", function()
     local first, last = vim.fn.line("'<"), vim.fn.line("'>")
@@ -105,6 +110,7 @@ function UI:_make_buffer(name, item, lines, has_eol)
       end)
     end, vim.tbl_extend("force", map_options, { desc = "Blink abort agent" }))
   end
+  vim.keymap.set("n", "<leader>bl", function() self.send({ type = "list_changes", payload = {} }) end, vim.tbl_extend("force", map_options, { desc = "Blink list changes" }))
   vim.keymap.set("n", "<leader>bq", function() self.send({ type = "client_closing", payload = {} }); vim.cmd("qa!") end, vim.tbl_extend("force", map_options, { desc = "Blink dismiss review (keep change)" }))
   vim.keymap.set("n", "?", function() self:help(item) end, vim.tbl_extend("force", map_options, { desc = "Blink help" }))
 
@@ -121,6 +127,147 @@ function UI:_calculate(origin_kind, origin_text, version_text)
     return { { 1, 0, 1, count } }
   end
   return vim.diff(origin_text, version_text, { result_type = "indices", algorithm = "histogram" })
+end
+
+function UI:_close_other_buffers_for_file(active_buf, item)
+  local key = item.fileId or item.displayPath
+  if not key then return end
+  for version_id, buf in pairs(vim.deepcopy(self.buffers)) do
+    if buf ~= active_buf and vim.api.nvim_buf_is_valid(buf) then
+      local state = self.buffer_state[buf]
+      local other = state and state.item
+      local other_key = other and (other.fileId or other.displayPath)
+      if other_key == key then
+        self.buffers[version_id] = nil
+        self.buffer_state[buf] = nil
+        pcall(vim.api.nvim_buf_delete, buf, { force = true })
+      end
+    end
+  end
+end
+
+local function change_label(item)
+  local prefix = item.unread and "● " or "  "
+  return string.format("%s%s@%s", prefix, item.displayPath or "file", tostring(item.versionId))
+end
+
+function UI:_close_change_list()
+  if self.list_panel and self.list_panel.close then pcall(function() self.list_panel:close() end) end
+  if self.list_win and vim.api.nvim_win_is_valid(self.list_win) then pcall(vim.api.nvim_win_close, self.list_win, true) end
+  self.list_panel = nil
+  self.list_win = nil
+end
+
+function UI:_snacks()
+  if type(Snacks) == "table" and Snacks.win then return Snacks end
+  local ok, snacks = pcall(require, "snacks")
+  if ok and type(snacks) == "table" and snacks.win then return snacks end
+  return nil
+end
+
+function UI:_change_list_opts(width, height)
+  return {
+    relative = "editor",
+    anchor = "NE",
+    row = 1,
+    col = vim.o.columns,
+    width = width,
+    height = height,
+    focusable = false,
+    border = "rounded",
+    title = " Blink changes ",
+    title_pos = "center",
+    zindex = 40,
+    noautocmd = true,
+  }
+end
+
+function UI:update_change_list(versions, active_id)
+  versions = versions or {}
+  if #versions == 0 then
+    self:_close_change_list()
+    return
+  end
+  if not self.list_buf or not vim.api.nvim_buf_is_valid(self.list_buf) then
+    self.list_buf = vim.api.nvim_create_buf(false, true)
+    vim.api.nvim_buf_set_name(self.list_buf, "blink://changes")
+    vim.bo[self.list_buf].buftype = "nofile"
+    vim.bo[self.list_buf].bufhidden = "hide"
+    vim.bo[self.list_buf].swapfile = false
+    vim.bo[self.list_buf].buflisted = false
+  end
+  local lines = {}
+  local width = 16
+  local active_line
+  for index, item in ipairs(versions) do
+    local line = change_label(item)
+    if item.versionId == active_id then line = "▶ " .. line:sub(3); active_line = index end
+    width = math.max(width, vim.fn.strdisplaywidth(line))
+    table.insert(lines, line)
+  end
+  width = math.min(math.max(width, 16), math.max(16, vim.o.columns - 4))
+  vim.bo[self.list_buf].modifiable = true
+  vim.api.nvim_buf_set_lines(self.list_buf, 0, -1, false, lines)
+  vim.bo[self.list_buf].modifiable = false
+  vim.bo[self.list_buf].readonly = true
+  vim.api.nvim_buf_clear_namespace(self.list_buf, self.namespace, 0, -1)
+  for index, item in ipairs(versions) do
+    local line = lines[index]
+    if item.versionId == active_id then
+      vim.api.nvim_buf_set_extmark(self.list_buf, self.namespace, index - 1, 0, {
+        end_col = #line,
+        hl_group = "SnacksNotifierTitleInfo",
+      })
+    elseif item.unread then
+      vim.api.nvim_buf_set_extmark(self.list_buf, self.namespace, index - 1, 0, {
+        end_col = math.min(3, #line),
+        hl_group = "SnacksNotifierIconInfo",
+      })
+    end
+  end
+  local opts = self:_change_list_opts(width, math.min(#lines, math.max(1, vim.o.lines - 4)))
+  local snacks = self:_snacks()
+  if snacks then
+    if self.list_win and vim.api.nvim_win_is_valid(self.list_win) then pcall(vim.api.nvim_win_close, self.list_win, true); self.list_win = nil end
+    local win_opts = vim.tbl_extend("force", opts, {
+      buf = self.list_buf,
+      enter = false,
+      backdrop = false,
+      minimal = true,
+      fixbuf = true,
+      resize = true,
+      show = true,
+      keys = {},
+      wo = {
+        winhighlight = "Normal:Normal,NormalNC:Normal,NormalFloat:Normal,FloatBorder:Normal,FloatTitle:Normal",
+        winblend = 0,
+      },
+      bo = {
+        buftype = "nofile",
+        bufhidden = "hide",
+        buflisted = false,
+        swapfile = false,
+      },
+    })
+    if self.list_panel and self.list_panel.valid and self.list_panel:valid() then
+      self.list_panel.opts = vim.tbl_deep_extend("force", self.list_panel.opts or {}, win_opts)
+      self.list_panel:update()
+    else
+      self.list_panel = snacks.win(win_opts)
+    end
+    if active_line and self.list_panel and self.list_panel.win then pcall(vim.api.nvim_win_set_cursor, self.list_panel.win, { active_line, 0 }) end
+  else
+    if self.list_panel and self.list_panel.close then pcall(function() self.list_panel:close() end); self.list_panel = nil end
+    local raw_opts = vim.tbl_extend("force", opts, { style = "minimal" })
+    if self.list_win and vim.api.nvim_win_is_valid(self.list_win) then
+      vim.api.nvim_win_set_config(self.list_win, raw_opts)
+    else
+      self.list_win = vim.api.nvim_open_win(self.list_buf, false, raw_opts)
+    end
+    pcall(vim.api.nvim_win_set_option, self.list_win, "winhl", "Normal:Normal,NormalNC:Normal,NormalFloat:Normal,FloatBorder:Normal,FloatTitle:Normal")
+    if active_line then pcall(vim.api.nvim_win_set_cursor, self.list_win, { active_line, 0 }) end
+  end
+  pcall(vim.cmd, "redraw")
 end
 
 function UI:show_version(item)
@@ -144,17 +291,27 @@ function UI:show_version(item)
   else
     self:_set_lines(buf, lines, has_eol)
   end
+  local hunks = self:_calculate(item.originKind, origin_text, version_text)
+  local requested = tonumber(item.firstChangedLine) or 0
+  local first_hunk = hunks[1]
+  local location = requested > 0 and requested or (first_hunk and first_hunk[3] or 1)
+  local active_hunk = #hunks > 0 and 1 or nil
+  local nearest_distance
+  for index, hunk in ipairs(hunks) do
+    local anchor = math.max(1, hunk[3])
+    local distance = math.abs(anchor - location)
+    if not nearest_distance or distance < nearest_distance then active_hunk, nearest_distance = index, distance end
+  end
   self.buffer_state[buf] = {
     item = item,
     origin_lines = split_lines(origin_text),
-    hunks = self:_calculate(item.originKind, origin_text, version_text),
+    hunks = hunks,
+    active_hunk = active_hunk,
     has_eol = has_eol,
   }
   self:render(buf)
   vim.api.nvim_set_current_buf(buf)
-  local requested = tonumber(item.firstChangedLine) or 0
-  local first_hunk = self.buffer_state[buf].hunks[1]
-  local location = requested > 0 and requested or (first_hunk and first_hunk[3] or 1)
+  self:_close_other_buffers_for_file(buf, item)
   local target = math.max(1, math.min(location, vim.api.nvim_buf_line_count(buf)))
   pcall(vim.api.nvim_win_set_cursor, 0, { target, 0 })
   return buf
@@ -186,7 +343,9 @@ end
 function UI:render(buf)
   local data = assert(self.buffer_state[buf])
   vim.api.nvim_buf_clear_namespace(buf, self.namespace, 0, -1)
-  for _, hunk in ipairs(data.hunks) do
+  local line_count = vim.api.nvim_buf_line_count(buf)
+  local counter_hl = vim.fn.hlexists("NoiceVirtualText") == 1 and "NoiceVirtualText" or "DiagnosticVirtualTextInfo"
+  for hunk_index, hunk in ipairs(data.hunks) do
     local origin_start, origin_count, version_start, version_count = hunk[1], hunk[2], hunk[3], hunk[4]
     for line = version_start, version_start + version_count - 1 do
       local row = math.max(0, math.min(line - 1, vim.api.nvim_buf_line_count(buf) - 1))
@@ -201,7 +360,6 @@ function UI:render(buf)
       for line = origin_start, origin_start + origin_count - 1 do
         table.insert(virtual, { { "-" .. (data.origin_lines[line] or ""), "DiffDelete" } })
       end
-      local line_count = vim.api.nvim_buf_line_count(buf)
       local reaches_origin_end = origin_start + origin_count - 1 >= #data.origin_lines
       local after_eof = version_count == 0 and reaches_origin_end and origin_start > line_count
       local anchor = after_eof and (line_count - 1) or math.max(0, math.min(version_start - 1, line_count - 1))
@@ -210,6 +368,12 @@ function UI:render(buf)
         virt_lines_above = not after_eof,
       })
     end
+    local counter_row = math.max(0, math.min(math.max(1, version_start) - 1, line_count - 1))
+    vim.api.nvim_buf_set_extmark(buf, self.namespace, counter_row, 0, {
+      virt_text = { { string.format("[%d/%d]", hunk_index, #data.hunks), hunk_index == data.active_hunk and counter_hl or "Comment" } },
+      virt_text_pos = "right_align",
+      priority = 120,
+    })
   end
   if not data.has_eol then
     local row = math.max(0, vim.api.nvim_buf_line_count(buf) - 1)
@@ -221,18 +385,21 @@ function UI:render(buf)
 end
 
 function UI:navigate_hunk(buf, delta)
-  local hunks = self:get_hunks(buf)
+  local data = self.buffer_state[buf]
+  local hunks = data and data.hunks or {}
   if #hunks == 0 then vim.notify("No Blink changes."); return end
   local current = vim.api.nvim_win_get_cursor(0)[1]
-  local target
+  local target_index
   if delta > 0 then
-    for _, h in ipairs(hunks) do if h[3] > current then target = h[3]; break end end
-    target = target or hunks[1][3]
+    for index, hunk in ipairs(hunks) do if math.max(1, hunk[3]) > current then target_index = index; break end end
+    target_index = target_index or 1
   else
-    for i = #hunks, 1, -1 do if hunks[i][3] < current then target = hunks[i][3]; break end end
-    target = target or hunks[#hunks][3]
+    for index = #hunks, 1, -1 do if math.max(1, hunks[index][3]) < current then target_index = index; break end end
+    target_index = target_index or #hunks
   end
-  vim.api.nvim_win_set_cursor(0, { math.max(1, target), 0 })
+  data.active_hunk = target_index
+  self:render(buf)
+  vim.api.nvim_win_set_cursor(0, { math.max(1, hunks[target_index][3]), 0 })
 end
 
 function UI:comment(item, range)
@@ -269,7 +436,7 @@ end
 
 function UI:help(item)
   local mode = item.transactionId and "Slow" or "Blitz"
-  vim.notify("Blink " .. mode .. ": [c/]c changes, [f/]f versions, <leader>bc comment, <leader>bt TODO, <leader>bq close")
+  vim.notify("Blink " .. mode .. ": [c/]c hunks, [f/]f file versions, ]n/]N all versions, <leader>bl list, <leader>bc comment, <leader>bt TODO, <leader>bq close")
 end
 
 function UI:evict(version_id)

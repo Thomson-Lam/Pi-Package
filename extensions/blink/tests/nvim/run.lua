@@ -18,17 +18,20 @@ state.replace(model, {
     { versionId = 1, fileId = "f", displayPath = "a.txt", snapshotPath = "/tmp/1", originKind = "file", originSnapshotPath = "/tmp/o" },
   },
 })
-eq(vim.tbl_map(function(v) return v.versionId end, model.versions), { 2 }, "snapshot keeps only latest version per file")
-state.set_active(model, 2)
+eq(vim.tbl_map(function(v) return v.versionId end, model.versions), { 1, 2 }, "snapshot sorts versions")
+state.set_active(model, 1)
 state.toggle_pin(model)
-local added, removed = state.add(model, { versionId = 3, fileId = "f", displayPath = "a.txt", snapshotPath = "/tmp/3", originKind = "file", originSnapshotPath = "/tmp/o" }, true)
-eq(added.versionId, 3, "same-file update keeps latest")
-eq(removed, { 2 }, "same-file update removes older visible version")
-eq(model.activeVersionId, 3, "same-file latest replaces pinned older buffer")
-eq(model.by_id[2], nil, "older same-file version hidden from model")
+local added = state.add(model, { versionId = 3, fileId = "f", displayPath = "a.txt", snapshotPath = "/tmp/3", originKind = "file", originSnapshotPath = "/tmp/2" }, true)
+eq(added.versionId, 3, "same-file rolling diff is retained")
+eq(model.activeVersionId, 1, "newer diff does not auto-replace the current view")
+eq(model.by_id[3].unread, true, "newer diff is marked unread")
+state.evict(model, 1)
+eq(model.activeVersionId, 2, "eviction selects nearest")
+eq(vim.tbl_map(function(v) return v.versionId end, model.versions), { 2, 3 })
+eq(state.navigate_file(model, 2, -1).versionId, 3, "same-file navigation wraps")
 state.add(model, { versionId = 4, fileId = "g", displayPath = "b.txt", snapshotPath = "/tmp/4", originKind = "absent" }, true)
-eq(vim.tbl_map(function(v) return v.versionId end, model.versions), { 3, 4 })
-eq(state.navigate_file(model, 3, -1).versionId, 4, "file navigation wraps")
+eq(state.navigate_file(model, 3, 1).versionId, 2, "file navigation stays within current file")
+eq(state.navigate_global(model, 3, 1).versionId, 4, "global navigation crosses files")
 
 local tmp = vim.fn.tempname()
 vim.fn.mkdir(tmp, "p")
@@ -61,6 +64,15 @@ eq(vim.api.nvim_buf_get_lines(buf, 0, -1, false), { "A", "B changed", "C", "D", 
 assert(vim.api.nvim_buf_get_name(buf) ~= version, "working/snapshot path must not be buffer name")
 local hunks = review:get_hunks(buf)
 eq(#hunks, 2, "replacement plus addition hunks")
+local counter_marks = vim.tbl_filter(function(mark)
+  return mark[4].virt_text_pos == "right_align" and mark[4].virt_text ~= nil
+end, vim.api.nvim_buf_get_extmarks(buf, review.namespace, 0, -1, { details = true }))
+eq(#counter_marks, 2, "one right-aligned counter per hunk")
+eq(counter_marks[1][4].virt_text[1][1], "[1/2]")
+eq(counter_marks[2][4].virt_text[1][1], "[2/2]")
+review:navigate_hunk(buf, 1)
+eq(vim.api.nvim_win_get_cursor(0)[1], hunks[2][3], "]c moves to the next counted hunk")
+eq(review.buffer_state[buf].active_hunk, 2, "hunk counter tracks navigation")
 
 local marks_before = #vim.api.nvim_buf_get_extmarks(buf, review.namespace, 0, -1, {})
 review:render(buf)
@@ -99,7 +111,7 @@ local descs = {}
 for _, map in ipairs(maps) do descs[map.lhs] = map.desc end
 local found = {}
 for _, desc in pairs(descs) do found[desc] = true end
-assert(found["Blink next change"] and found["Blink previous change"] and found["Blink comment"], "required described mappings missing: " .. vim.inspect(descs))
+assert(found["Blink next change"] and found["Blink previous change"] and found["Blink next version for file"] and found["Blink next version globally"] and found["Blink list changes"] and found["Blink comment"], "required described mappings missing: " .. vim.inspect(descs))
 
 vim.bo[buf].modifiable = true
 vim.api.nvim_buf_set_lines(buf, 0, 1, false, { "tamper" })

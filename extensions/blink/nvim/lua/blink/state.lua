@@ -15,22 +15,12 @@ local function sort_versions(model)
   table.sort(model.versions, function(a, b) return a.versionId < b.versionId end)
 end
 
-local function file_key(version)
-  return version.fileId or version.displayPath or version.path
-end
-
 function M.replace(model, snapshot)
   model.mode = snapshot.mode or model.mode
   model.versions = {}
   model.by_id = {}
-  local latest_by_file = {}
   for _, version in ipairs(snapshot.versions or {}) do
     local copy = vim.deepcopy(version)
-    local key = file_key(copy) or tostring(copy.versionId)
-    local previous = latest_by_file[key]
-    if not previous or copy.versionId > previous.versionId then latest_by_file[key] = copy end
-  end
-  for _, copy in pairs(latest_by_file) do
     model.by_id[copy.versionId] = copy
     table.insert(model.versions, copy)
   end
@@ -51,33 +41,18 @@ function M.toggle_pin(model)
   return model.pinned
 end
 
-function M.add(model, version, pane_active)
-  if model.by_id[version.versionId] then return model.by_id[version.versionId], {} end
+function M.add(model, version, _pane_active)
+  if model.by_id[version.versionId] then return model.by_id[version.versionId] end
   local copy = vim.deepcopy(version)
-  local key = file_key(copy)
-  local removed = {}
-  local active_removed = false
-  if key then
-    for index = #model.versions, 1, -1 do
-      local existing = model.versions[index]
-      if file_key(existing) == key then
-        if existing.versionId > copy.versionId then return existing, {} end
-        table.insert(removed, existing.versionId)
-        if model.activeVersionId == existing.versionId then active_removed = true end
-        model.by_id[existing.versionId] = nil
-        table.remove(model.versions, index)
-      end
-    end
-  end
   model.by_id[copy.versionId] = copy
   table.insert(model.versions, copy)
   sort_versions(model)
-  if active_removed or (pane_active and not model.pinned) then
+  if not model.activeVersionId then
     M.set_active(model, copy.versionId)
   else
     copy.unread = true
   end
-  return copy, removed
+  return copy
 end
 
 function M.evict(model, version_id)
@@ -95,7 +70,11 @@ function M.evict(model, version_id)
   return model.activeVersionId and model.by_id[model.activeVersionId] or nil
 end
 
-function M.navigate_file(model, current_id, delta)
+local function file_key(version)
+  return version and (version.fileId or version.displayPath or version.path) or nil
+end
+
+function M.navigate_global(model, current_id, delta)
   if #model.versions == 0 then return nil end
   local index = 1
   for i, version in ipairs(model.versions) do
@@ -103,6 +82,24 @@ function M.navigate_file(model, current_id, delta)
   end
   index = ((index - 1 + delta) % #model.versions) + 1
   return M.set_active(model, model.versions[index].versionId)
+end
+
+function M.navigate_file(model, current_id, delta)
+  if #model.versions == 0 then return nil end
+  local current = model.by_id[current_id] or model.versions[#model.versions]
+  local key = file_key(current)
+  if not key then return M.navigate_global(model, current_id, delta) end
+  local candidates = {}
+  local current_index = 1
+  for _, version in ipairs(model.versions) do
+    if file_key(version) == key then
+      table.insert(candidates, version)
+      if version.versionId == current_id then current_index = #candidates end
+    end
+  end
+  if #candidates == 0 then return nil end
+  current_index = ((current_index - 1 + delta) % #candidates) + 1
+  return M.set_active(model, candidates[current_index].versionId)
 end
 
 return M
