@@ -19,7 +19,7 @@ Create or update a single handoff markdown artifact for the current repository.
 
 Examples:
 
-- `/skill:handoff`
+- `/skill:handoff` - if no value is provided, go with `default`
 - `/skill:handoff brief`
 - `/skill:handoff detailed`
 

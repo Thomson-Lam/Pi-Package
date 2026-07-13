@@ -1,4 +1,5 @@
 import type { ExtensionAPI, ExtensionContext } from "@earendil-works/pi-coding-agent";
+import { truncateToWidth } from "@earendil-works/pi-tui";
 import { MAX_DEPTH_DEFAULT, MAX_PARALLEL_DEFAULT, MUON_EXTENSION_NAME, MUON_STATE_ENTRY_TYPE } from "./constants.js";
 import { formatEnabledSkills, normalizeMuonSkillIds, skillIdsToLegacySkillset, skillsetToSkillIds } from "./skills.js";
 import type { MuonPersistedState, MuonState } from "./types.js";
@@ -48,6 +49,25 @@ export function persistMuonState(pi: ExtensionAPI, state: MuonState): void {
 
 export function updateMuonStatus(ctx: ExtensionContext, state: MuonState): void {
   const active = state.activeRunId ? state.runs[state.activeRunId] : undefined;
-  const status = active ? `${active.status}:${active.name}` : `skills:${formatEnabledSkills(state.config.enabledSkills)}`;
-  ctx.ui.setStatus(MUON_EXTENSION_NAME, ctx.ui.theme.fg(active?.status === "failed" ? "error" : "accent", `muon ${status}`));
+
+  if (active) {
+    ctx.ui.setStatus(
+      MUON_EXTENSION_NAME,
+      ctx.ui.theme.fg(active.status === "failed" ? "error" : "accent", `muon ${active.status}:${active.name}`),
+    );
+  } else {
+    ctx.ui.setStatus(MUON_EXTENSION_NAME, undefined);
+  }
+
+  const skills = formatEnabledSkills(state.config.enabledSkills);
+  ctx.ui.setWidget(
+    MUON_EXTENSION_NAME,
+    (_tui, theme) => ({
+      render(width: number) {
+        return [truncateToWidth(theme.fg("accent", `μ: ${skills}`), width)];
+      },
+      invalidate() {},
+    }),
+    { placement: "belowEditor" },
+  );
 }
