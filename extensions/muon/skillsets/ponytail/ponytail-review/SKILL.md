@@ -1,20 +1,18 @@
 ---
 name: ponytail-review
 description: >
-  Code review focused exclusively on over-engineering. Finds what to delete:
-  reinvented standard library, unneeded dependencies, speculative abstractions,
-  dead flexibility. One line per finding: location, what to cut, what replaces
-  it. Use when the user says "review for over-engineering", "what can we
-  delete", "is this over-engineered", "simplify review", or invokes
-  /ponytail-review. Complements correctness-focused review, this one only hunts
-  complexity.
+  Use when reviewing code for over-engineering, unnecessary complexity, bloat,
+  speculative abstractions, hand-rolled standard library, needless dependencies,
+  or when the user says "review for over-engineering", "what can we delete",
+  "is this over-engineered", "simplify review", "audit this codebase", "find
+  bloat", "ponytail-review", "ponytail-audit", "/ponytail-review", or
+  "/ponytail-audit".
 ---
 
 If `using-muon` has not been invoked yet, invoke it first to ensure proper Muon
 skill routing and usage.
 
-Review diffs for unnecessary complexity. One line per finding: location, what to
-cut, what replaces it. The diff's best outcome is getting shorter.
+Review code for unnecessary complexity. Go with diff usually, unless the user specifies full codebase. One line per finding: location, what to cut, what replaces it. The best outcome is getting shorter.
 
 ## Format
 
@@ -31,6 +29,20 @@ Tags:
 - `yagni:` abstraction with one implementation, config nobody sets, layer with
   one caller.
 - `shrink:` same logic, fewer lines. Show the shorter form.
+
+## Repo-wide audit hunt list
+
+When scanning the full codebase, look for:
+
+- deps the stdlib or platform already ships
+- single-implementation interfaces
+- factories with one product
+- wrappers that only delegate
+- files exporting one thing
+- dead flags and config
+- hand-rolled stdlib
+
+Rank repo-wide findings biggest cut first.
 
 ## Examples
 
@@ -53,7 +65,7 @@ considered whether all these validation rules are needed at this stage?"
 
 ## Scoring
 
-End with the only metric that matters: `net: -<N> lines possible.`
+End with the only metric that matters: `net: -<N> lines possible.` For repo-wide audits, include dependency cuts if found: `net: -<N> lines, -<M> deps possible.`
 
 If there is nothing to cut, say `Lean already. Ship.` and stop.
 

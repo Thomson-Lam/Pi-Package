@@ -64,7 +64,8 @@ responsibilities:
 | About to claim a task is complete/fixed/passing                                 | verification-before-completion if available                                           |
 | Receiving review feedback                                                       | receiving-code-review if available                                                    |
 | Creating/editing/verifying skills                                               | writing-skills if available                                                           |
-| Over-engineering review/audit/debt request                                      | ponytail-review/audit/debt if available                                               |
+| Over-engineering review/audit request                                           | ponytail-review if available                                                          |
+| Ponytail shortcut/debt ledger request                                           | ponytail-debt if available                                                            |
 | Large, ambiguous, risky, or multi-step implementation                           | using-superpowers if available                                                        |
 | Superpowers brainstorm/plan starts adding speculative scope                     | yagni-scope-guard if available                                                        |
 

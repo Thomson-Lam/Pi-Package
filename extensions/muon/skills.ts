@@ -22,7 +22,7 @@ export const MUON_SKILL_SOURCES: MuonSkillSource[] = [
     id: "ponytail",
     label: "Ponytail",
     kind: "profile",
-    description: "Muon router plus Ponytail review/audit/debt/gain/help skills.",
+    description: "Muon router plus Ponytail coding, review, and debt skills.",
     paths: () => [MUON_ROUTER_SKILLS_DIR, MUON_PONYTAIL_SKILLS_DIR],
   },
   {

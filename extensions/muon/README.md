@@ -69,10 +69,7 @@ skillsets/muon/
 skillsets/ponytail/
   ponytail
   ponytail-review
-  ponytail-audit
   ponytail-debt
-  ponytail-gain
-  ponytail-help
 
 skillsets/standalone/
   cindex
