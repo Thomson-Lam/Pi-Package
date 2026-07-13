@@ -61,7 +61,7 @@ export class TmuxAdapter {
 
   async create(reviewId: string, mode: "slow" | "blitz", socketPath: string): Promise<string> {
     const result = await this.run([
-      "split-window", "-d", "-h", "-t", this.ownerPane,
+      "split-window", "-d", "-h", "-f", "-l", "70%", "-t", this.ownerPane,
       "-c", this.cwd, "-P", "-F", "#{pane_id}",
       this.paneCommand(reviewId, mode, socketPath),
     ]);

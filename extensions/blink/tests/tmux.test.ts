@@ -7,7 +7,7 @@ test("shellQuote safely isolates spaces and single quotes", () => {
   assert.equal(shellQuote("a b'c"), `'a b'"'"'c'`);
 });
 
-test("creates detached exact-owner right split, marks, verifies, and focuses", async () => {
+test("creates detached full-height wide exact-owner right split, marks, verifies, and focuses", async () => {
   const calls: Array<{ command: string; args: string[] }> = [];
   const exec = async (command: string, args: string[]) => {
     calls.push({ command, args });
@@ -24,7 +24,7 @@ test("creates detached exact-owner right split, marks, verifies, and focuses", a
   const pane = await adapter.create("review-id", "blitz", "/tmp/blink.sock");
   assert.equal(pane, "%9");
   const split = calls.find((call) => call.args.includes("split-window"))!;
-  assert.deepEqual(split.args.slice(0, 9), ["split-window", "-d", "-h", "-t", "%1", "-c", "/tmp/a b", "-P", "-F"]);
+  assert.deepEqual(split.args.slice(0, 12), ["split-window", "-d", "-h", "-f", "-l", "70%", "-t", "%1", "-c", "/tmp/a b", "-P", "-F"]);
   assert.match(split.args.at(-1)!, /BLINK_REVIEW_ID='review-id'/);
   assert.match(split.args.at(-1)!, /exec nvim -S '\/pkg\/review.lua'/);
   assert.equal(calls.filter((call) => call.args[0] === "set-option").length, 3);
