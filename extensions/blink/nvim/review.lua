@@ -118,7 +118,7 @@ local function on_message(message)
       refresh_change_list()
     else
       refresh_change_list()
-      notify("New diff ready: " .. (item.displayPath or "file"))
+      notify(string.format('Edited "%s"', vim.fs.basename(item.displayPath or "file")))
     end
   elseif message.type == "version_evicted" then
     local replacement = State.evict(model, payload.versionId)
