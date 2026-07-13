@@ -1,6 +1,6 @@
 import type { ExtensionAPI, ExtensionContext } from "@earendil-works/pi-coding-agent";
 import { truncateToWidth } from "@earendil-works/pi-tui";
-import { MAX_DEPTH_DEFAULT, MAX_PARALLEL_DEFAULT, MUON_EXTENSION_NAME, MUON_STATE_ENTRY_TYPE } from "./constants.js";
+import { MUON_EXTENSION_NAME, MUON_STATE_ENTRY_TYPE } from "./constants.js";
 import { formatEnabledSkills, normalizeMuonSkillIds, skillIdsToLegacySkillset, skillsetToSkillIds } from "./skills.js";
 import type { MuonPersistedState, MuonState } from "./types.js";
 
@@ -9,13 +9,7 @@ export function createInitialMuonState(): MuonState {
     config: {
       skillset: "off",
       enabledSkills: [],
-      maxParallel: MAX_PARALLEL_DEFAULT,
-      maxDepth: MAX_DEPTH_DEFAULT,
-      defaultAgentScope: "user",
-      worktreeMode: "none",
     },
-    activeRunId: undefined,
-    runs: {},
   };
 }
 
@@ -37,8 +31,6 @@ export function restoreMuonState(ctx: ExtensionContext): MuonState {
     } else if (config?.skillset) {
       state.config.enabledSkills = skillsetToSkillIds(state.config.skillset);
     }
-    state.activeRunId = data.activeRunId ?? state.activeRunId;
-    state.runs = data.runs && typeof data.runs === "object" ? data.runs : state.runs;
   }
   return state;
 }
@@ -48,16 +40,7 @@ export function persistMuonState(pi: ExtensionAPI, state: MuonState): void {
 }
 
 export function updateMuonStatus(ctx: ExtensionContext, state: MuonState): void {
-  const active = state.activeRunId ? state.runs[state.activeRunId] : undefined;
-
-  if (active) {
-    ctx.ui.setStatus(
-      MUON_EXTENSION_NAME,
-      ctx.ui.theme.fg(active.status === "failed" ? "error" : "accent", `muon ${active.status}:${active.name}`),
-    );
-  } else {
-    ctx.ui.setStatus(MUON_EXTENSION_NAME, undefined);
-  }
+  ctx.ui.setStatus(MUON_EXTENSION_NAME, undefined);
 
   const skills = formatEnabledSkills(state.config.enabledSkills);
   ctx.ui.setWidget(

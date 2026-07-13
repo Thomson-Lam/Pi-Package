@@ -1,9 +1,7 @@
 import type { ExtensionAPI, ExtensionContext } from "@earendil-works/pi-coding-agent";
 import { registerMuonCommands } from "./commands.js";
-import { registerMuonTools } from "./tools.js";
 import { createInitialMuonState, persistMuonState, restoreMuonState, updateMuonStatus } from "./state.js";
 import { discoverSuperpowersResources } from "./superpowers.js";
-import { renderMuonSubagentResult } from "./render.js";
 import type { MuonState } from "./types.js";
 
 export default async function muonExtension(pi: ExtensionAPI): Promise<void> {
@@ -17,7 +15,6 @@ export default async function muonExtension(pi: ExtensionAPI): Promise<void> {
   };
 
   registerMuonCommands(pi, { getState, setState });
-  registerMuonTools(pi, { getState, setState });
 
   pi.on("session_start", async (_event, ctx) => {
     state = restoreMuonState(ctx);
@@ -25,6 +22,4 @@ export default async function muonExtension(pi: ExtensionAPI): Promise<void> {
   });
 
   pi.on("resources_discover", async () => discoverSuperpowersResources(state));
-
-
 }
