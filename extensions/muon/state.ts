@@ -7,8 +7,8 @@ import type { MuonPersistedState, MuonState } from "./types.js";
 export function createInitialMuonState(): MuonState {
   return {
     config: {
-      skillset: "off",
-      enabledSkills: [],
+      skillset: "ponytail",
+      enabledSkills: ["ponytail", "cindex", "handoff"],
     },
   };
 }

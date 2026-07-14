@@ -15,7 +15,7 @@ Muon is the control surface for this package's skills. It exposes selected skill
 /muon skills off|auto|ponytail|superpowers  # profile shortcuts
 ```
 
-Default is `off`. Changing skills mutates the system prompt skill ledger and invalidates the provider KV cache for the current conversation. When context is >50%, Muon blocks toggles. At 20%+ context, Muon warns before proceeding and suggests `/tree` or a fresh session.
+By default, Muon is on with the `ponytail` profile plus `cindex` and `handoff` enabled. Existing sessions keep their persisted Muon configuration. Changing skills mutates the system prompt skill ledger and invalidates the provider KV cache for the current conversation. When context is >50%, Muon blocks toggles. At 20%+ context, Muon warns before proceeding and suggests `/tree` or a fresh session.
 
 | Toggle/profile          | Exposed skill roots |
 | ----------------------- | ------------------- |

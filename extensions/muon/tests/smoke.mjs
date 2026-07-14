@@ -74,8 +74,8 @@ assert.match(types, /enabledSkills: MuonSkillId\[\]/);
 assert.doesNotMatch(types, /SuperpowersMode/);
 
 const state = readFileSync(join(muonDir, "state.ts"), "utf8");
-assert.match(state, /skillset: "off"/);
-assert.match(state, /enabledSkills: \[\]/);
+assert.match(state, /skillset: "ponytail"/);
+assert.match(state, /enabledSkills: \["ponytail", "cindex", "handoff"\]/);
 assert.match(state, /superpowersMode/); // backward-compatible restore only
 assert.match(state, /state\.config\.enabledSkills/);
 
@@ -121,6 +121,7 @@ assert.match(skillDump, /\.codex/);
 
 const readme = readFileSync(join(muonDir, "README.md"), "utf8");
 assert.match(readme, /Skills/);
+assert.match(readme, /By default, Muon is on with the `ponytail` profile plus `cindex` and `handoff` enabled/);
 assert.match(readme, /skillsets\/superpowers/);
 assert.match(readme, /off/);
 assert.match(readme, /auto/);
