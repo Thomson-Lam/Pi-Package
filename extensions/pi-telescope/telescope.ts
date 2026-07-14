@@ -9,6 +9,7 @@
  *   - Help panel with Ctrl+G
  *   - Action picker with Ctrl+E
  *   - Copy to clipboard with Ctrl+Y
+ *   - Ctrl+P/N previous/next navigation
  *   - Frecency-aware sorting
  *   - Pattern modifiers: 'exact, ^prefix, suffix$, !negate
  *   - Footer with keybinding hints
@@ -73,7 +74,7 @@ interface TelescopeState {
 
 const HELP_ENTRIES: ModeEntry[] = [
 	{ key: "↑/↓", label: "Navigate", description: "Move through results" },
-	{ key: "^J/K", label: "Navigate", description: "Vim-style up/down" },
+	{ key: "^K/P · ^J/N", label: "Navigate", description: "Vim-style previous/next" },
 	{ key: "Enter", label: "Confirm", description: "Select item(s)" },
 	{ key: "Esc", label: "Close", description: "Close telescope / exit mode" },
 	{ key: "Tab", label: "Multi-select", description: "Toggle item selection" },
@@ -83,7 +84,7 @@ const HELP_ENTRIES: ModeEntry[] = [
 	{ key: "^Y", label: "Copy", description: "Copy item to clipboard" },
 	{ key: "^E", label: "Actions", description: "Provider-specific actions" },
 	{ key: "^U/D", label: "Page up/down", description: "Jump 10 items" },
-	{ key: "^P/N", label: "Preview scroll", description: "Scroll preview up/down" },
+	{ key: "M-P/N", label: "Preview scroll", description: "Scroll preview up/down" },
 	{ key: "^W", label: "Delete word", description: "Delete word backwards" },
 	{ key: "", label: "─── Patterns ───", description: "" },
 	{ key: "'term", label: "Exact", description: "Exact substring match" },
@@ -113,9 +114,10 @@ export async function openTelescope(
 	let tuiRef: { requestRender(): void } | undefined;
 	let actionToRun: (() => Promise<void>) | null = null;
 
-	await ctx.ui.custom<null>((tui, theme, _kb, done) => {
+	await ctx.ui.custom<null>((tui, theme, keybindings, done) => {
 		tuiRef = tui;
 		let currentProvider: TelescopeProvider = provider;
+		currentProvider.bindKeybindings?.(keybindings);
 
 		const state: TelescopeState = {
 			query: options?.initialQuery ?? "",
@@ -128,7 +130,7 @@ export async function openTelescope(
 			previewLines: [],
 			loading: true,
 			selectedKeys: new Set(),
-			showPreview: true,
+			showPreview: provider.showPreviewByDefault ?? true,
 			mode: "search",
 			modeEntries: [],
 			modeFiltered: [],
@@ -306,6 +308,7 @@ export async function openTelescope(
 			const factory = options?.allProviders?.[name];
 			if (!factory) return;
 			currentProvider = factory();
+			currentProvider.bindKeybindings?.(keybindings);
 			state.query = "";
 			state.cursorPos = 0;
 			state.allItems = [];
@@ -314,6 +317,7 @@ export async function openTelescope(
 			state.scrollOffset = 0;
 			state.selectedKeys.clear();
 			state.previewLines = [];
+			state.showPreview = currentProvider.showPreviewByDefault ?? true;
 			state.loading = true;
 			exitMode();
 
@@ -385,12 +389,20 @@ export async function openTelescope(
 			}
 
 			// Navigation
-			if (matchesKey(data, Key.up) || matchesKey(data, Key.ctrl("k"))) {
+			if (
+				matchesKey(data, Key.up) ||
+				matchesKey(data, Key.ctrl("k")) ||
+				matchesKey(data, Key.ctrl("p"))
+			) {
 				if (state.modeSelectedIndex > 0) state.modeSelectedIndex--;
 				tui.requestRender();
 				return true;
 			}
-			if (matchesKey(data, Key.down) || matchesKey(data, Key.ctrl("j"))) {
+			if (
+				matchesKey(data, Key.down) ||
+				matchesKey(data, Key.ctrl("j")) ||
+				matchesKey(data, Key.ctrl("n"))
+			) {
 				if (state.modeSelectedIndex < state.modeFiltered.length - 1)
 					state.modeSelectedIndex++;
 				tui.requestRender();
@@ -547,7 +559,11 @@ export async function openTelescope(
 			}
 
 			// ── Navigation ──
-			if (matchesKey(data, Key.up) || matchesKey(data, Key.ctrl("k"))) {
+			if (
+				matchesKey(data, Key.up) ||
+				matchesKey(data, Key.ctrl("k")) ||
+				matchesKey(data, Key.ctrl("p"))
+			) {
 				if (state.selectedIndex > 0) {
 					state.selectedIndex--;
 					updatePreview();
@@ -556,7 +572,11 @@ export async function openTelescope(
 				return;
 			}
 
-			if (matchesKey(data, Key.down) || matchesKey(data, Key.ctrl("j"))) {
+			if (
+				matchesKey(data, Key.down) ||
+				matchesKey(data, Key.ctrl("j")) ||
+				matchesKey(data, Key.ctrl("n"))
+			) {
 				if (state.selectedIndex < state.filtered.length - 1) {
 					state.selectedIndex++;
 					updatePreview();
@@ -565,13 +585,13 @@ export async function openTelescope(
 				return;
 			}
 
-			// Preview scroll
-			if (matchesKey(data, Key.ctrl("p"))) {
+			// Preview scroll (Ctrl+P/N are reserved for result navigation)
+			if (matchesKey(data, Key.alt("p"))) {
 				state.previewScrollOffset = Math.max(0, state.previewScrollOffset - 5);
 				tui.requestRender();
 				return;
 			}
-			if (matchesKey(data, Key.ctrl("n"))) {
+			if (matchesKey(data, Key.alt("n"))) {
 				state.previewScrollOffset += 5;
 				tui.requestRender();
 				return;

@@ -15,19 +15,28 @@
  *   - Footer with keybinding hints
  *
  * Keybindings:
- *   Ctrl+Space          → open files finder
+ *   Ctrl+Alt+F          → files
+ *   Ctrl+Alt+S/K/C      → sessions / skills / commands
+ *   Ctrl+Alt+B/L        → git branches / git log
+ *   Ctrl+Alt+T/U/A/X    → full tree / user / agent / tool entries
+ *   Ctrl+Alt+Z          → Pi and Telescope help / hotkeys
  *
  * Commands:
  *   /telescope [name]  → open specific provider
  *   /ts [name]         → alias
  *
  * Built-in providers:
- *   files, git-branches, git-log, sessions, skills, commands
+ *   files, git-branches, git-log, sessions, skills, commands,
+ *   tree, tree-user, tree-agent, tree-tools, help
  */
 
-import type { ExtensionAPI, ExtensionContext } from "@mariozechner/pi-coding-agent";
+import type {
+	ExtensionAPI,
+	ExtensionCommandContext,
+	ExtensionContext,
+} from "@mariozechner/pi-coding-agent";
 import { CustomEditor } from "@mariozechner/pi-coding-agent";
-import type { AutocompleteItem, AutocompleteProvider } from "@mariozechner/pi-tui";
+import type { AutocompleteItem, AutocompleteProvider, KeyId } from "@mariozechner/pi-tui";
 import type { TelescopeProvider } from "./types.js";
 import { openTelescope } from "./telescope.js";
 import { filterAndScore } from "./scoring.js";
@@ -40,37 +49,120 @@ import { createGitLogProvider } from "./providers/git-log.js";
 import { createSessionsProvider } from "./providers/sessions.js";
 import { createSkillsProvider } from "./providers/skills.js";
 import { createCommandsProvider } from "./providers/commands.js";
+import { createSessionTreeProvider } from "./providers/session-tree.js";
+import { createHotkeysProvider } from "./providers/hotkeys.js";
 
-type ProviderFactory = (cwd: string, pi: ExtensionAPI) => TelescopeProvider;
+type ProviderFactory = (
+	ctx: ExtensionCommandContext,
+	pi: ExtensionAPI,
+) => TelescopeProvider;
 
 /** Registry of available providers */
 const PROVIDERS: Record<string, ProviderFactory> = {
-	"files":        (cwd) => createFilesProvider(cwd),
-
-	"git-branches": (cwd) => createGitBranchesProvider(cwd),
-	"git-log":      (cwd) => createGitLogProvider(cwd),
+	"files":        (ctx) => createFilesProvider(ctx.cwd),
+	"git-branches": (ctx) => createGitBranchesProvider(ctx.cwd),
+	"git-log":      (ctx) => createGitLogProvider(ctx.cwd),
 	"sessions":     ()    => createSessionsProvider(),
-	"skills":       (cwd) => createSkillsProvider(cwd),
-	"commands":     (_cwd, pi) => createCommandsProvider(pi),
+	"skills":       (ctx) => createSkillsProvider(ctx.cwd),
+	"commands":     (_ctx, pi) => createCommandsProvider(pi),
+	"tree":         (ctx) => createSessionTreeProvider(ctx, "all", async (id) => {
+		await ctx.navigateTree(id, { summarize: false });
+	}),
+	"tree-user":    (ctx) => createSessionTreeProvider(ctx, "user", async (id) => {
+		await ctx.navigateTree(id, { summarize: false });
+	}),
+	"tree-agent":   (ctx) => createSessionTreeProvider(ctx, "agent", async (id) => {
+		await ctx.navigateTree(id, { summarize: false });
+	}),
+	"tree-tools":   (ctx) => createSessionTreeProvider(ctx, "tools", async (id) => {
+		await ctx.navigateTree(id, { summarize: false });
+	}),
+	"help":         () => createHotkeysProvider(PROVIDER_SHORTCUTS),
 };
 
 const PROVIDER_NAMES = Object.keys(PROVIDERS);
 
+const PROVIDER_SHORTCUTS: Record<string, KeyId[]> = {
+	"files": ["ctrl+alt+f"],
+	"sessions": ["ctrl+alt+s"],
+	"skills": ["ctrl+alt+k"],
+	"commands": ["ctrl+alt+c"],
+	"git-branches": ["ctrl+alt+b"],
+	"git-log": ["ctrl+alt+l"],
+	"tree": ["ctrl+alt+t"],
+	"tree-user": ["ctrl+alt+u"],
+	"tree-agent": ["ctrl+alt+a"],
+	"tree-tools": ["ctrl+alt+x"],
+	"help": ["ctrl+alt+z"],
+};
+
 /** Build the allProviders map for Ctrl+R switching */
 function buildAllProviders(
-	cwd: string,
+	ctx: ExtensionCommandContext,
 	pi: ExtensionAPI,
 ): Record<string, () => TelescopeProvider> {
 	const result: Record<string, () => TelescopeProvider> = {};
 	for (const [name, factory] of Object.entries(PROVIDERS)) {
-		result[name] = () => factory(cwd, pi);
+		result[name] = () => factory(ctx, pi);
 	}
 	return result;
 }
 
-async function runTelescope(
+function submitEditorCommand(ctx: ExtensionContext, command: string): void {
+	ctx.ui.setEditorText(command);
+	setTimeout(() => process.stdin.emit("data", "\r"), 0);
+}
+
+function createShortcutProvider(
+	name: string,
+	ctx: ExtensionContext,
+	pi: ExtensionAPI,
+): TelescopeProvider | undefined {
+	const treeModes = {
+		"tree": "all",
+		"tree-user": "user",
+		"tree-agent": "agent",
+		"tree-tools": "tools",
+	} as const;
+	const mode = treeModes[name as keyof typeof treeModes];
+	if (mode) {
+		return createSessionTreeProvider(ctx, mode, async (id) => {
+			submitEditorCommand(ctx, `/telescope-tree-navigate ${id}`);
+		});
+	}
+
+	const factory = PROVIDERS[name];
+	if (!factory) return undefined;
+	// Non-tree providers only use the base ExtensionContext fields.
+	return factory(ctx as ExtensionCommandContext, pi);
+}
+
+function buildShortcutProviders(
+	ctx: ExtensionContext,
+	pi: ExtensionAPI,
+): Record<string, () => TelescopeProvider> {
+	const result: Record<string, () => TelescopeProvider> = {};
+	for (const name of PROVIDER_NAMES) {
+		result[name] = () => createShortcutProvider(name, ctx, pi)!;
+	}
+	return result;
+}
+
+async function runTelescopeShortcut(
 	pi: ExtensionAPI,
 	ctx: ExtensionContext,
+	providerName: string,
+): Promise<void> {
+	const provider = createShortcutProvider(providerName, ctx, pi);
+	if (!provider) return;
+	await openTelescope(provider, ctx, {
+		allProviders: buildShortcutProviders(ctx, pi),
+	});
+}
+
+async function runTelescope(
+	pi: ExtensionAPI,
+	ctx: ExtensionCommandContext,
 	providerName?: string,
 ) {
 	const name = providerName?.trim().toLowerCase() || "files";
@@ -84,9 +176,9 @@ async function runTelescope(
 		return;
 	}
 
-	const provider = factory(ctx.cwd, pi);
+	const provider = factory(ctx, pi);
 	await openTelescope(provider, ctx, {
-		allProviders: buildAllProviders(ctx.cwd, pi),
+		allProviders: buildAllProviders(ctx, pi),
 	});
 }
 
@@ -254,10 +346,20 @@ export default function (pi: ExtensionAPI) {
 		invalidateFileCache();
 	});
 
-	pi.registerShortcut("ctrl+space", {
-		description: "Open Telescope fuzzy finder (files)",
-		handler: (ctx) => runTelescope(pi, ctx, "files"),
-	});
+	for (const [provider, shortcuts] of Object.entries(PROVIDER_SHORTCUTS)) {
+		for (const shortcut of shortcuts) {
+			pi.registerShortcut(shortcut, {
+				description: `Open Telescope (${provider})`,
+				handler: async (ctx) => {
+					if (!ctx.isIdle()) {
+						ctx.ui.notify("Telescope requires Pi to be idle", "warning");
+						return;
+					}
+					await runTelescopeShortcut(pi, ctx, provider);
+				},
+			});
+		}
+	}
 
 	pi.registerCommand("telescope", {
 		description: "Open Telescope fuzzy finder (optional: provider name)",
@@ -279,5 +381,22 @@ export default function (pi: ExtensionAPI) {
 			return items.length > 0 ? items : null;
 		},
 		handler: (args, ctx) => runTelescope(pi, ctx, args?.trim() || undefined),
+	});
+
+	pi.registerCommand("telescope-hotkeys", {
+		description: "Search Pi and Telescope keyboard shortcuts",
+		handler: (_args, ctx) => runTelescope(pi, ctx, "help"),
+	});
+
+	pi.registerCommand("telescope-tree-navigate", {
+		description: "Internal: navigate to a Telescope tree result",
+		handler: async (args, ctx) => {
+			const id = args.trim();
+			if (!id || !ctx.sessionManager.getEntry(id)) {
+				ctx.ui.notify("Telescope tree entry no longer exists", "warning");
+				return;
+			}
+			await ctx.navigateTree(id, { summarize: false });
+		},
 	});
 }

@@ -4,7 +4,11 @@
  * Core interfaces for the fuzzy finder provider system.
  */
 
-import type { ExtensionContext, Theme } from "@mariozechner/pi-coding-agent";
+import type {
+	ExtensionContext,
+	KeybindingsManager,
+	Theme,
+} from "@mariozechner/pi-coding-agent";
 
 /**
  * An action available for a provider's items.
@@ -31,6 +35,10 @@ export interface TelescopeProvider<T = any> {
 	icon: string;
 	/** Short description */
 	description: string;
+	/** Initial preview visibility when this provider is opened. Defaults to true. */
+	showPreviewByDefault?: boolean;
+	/** Receive Pi's effective keybinding manager before load(). */
+	bindKeybindings?(keybindings: KeybindingsManager): void;
 
 	/** Load all items. Called once when the provider is activated. */
 	load(cwd: string): Promise<T[]> | T[];
