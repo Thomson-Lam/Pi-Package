@@ -14,6 +14,7 @@ Purpose: Help agents locate extension entry points, supporting modules, skills, 
 - `extensions/context-inspector/index.ts` — package entrypoint forwarding to `src/index.ts`.
 - `extensions/context-inspector/src/index.ts` — registers `/ctx`, `/reads`, `/ctfresh`, and the context-inspector shortcut; `src/collector.ts`, `src/reconstruct.ts`, and `src/state.ts` collect and rebuild context metadata, while `src/ui/` owns panels and the status widget.
 - `extensions/foundation-mode/index.ts` — toggles Foundation Mode and injects `foundation-prompt.md` before agent turns; `tests/smoke.mjs` covers basic extension behavior.
+- `extensions/feedback-editor/index.ts` and `client.lua` — register `/fb` and `/fpr`, opening a right-side tmux Neovim pane and returning saved text to Pi's chat editor without storing it in a file.
 - `extensions/muon/index.ts` — initializes persisted Muon state, commands, and skill resource discovery.
 - `extensions/muon/commands.ts` — user-facing `/muon` command flows for skill profile toggles, individual skill toggles, skill status, and skill export.
 - `extensions/muon/skills.ts`, `superpowers.ts`, and `skill-dump.ts` — skill discovery/profile control and universal skill export.

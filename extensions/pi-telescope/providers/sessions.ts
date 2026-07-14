@@ -6,14 +6,18 @@
  * matching the session-switch extension style.
  */
 
-import { readFileSync, readdirSync, statSync, existsSync } from "node:fs";
-import { join } from "node:path";
+import { readFileSync, readdirSync, statSync, existsSync, rmSync } from "node:fs";
+import { spawnSync } from "node:child_process";
+import { join, resolve } from "node:path";
 import type { Theme } from "@mariozechner/pi-coding-agent";
-import { parseSessionEntries, getMarkdownTheme } from "@mariozechner/pi-coding-agent";
+import {
+	parseSessionEntries,
+	getMarkdownTheme,
+	SessionManager,
+} from "@mariozechner/pi-coding-agent";
 import type { SessionEntry } from "@mariozechner/pi-coding-agent";
 import { Markdown, truncateToWidth, visibleWidth } from "@mariozechner/pi-tui";
 import type { TelescopeProvider } from "../types.js";
-import { copyToClipboard } from "../clipboard.js";
 
 const SESSION_BASE = join(process.env.HOME ?? "~", ".pi/agent/sessions");
 
@@ -76,7 +80,11 @@ function parseSession(filePath: string): SessionInfo | null {
 			try {
 				const entry = JSON.parse(line);
 				if (entry.type === "session") cwd = entry.cwd ?? "";
-				if (entry.type === "session_info" && entry.name) name = entry.name;
+				if (entry.type === "session_info") {
+					name = typeof entry.name === "string" && entry.name.trim()
+						? entry.name.trim()
+						: undefined;
+				}
 				if (entry.type === "message" && entry.message) {
 					const msg = entry.message;
 					if (msg.role === "user" || msg.role === "assistant") messageCount++;
@@ -289,15 +297,36 @@ function plainPreview(session: SessionInfo, maxLines: number): string[] {
 	return lines.slice(0, maxLines);
 }
 
+// ── Session mutations ─────────────────────────────────
+
+function moveToTrash(path: string): boolean {
+	for (const command of ["trash", "trash-put"]) {
+		const result = spawnSync(command, [path], { stdio: "ignore" });
+		if (result.status === 0) return true;
+	}
+	return false;
+}
+
+function clearSessionCaches(path: string): void {
+	sessionCache.delete(path);
+	messageCache.delete(path);
+}
+
 // ── Provider ─────────────────────────────────────────
 
+export interface SessionsProviderOptions {
+	resume(sessionPath: string): Promise<void>;
+	getActiveSessionPath(): string | undefined;
+}
+
 export function createSessionsProvider(
-	switchSession: (sessionPath: string) => Promise<void>,
+	options: SessionsProviderOptions,
 ): TelescopeProvider<SessionInfo> {
 	return {
 		name: "sessions",
 		icon: "💬",
 		description: "Pi sessions",
+		enterOpensActions: true,
 
 		load() {
 			return findSessions();
@@ -318,7 +347,7 @@ export function createSessionsProvider(
 		},
 
 		async onSelect(item) {
-			await switchSession(item.path);
+			await options.resume(item.path);
 		},
 
 		getPreview(item, maxLines, theme) {
@@ -333,12 +362,71 @@ export function createSessionsProvider(
 		},
 
 		actions: [
-			{ key: "c", label: "Copy path", description: "Copy session file path" },
+			{ key: "o", label: "Resume", description: "Switch to the selected session" },
+			{ key: "r", label: "Rename", description: "Set or clear the session name" },
+			{ key: "d", label: "Delete", description: "Move the session to trash" },
 		],
 
-		onAction(actionKey, items) {
-			if (actionKey === "c") {
-				copyToClipboard(items.map((i) => i.path).join("\n"));
+		async onAction(actionKey, items, ctx) {
+			const item = items[0];
+			if (!item) return;
+
+			if (actionKey === "o") {
+				await options.resume(item.path);
+				return;
+			}
+
+			if (actionKey === "r") {
+				const value = await ctx.ui.editor("Session name (empty to clear)", item.name ?? "");
+				if (value === undefined) return;
+				const name = value.trim();
+				try {
+					SessionManager.open(item.path).appendSessionInfo(name);
+					item.name = name || undefined;
+					clearSessionCaches(item.path);
+					ctx.ui.notify(name ? `Renamed session: ${name}` : "Cleared session name", "info");
+				} catch (error) {
+					ctx.ui.notify(
+						`Rename failed: ${error instanceof Error ? error.message : String(error)}`,
+						"error",
+					);
+				}
+				return;
+			}
+
+			if (actionKey === "d") {
+				const activePath = options.getActiveSessionPath();
+				if (activePath && resolve(activePath) === resolve(item.path)) {
+					ctx.ui.notify("Cannot delete the currently active session", "warning");
+					return;
+				}
+
+				const label = item.name ?? item.firstMessage;
+				const confirmed = await ctx.ui.confirm(
+					"Delete session?",
+					`${label}\n\n${item.path}`,
+				);
+				if (!confirmed) return;
+
+				try {
+					if (!moveToTrash(item.path)) {
+						const permanent = await ctx.ui.confirm(
+							"Trash unavailable",
+							"Permanently delete this session file? This cannot be undone.",
+						);
+						if (!permanent) return;
+						rmSync(item.path);
+						ctx.ui.notify("Session permanently deleted", "warning");
+					} else {
+						ctx.ui.notify("Session moved to trash", "info");
+					}
+					clearSessionCaches(item.path);
+				} catch (error) {
+					ctx.ui.notify(
+						`Delete failed: ${error instanceof Error ? error.message : String(error)}`,
+						"error",
+					);
+				}
 			}
 		},
 	};

@@ -62,8 +62,11 @@ const PROVIDERS: Record<string, ProviderFactory> = {
 	"files":        (ctx) => createFilesProvider(ctx.cwd),
 	"git-branches": (ctx) => createGitBranchesProvider(ctx.cwd),
 	"git-log":      (ctx) => createGitLogProvider(ctx.cwd),
-	"sessions":     (ctx) => createSessionsProvider(async (path) => {
-		await ctx.switchSession(path);
+	"sessions":     (ctx) => createSessionsProvider({
+		resume: async (path) => {
+			await ctx.switchSession(path);
+		},
+		getActiveSessionPath: () => ctx.sessionManager.getSessionFile(),
 	}),
 	"skills":       (ctx) => createSkillsProvider(ctx.cwd),
 	"commands":     (_ctx, pi) => createCommandsProvider(pi),
@@ -127,8 +130,11 @@ function createShortcutProvider(
 		"tree-tools": "tools",
 	} as const;
 	if (name === "sessions") {
-		return createSessionsProvider(async (path) => {
-			submitEditorCommand(ctx, `/telescope-session-switch ${encodeURIComponent(path)}`);
+		return createSessionsProvider({
+			resume: async (path) => {
+				submitEditorCommand(ctx, `/telescope-session-switch ${encodeURIComponent(path)}`);
+			},
+			getActiveSessionPath: () => ctx.sessionManager.getSessionFile(),
 		});
 	}
 
