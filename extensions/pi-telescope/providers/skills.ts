@@ -1,111 +1,51 @@
 /**
  * Pi Skills Provider
  *
- * Browse available skills with SKILL.md preview.
+ * Browse skills currently available in Pi with SKILL.md preview.
  */
 
-import { readFileSync, readdirSync, existsSync } from "node:fs";
-import { join, dirname } from "node:path";
-import type { Theme } from "@mariozechner/pi-coding-agent";
+import { existsSync, readFileSync } from "node:fs";
+import { join } from "node:path";
+import type { ExtensionAPI } from "@mariozechner/pi-coding-agent";
 import type { TelescopeProvider } from "../types.js";
 import { copyToClipboard } from "../clipboard.js";
 
 interface SkillInfo {
 	name: string;
+	command: string;
 	description: string;
 	path: string;
-	scope: "project" | "user" | "global";
+	scope: "project" | "user" | "temporary";
 }
 
-function extractDescription(content: string): string {
-	const lines = content.split("\n");
-	if (lines[0]?.trim() === "---") {
-		const endIdx = lines.indexOf("---", 1);
-		if (endIdx > 0) {
-			for (let i = 1; i < endIdx; i++) {
-				const match = lines[i]?.match(/^description:\s*(.+)/i);
-				if (match) return match[1]!.replace(/^["']|["']$/g, "").trim();
-			}
-		}
-	}
-	for (const line of lines) {
-		const trimmed = line.trim();
-		if (!trimmed || trimmed.startsWith("#") || trimmed === "---") continue;
-		return trimmed.slice(0, 100);
-	}
-	return "(no description)";
+function resolveSkillPath(path: string): string {
+	if (path.endsWith("SKILL.md")) return path;
+	const skillFile = join(path, "SKILL.md");
+	return existsSync(skillFile) ? skillFile : path;
 }
 
-function scanSkillDir(dir: string, scope: SkillInfo["scope"]): SkillInfo[] {
-	const skills: SkillInfo[] = [];
-	if (!existsSync(dir)) return skills;
-
-	try {
-		for (const entry of readdirSync(dir)) {
-			const skillFile = join(dir, entry, "SKILL.md");
-			if (!existsSync(skillFile)) continue;
-			try {
-				const content = readFileSync(skillFile, "utf-8");
-				skills.push({
-					name: entry,
-					description: extractDescription(content),
-					path: skillFile,
-					scope,
-				});
-			} catch {}
-		}
-	} catch {}
-	return skills;
+function loadAvailableSkills(pi: ExtensionAPI): SkillInfo[] {
+	return pi.getCommands()
+		.filter((command) => command.source === "skill")
+		.map((command) => ({
+			name: command.name.startsWith("skill:")
+				? command.name.slice("skill:".length)
+				: command.name,
+			command: command.name,
+			description: command.description ?? "(no description)",
+			path: resolveSkillPath(command.sourceInfo.path),
+			scope: command.sourceInfo.scope,
+		}));
 }
 
-function loadAllSkills(cwd: string): SkillInfo[] {
-	const home = process.env.HOME ?? "~";
-	const all: SkillInfo[] = [];
-
-	// Project skills
-	all.push(...scanSkillDir(join(cwd, ".pi/skills"), "project"));
-	all.push(...scanSkillDir(join(cwd, "skills"), "project"));
-
-	// User skills
-	all.push(...scanSkillDir(join(home, ".pi/agent/skills"), "user"));
-
-	// Package skills
-	try {
-		const piExtSkills = join(dirname(dirname(dirname(import.meta.url.replace("file://", "")))), "skills");
-		all.push(...scanSkillDir(piExtSkills, "global"));
-	} catch {}
-
-	// Global git skills
-	const gitSkillsBase = join(home, ".pi/agent/git");
-	if (existsSync(gitSkillsBase)) {
-		try {
-			for (const org of readdirSync(gitSkillsBase)) {
-				const orgPath = join(gitSkillsBase, org);
-				for (const repo of readdirSync(orgPath)) {
-					const repoPath = join(orgPath, repo);
-					all.push(...scanSkillDir(join(repoPath, "skills"), "global"));
-				}
-			}
-		} catch {}
-	}
-
-	// Deduplicate by name
-	const seen = new Set<string>();
-	return all.filter((s) => {
-		if (seen.has(s.name)) return false;
-		seen.add(s.name);
-		return true;
-	});
-}
-
-export function createSkillsProvider(cwd: string): TelescopeProvider<SkillInfo> {
+export function createSkillsProvider(pi: ExtensionAPI): TelescopeProvider<SkillInfo> {
 	return {
 		name: "skills",
 		icon: "📚",
-		description: "Pi skills",
+		description: "Available Pi skills",
 
 		load() {
-			return loadAllSkills(cwd);
+			return loadAvailableSkills(pi);
 		},
 
 		getSearchText(item) {
@@ -116,12 +56,12 @@ export function createSkillsProvider(cwd: string): TelescopeProvider<SkillInfo> 
 			const scopeBadge =
 				item.scope === "project" ? theme.fg("success", "P")
 				: item.scope === "user" ? theme.fg("warning", "U")
-				: theme.fg("dim", "G");
+				: theme.fg("dim", "T");
 			return `[${scopeBadge}] ${theme.bold(item.name)} ${theme.fg("dim", item.description)}`;
 		},
 
 		async onSelect(item, ctx) {
-			ctx.ui.pasteToEditor(`/skill:${item.name} `);
+			ctx.ui.pasteToEditor(`/${item.command} `);
 		},
 
 		getPreview(item, maxLines) {

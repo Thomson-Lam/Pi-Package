@@ -17,6 +17,7 @@
  * Keybindings:
  *   Ctrl+Alt+F          → files
  *   Ctrl+Alt+S/K/C      → sessions / skills / commands
+ *   Ctrl+Alt+D          → Muon skills
  *   Ctrl+Alt+B/L        → git branches / git log
  *   Ctrl+Alt+T/U/A/X    → full tree / user / agent / tool entries
  *   Ctrl+Alt+Z          → Pi and Telescope help / hotkeys
@@ -26,7 +27,7 @@
  *   /ts [name]         → alias
  *
  * Built-in providers:
- *   files, git-branches, git-log, sessions, skills, commands,
+ *   files, git-branches, git-log, sessions, skills, muon-skills, commands,
  *   tree, tree-user, tree-agent, tree-tools, help
  */
 
@@ -48,6 +49,7 @@ import { createGitBranchesProvider } from "./providers/git-branches.js";
 import { createGitLogProvider } from "./providers/git-log.js";
 import { createSessionsProvider } from "./providers/sessions.js";
 import { createSkillsProvider } from "./providers/skills.js";
+import { createMuonSkillsProvider } from "./providers/muon-skills.js";
 import { createCommandsProvider } from "./providers/commands.js";
 import { createSessionTreeProvider } from "./providers/session-tree.js";
 import { createHotkeysProvider } from "./providers/hotkeys.js";
@@ -68,7 +70,8 @@ const PROVIDERS: Record<string, ProviderFactory> = {
 		},
 		getActiveSessionPath: () => ctx.sessionManager.getSessionFile(),
 	}),
-	"skills":       (ctx) => createSkillsProvider(ctx.cwd),
+	"skills":       (_ctx, pi) => createSkillsProvider(pi),
+	"muon-skills":  () => createMuonSkillsProvider(),
 	"commands":     (_ctx, pi) => createCommandsProvider(pi),
 	"tree":         (ctx, pi) => createSessionTreeProvider(ctx, "all", async (id) => {
 		await ctx.navigateTree(id, { summarize: false });
@@ -91,6 +94,7 @@ const PROVIDER_SHORTCUTS: Record<string, KeyId[]> = {
 	"files": ["ctrl+alt+f"],
 	"sessions": ["ctrl+alt+s"],
 	"skills": ["ctrl+alt+k"],
+	"muon-skills": ["ctrl+alt+d"],
 	"commands": ["ctrl+alt+c"],
 	"git-branches": ["ctrl+alt+b"],
 	"git-log": ["ctrl+alt+l"],
