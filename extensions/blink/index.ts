@@ -22,8 +22,8 @@ function validMode(value: unknown): value is BlinkMode {
   return value === "off" || value === "slow" || value === "blitz";
 }
 
-function restoreMode(ctx: ExtensionContext): BlinkMode {
-  let mode: BlinkMode = "off";
+function restoreMode(ctx: ExtensionContext, fallback: BlinkMode): BlinkMode {
+  let mode: BlinkMode = fallback;
   for (const entry of ctx.sessionManager.getBranch()) {
     if (entry.type !== "custom" || entry.customType !== MODE_ENTRY || !entry.data) continue;
     const candidate = (entry.data as { mode?: unknown }).mode;
@@ -167,11 +167,12 @@ export default function blinkExtension(pi: ExtensionAPI): void {
     currentCtx = ctx;
     await closeRuntime();
     activeRunMode = undefined;
+    const defaultMode: BlinkMode = ctx.mode === "tui" && process.env.TMUX && process.env.TMUX_PANE ? "blitz" : "off";
     if (event.reason === "new" || event.reason === "fork") {
-      selectedMode = "off";
-      pi.appendEntry(MODE_ENTRY, { mode: "off" });
+      selectedMode = defaultMode;
+      pi.appendEntry(MODE_ENTRY, { mode: selectedMode });
     } else {
-      selectedMode = restoreMode(ctx);
+      selectedMode = restoreMode(ctx, defaultMode);
     }
     if (selectedMode !== "off" && ctx.mode === "tui" && process.env.TMUX && process.env.TMUX_PANE) createRuntime(ctx, selectedMode);
     updateStatus(ctx);

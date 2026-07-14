@@ -62,21 +62,23 @@ const PROVIDERS: Record<string, ProviderFactory> = {
 	"files":        (ctx) => createFilesProvider(ctx.cwd),
 	"git-branches": (ctx) => createGitBranchesProvider(ctx.cwd),
 	"git-log":      (ctx) => createGitLogProvider(ctx.cwd),
-	"sessions":     ()    => createSessionsProvider(),
+	"sessions":     (ctx) => createSessionsProvider(async (path) => {
+		await ctx.switchSession(path);
+	}),
 	"skills":       (ctx) => createSkillsProvider(ctx.cwd),
 	"commands":     (_ctx, pi) => createCommandsProvider(pi),
-	"tree":         (ctx) => createSessionTreeProvider(ctx, "all", async (id) => {
+	"tree":         (ctx, pi) => createSessionTreeProvider(ctx, "all", async (id) => {
 		await ctx.navigateTree(id, { summarize: false });
-	}),
-	"tree-user":    (ctx) => createSessionTreeProvider(ctx, "user", async (id) => {
+	}, (id, label) => pi.setLabel(id, label)),
+	"tree-user":    (ctx, pi) => createSessionTreeProvider(ctx, "user", async (id) => {
 		await ctx.navigateTree(id, { summarize: false });
-	}),
-	"tree-agent":   (ctx) => createSessionTreeProvider(ctx, "agent", async (id) => {
+	}, (id, label) => pi.setLabel(id, label)),
+	"tree-agent":   (ctx, pi) => createSessionTreeProvider(ctx, "agent", async (id) => {
 		await ctx.navigateTree(id, { summarize: false });
-	}),
-	"tree-tools":   (ctx) => createSessionTreeProvider(ctx, "tools", async (id) => {
+	}, (id, label) => pi.setLabel(id, label)),
+	"tree-tools":   (ctx, pi) => createSessionTreeProvider(ctx, "tools", async (id) => {
 		await ctx.navigateTree(id, { summarize: false });
-	}),
+	}, (id, label) => pi.setLabel(id, label)),
 	"help":         () => createHotkeysProvider(PROVIDER_SHORTCUTS),
 };
 
@@ -124,11 +126,22 @@ function createShortcutProvider(
 		"tree-agent": "agent",
 		"tree-tools": "tools",
 	} as const;
+	if (name === "sessions") {
+		return createSessionsProvider(async (path) => {
+			submitEditorCommand(ctx, `/telescope-session-switch ${encodeURIComponent(path)}`);
+		});
+	}
+
 	const mode = treeModes[name as keyof typeof treeModes];
 	if (mode) {
-		return createSessionTreeProvider(ctx, mode, async (id) => {
-			submitEditorCommand(ctx, `/telescope-tree-navigate ${id}`);
-		});
+		return createSessionTreeProvider(
+			ctx,
+			mode,
+			async (id) => {
+				submitEditorCommand(ctx, `/telescope-tree-navigate ${id}`);
+			},
+			(id, label) => pi.setLabel(id, label),
+		);
 	}
 
 	const factory = PROVIDERS[name];
@@ -397,6 +410,24 @@ export default function (pi: ExtensionAPI) {
 				return;
 			}
 			await ctx.navigateTree(id, { summarize: false });
+		},
+	});
+
+	pi.registerCommand("telescope-session-switch", {
+		description: "Internal: switch to a Telescope session result",
+		handler: async (args, ctx) => {
+			let path: string;
+			try {
+				path = decodeURIComponent(args.trim());
+			} catch {
+				ctx.ui.notify("Invalid Telescope session path", "warning");
+				return;
+			}
+			if (!path) {
+				ctx.ui.notify("Missing Telescope session path", "warning");
+				return;
+			}
+			await ctx.switchSession(path);
 		},
 	});
 }

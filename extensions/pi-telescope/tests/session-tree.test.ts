@@ -58,6 +58,7 @@ const tree: any[] = [{
 	children: [{
 		entry: agentA,
 		label: "inspection",
+		labelTimestamp: "2026-07-13T05:00:00.000Z",
 		children: [
 			{ entry: readResult, children: [{ entry: userB, children: [{ entry: agentB, children: [] }] }] },
 			{ entry: alternateUser, children: [{ entry: toolOnlyAgent, children: [{ entry: bashResult, children: [] }] }] },
@@ -81,6 +82,7 @@ test("agent mode includes text responses but excludes tool-only assistant messag
 	const items = collectSessionTreeItems(sessionManager, "agent");
 	assert.deepEqual(items.map((item) => item.entryId), ["agent-a", "agent-b"]);
 	assert.match(items[0]!.searchText, /inspection/);
+	assert.equal(items[0]!.labelTimestamp, "2026-07-13T05:00:00.000Z");
 });
 
 test("tool mode extracts calls, searches arguments and results, and navigates through results", () => {

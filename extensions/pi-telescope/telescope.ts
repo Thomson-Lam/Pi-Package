@@ -22,7 +22,12 @@ import {
 	visibleWidth,
 	truncateToWidth,
 } from "@mariozechner/pi-tui";
-import type { TelescopeProvider, ScoredItem, TelescopeOptions } from "./types.js";
+import type {
+	ProviderKeyHint,
+	TelescopeProvider,
+	ScoredItem,
+	TelescopeOptions,
+} from "./types.js";
 import { filterAndScore } from "./scoring.js";
 import { filePreview } from "./preview.js";
 import { copyToClipboard } from "./clipboard.js";
@@ -62,6 +67,8 @@ interface TelescopeState {
 	modeScrollOffset: number;
 	modeQuery: string;
 	modeCursorPos: number;
+	/** Explicit items for an Enter-opened action menu; null uses normal selection. */
+	modeActionItems: any[] | null;
 	// Saved state when entering a mode
 	savedQuery: string;
 	savedCursorPos: number;
@@ -138,6 +145,7 @@ export async function openTelescope(
 			modeScrollOffset: 0,
 			modeQuery: "",
 			modeCursorPos: 0,
+			modeActionItems: null,
 			savedQuery: "",
 			savedCursorPos: 0,
 			flashMessage: "",
@@ -146,6 +154,7 @@ export async function openTelescope(
 
 		let dynamicTimer: ReturnType<typeof setTimeout> | null = null;
 		let frecencyMap: Map<string, number> = new Map();
+		let providerActionPending = false;
 
 		// ── Flash message ────────────────────────────
 
@@ -286,6 +295,7 @@ export async function openTelescope(
 			state.mode = "search";
 			state.query = state.savedQuery;
 			state.cursorPos = state.savedCursorPos;
+			state.modeActionItems = null;
 		};
 
 		const filterModeEntries = () => {
@@ -356,6 +366,25 @@ export async function openTelescope(
 		const handleModeInput = (data: string): boolean => {
 			if (state.mode === "search") return false;
 
+			// Tree action menus use Vim-style navigation. Keep these keys scoped
+			// to the action picker so j/k/h remain searchable characters normally.
+			if (state.mode === "action-picker" && (data === "h" || data === "H")) {
+				exitMode();
+				tui.requestRender();
+				return true;
+			}
+			if (state.mode === "action-picker" && (data === "k" || data === "K")) {
+				if (state.modeSelectedIndex > 0) state.modeSelectedIndex--;
+				tui.requestRender();
+				return true;
+			}
+			if (state.mode === "action-picker" && (data === "j" || data === "J")) {
+				if (state.modeSelectedIndex < state.modeFiltered.length - 1)
+					state.modeSelectedIndex++;
+				tui.requestRender();
+				return true;
+			}
+
 			if (matchesKey(data, Key.escape)) {
 				exitMode();
 				tui.requestRender();
@@ -376,7 +405,7 @@ export async function openTelescope(
 						switchProvider(entry.key);
 						tui.requestRender();
 					} else if (state.mode === "action-picker") {
-						const items = getSelectedItems();
+						const items = state.modeActionItems ?? getSelectedItems();
 						const p = currentProvider;
 						const ak = entry.key;
 						actionToRun = async () => {
@@ -449,8 +478,65 @@ export async function openTelescope(
 				return;
 			}
 
-			// ── Enter — confirm selection ──
+			// ── Tree labels ──
+			if (matchesKey(data, Key.shift("l")) && currentProvider.editLabel) {
+				const item = getCurrentItem();
+				if (item && !providerActionPending) {
+					const selectedKey = getItemKey(item);
+					providerActionPending = true;
+					void (async () => {
+						try {
+							await currentProvider.editLabel!(item, ctx);
+							state.allItems = await currentProvider.load(ctx.cwd);
+							state.filtered = filterAndScore(
+								state.allItems,
+								state.query,
+								(candidate) => currentProvider.getSearchText(candidate),
+								5000,
+								frecencyMap,
+								currentProvider.getFrecencyKey?.bind(currentProvider),
+							);
+							const preservedIndex = state.filtered.findIndex(
+								(scored) => getItemKey(scored.item) === selectedKey,
+							);
+							state.selectedIndex = preservedIndex >= 0
+								? preservedIndex
+								: Math.min(state.selectedIndex, Math.max(0, state.filtered.length - 1));
+							updatePreview();
+						} finally {
+							providerActionPending = false;
+							tui.requestRender();
+						}
+					})();
+				}
+				return;
+			}
+
+			if (matchesKey(data, Key.shift("t")) && currentProvider.toggleLabelTimestamps) {
+				currentProvider.toggleLabelTimestamps();
+				tui.requestRender();
+				return;
+			}
+
+			// ── Enter — confirm selection or open provider actions ──
 			if (matchesKey(data, Key.enter)) {
+				const actions = currentProvider.actions;
+				if (
+					currentProvider.enterOpensActions &&
+					getCurrentItem() &&
+					actions &&
+					actions.length > 0
+				) {
+					enterMode("action-picker", actions.map((action) => ({
+						key: action.key,
+						label: action.label,
+						description: action.description ?? "",
+					})));
+					state.modeActionItems = [getCurrentItem()];
+					tui.requestRender();
+					return;
+				}
+
 				const items = getSelectedItems();
 				if (items.length > 0) {
 					const p = currentProvider;
@@ -543,6 +629,7 @@ export async function openTelescope(
 
 			// ── Ctrl+E — action picker ──
 			if (matchesKey(data, Key.ctrl("e"))) {
+				state.modeActionItems = null;
 				const actions = currentProvider.actions;
 				if (actions && actions.length > 0) {
 					const entries: ModeEntry[] = actions.map((a) => ({
@@ -809,7 +896,12 @@ export async function openTelescope(
 			}
 
 			// ── Hints row ──
-			const hintsContent = buildHints(th, innerWidth - 2, state.mode);
+			const hintsContent = buildHints(
+				th,
+				innerWidth - 2,
+				state.mode,
+				currentProvider.getKeyHints?.() ?? [],
+			);
 			lines.push(bdr("│") + " " + padRight(hintsContent, innerWidth - 2) + " " + bdr("│"));
 
 			// ── Bottom border ──
@@ -853,13 +945,19 @@ export async function openTelescope(
 
 // ── Hint bar ───────────────────────────────────────
 
-function buildHints(th: Theme, totalWidth: number, mode: Mode): string {
+function buildHints(
+	th: Theme,
+	totalWidth: number,
+	mode: Mode,
+	providerHints: ProviderKeyHint[],
+): string {
 	const acc = (s: string) => th.fg("accent", s);
 	const dim = (s: string) => th.fg("dim", s);
 
 	const hints =
 		mode === "search"
 			? [
+					...providerHints.map((hint) => acc(hint.key) + dim(` ${hint.label}`)),
 					acc("⇥") + dim(" sel"),
 					acc("^R") + dim(" switch"),
 					acc("^O") + dim(" preview"),
@@ -867,7 +965,13 @@ function buildHints(th: Theme, totalWidth: number, mode: Mode): string {
 					acc("^Y") + dim(" copy"),
 					acc("^G") + dim(" help"),
 				]
-			: [acc("Enter") + dim(" confirm"), acc("Esc") + dim(" back")];
+			: mode === "action-picker"
+				? [
+						acc("j/k") + dim(" move"),
+						acc("h") + dim(" back"),
+						acc("Enter") + dim(" run"),
+					]
+				: [acc("Enter") + dim(" confirm"), acc("Esc") + dim(" back")];
 
 	const content = hints.join(dim("  ·  "));
 	return truncateToWidth(content, totalWidth);

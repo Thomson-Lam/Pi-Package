@@ -13,6 +13,11 @@ import type {
 /**
  * An action available for a provider's items.
  */
+export interface ProviderKeyHint {
+	key: string;
+	label: string;
+}
+
 export interface ProviderAction {
 	/** Key to trigger this action (single char, e.g. "o") */
 	key: string;
@@ -37,6 +42,8 @@ export interface TelescopeProvider<T = any> {
 	description: string;
 	/** Initial preview visibility when this provider is opened. Defaults to true. */
 	showPreviewByDefault?: boolean;
+	/** Open the provider action picker instead of selecting immediately on Enter. */
+	enterOpensActions?: boolean;
 	/** Receive Pi's effective keybinding manager before load(). */
 	bindKeybindings?(keybindings: KeybindingsManager): void;
 
@@ -73,6 +80,13 @@ export interface TelescopeProvider<T = any> {
 
 	/** Handle a custom action. actionKey matches ProviderAction.key. */
 	onAction?(actionKey: string, items: T[], ctx: ExtensionContext): void | Promise<void>;
+
+	/** Edit/clear the selected item's label (tree providers). */
+	editLabel?(item: T, ctx: ExtensionContext): void | Promise<void>;
+	/** Toggle display of label timestamps (tree providers). */
+	toggleLabelTimestamps?(): void;
+	/** Additional provider-specific hints shown in Telescope's hint bar. */
+	getKeyHints?(): ProviderKeyHint[];
 
 	/** Key for frecency tracking. Defaults to getSearchText if not provided. */
 	getFrecencyKey?(item: T): string;

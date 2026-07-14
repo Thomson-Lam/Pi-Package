@@ -291,7 +291,9 @@ function plainPreview(session: SessionInfo, maxLines: number): string[] {
 
 // ── Provider ─────────────────────────────────────────
 
-export function createSessionsProvider(): TelescopeProvider<SessionInfo> {
+export function createSessionsProvider(
+	switchSession: (sessionPath: string) => Promise<void>,
+): TelescopeProvider<SessionInfo> {
 	return {
 		name: "sessions",
 		icon: "💬",
@@ -315,9 +317,8 @@ export function createSessionsProvider(): TelescopeProvider<SessionInfo> {
 			return `${truncated}  ${time} ${msgs}`;
 		},
 
-		async onSelect(item, ctx) {
-			ctx.ui.setEditorText(`/resume ${item.path}`);
-			setTimeout(() => process.stdin.emit("data", "\r"), 0);
+		async onSelect(item) {
+			await switchSession(item.path);
 		},
 
 		getPreview(item, maxLines, theme) {

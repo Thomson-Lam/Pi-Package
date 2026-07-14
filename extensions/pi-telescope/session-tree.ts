@@ -21,6 +21,7 @@ export interface SessionTreeSearchItem {
 	depth: number;
 	active: boolean;
 	label?: string;
+	labelTimestamp?: string;
 	title: string;
 	searchText: string;
 	previewText: string;
@@ -33,6 +34,7 @@ interface ToolResultInfo {
 	entry: SessionEntry;
 	text: string;
 	label?: string;
+	labelTimestamp?: string;
 }
 
 function extractText(content: unknown): string {
@@ -109,6 +111,7 @@ export function collectSessionTreeItems(
 			entry,
 			text: extractText(entry.message.content),
 			label: node.label,
+			labelTimestamp: node.labelTimestamp,
 		});
 	}
 
@@ -123,6 +126,7 @@ export function collectSessionTreeItems(
 			depth,
 			active: activeIds.has(entry.id),
 			label: node.label,
+			labelTimestamp: node.labelTimestamp,
 		};
 
 		if (entry.type === "message") {
@@ -178,6 +182,7 @@ export function collectSessionTreeItems(
 							navigationTargetId: result?.entry.id ?? entry.id,
 							active: activeIds.has(result?.entry.id ?? entry.id),
 							label: result?.label ?? node.label,
+							labelTimestamp: result?.labelTimestamp ?? node.labelTimestamp,
 							title: `${call.name} ${oneLine(argsText, 110)}`.trim(),
 							searchText: `${call.name} ${argsText} ${resultText}`,
 							previewText: [
