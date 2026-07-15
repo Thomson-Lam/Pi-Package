@@ -84,6 +84,12 @@ function M.navigate_global(model, current_id, delta)
   return M.set_active(model, model.versions[index].versionId)
 end
 
+function M.navigate_edge(model, edge)
+  if #model.versions == 0 then return nil end
+  local version = edge == "first" and model.versions[1] or model.versions[#model.versions]
+  return M.set_active(model, version.versionId)
+end
+
 function M.navigate_file(model, current_id, delta)
   if #model.versions == 0 then return nil end
   local current = model.by_id[current_id] or model.versions[#model.versions]

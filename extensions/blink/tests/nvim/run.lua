@@ -32,6 +32,9 @@ eq(state.navigate_file(model, 2, -1).versionId, 3, "same-file navigation wraps")
 state.add(model, { versionId = 4, fileId = "g", displayPath = "b.txt", snapshotPath = "/tmp/4", originKind = "absent" }, true)
 eq(state.navigate_file(model, 3, 1).versionId, 2, "file navigation stays within current file")
 eq(state.navigate_global(model, 3, 1).versionId, 4, "global navigation crosses files")
+eq(state.navigate_global(model, 2, 2).versionId, 4, "global navigation supports counted deltas")
+eq(state.navigate_edge(model, "first").versionId, 2, "first edge selects oldest retained change")
+eq(state.navigate_edge(model, "last").versionId, 4, "last edge selects latest retained change")
 
 local tmp = vim.fn.tempname()
 vim.fn.mkdir(tmp, "p")
@@ -111,7 +114,23 @@ local descs = {}
 for _, map in ipairs(maps) do descs[map.lhs] = map.desc end
 local found = {}
 for _, desc in pairs(descs) do found[desc] = true end
-assert(found["Blink next change"] and found["Blink previous change"] and found["Blink next version for file"] and found["Blink next version globally"] and found["Blink list changes"] and found["Blink comment"], "required described mappings missing: " .. vim.inspect(descs))
+assert(found["Blink next change"] and found["Blink previous change"] and found["Blink next version for file"] and found["Blink next version globally"] and found["Blink first version"] and found["Blink latest version"] and found["Blink list changes"] and found["Blink toggle change panel"] and found["Blink comment"], "required described mappings missing: " .. vim.inspect(descs))
+
+local panel_versions = {}
+for version_id = 1, 12 do
+  table.insert(panel_versions, { versionId = version_id, displayPath = "file" .. version_id .. ".txt", unread = version_id > 6 })
+end
+review:update_change_list(panel_versions, 8)
+eq(vim.api.nvim_buf_line_count(review.list_buf), 9, "change panel shows seven items plus older/newer indicators")
+eq(vim.api.nvim_buf_get_lines(review.list_buf, 0, 1, false)[1], "↑ 4 older", "panel reports omitted older changes")
+eq(vim.api.nvim_buf_get_lines(review.list_buf, -2, -1, false)[1], "↓ 1 newer", "panel reports omitted newer changes")
+review:toggle_change_list()
+eq(review.list_visible, false, "change panel can be hidden")
+review:update_change_list(panel_versions, 9)
+eq(review.list_visible, false, "incoming changes do not reopen a hidden panel")
+review:toggle_change_list()
+eq(review.list_visible, true, "change panel can be reopened")
+eq(vim.api.nvim_buf_line_count(review.list_buf), 8, "reopened panel restores seven items plus its older indicator")
 
 vim.bo[buf].modifiable = true
 vim.api.nvim_buf_set_lines(buf, 0, 1, false, { "tamper" })

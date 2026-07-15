@@ -68,6 +68,11 @@ local function send(action)
     if selected then ui:show_version(selected); refresh_change_list() end
     return
   end
+  if action.type == "navigate_edge" then
+    local selected = State.navigate_edge(model, action.payload.edge)
+    if selected then ui:show_version(selected); refresh_change_list() end
+    return
+  end
   if action.type == "list_changes" then
     if #model.versions == 0 then notify("No Blink changes."); return end
     vim.ui.select(model.versions, {

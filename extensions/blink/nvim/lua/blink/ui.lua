@@ -46,6 +46,9 @@ function UI.new(options)
   self.list_buf = nil
   self.list_win = nil
   self.list_panel = nil
+  self.list_visible = true
+  self.list_versions = {}
+  self.list_active_id = nil
   return self
 end
 
@@ -85,8 +88,10 @@ function UI:_make_buffer(name, item, lines, has_eol)
   vim.keymap.set("n", "[c", function() self:navigate_hunk(buf, -1) end, vim.tbl_extend("force", map_options, { desc = "Blink previous change" }))
   vim.keymap.set("n", "]f", function() self.send({ type = "navigate_file", payload = { delta = 1 } }) end, vim.tbl_extend("force", map_options, { desc = "Blink next version for file" }))
   vim.keymap.set("n", "[f", function() self.send({ type = "navigate_file", payload = { delta = -1 } }) end, vim.tbl_extend("force", map_options, { desc = "Blink previous version for file" }))
-  vim.keymap.set("n", "]n", function() self.send({ type = "navigate_global", payload = { delta = 1 } }) end, vim.tbl_extend("force", map_options, { desc = "Blink next version globally" }))
-  vim.keymap.set("n", "]N", function() self.send({ type = "navigate_global", payload = { delta = -1 } }) end, vim.tbl_extend("force", map_options, { desc = "Blink previous version globally" }))
+  vim.keymap.set("n", "]n", function() self.send({ type = "navigate_global", payload = { delta = vim.v.count1 } }) end, vim.tbl_extend("force", map_options, { desc = "Blink next version globally" }))
+  vim.keymap.set("n", "[n", function() self.send({ type = "navigate_global", payload = { delta = -vim.v.count1 } }) end, vim.tbl_extend("force", map_options, { desc = "Blink previous version globally" }))
+  vim.keymap.set("n", "]N", function() self.send({ type = "navigate_edge", payload = { edge = "last" } }) end, vim.tbl_extend("force", map_options, { desc = "Blink latest version" }))
+  vim.keymap.set("n", "[N", function() self.send({ type = "navigate_edge", payload = { edge = "first" } }) end, vim.tbl_extend("force", map_options, { desc = "Blink first version" }))
   vim.keymap.set("n", "<leader>bc", function() self:comment(item, nil) end, vim.tbl_extend("force", map_options, { desc = "Blink comment" }))
   vim.keymap.set("x", "<leader>bc", function()
     local first, last = vim.fn.line("'<"), vim.fn.line("'>")
@@ -111,6 +116,7 @@ function UI:_make_buffer(name, item, lines, has_eol)
     end, vim.tbl_extend("force", map_options, { desc = "Blink abort agent" }))
   end
   vim.keymap.set("n", "<leader>bl", function() self.send({ type = "list_changes", payload = {} }) end, vim.tbl_extend("force", map_options, { desc = "Blink list changes" }))
+  vim.keymap.set("n", "<leader>bh", function() self:toggle_change_list() end, vim.tbl_extend("force", map_options, { desc = "Blink toggle change panel" }))
   vim.keymap.set("n", "<leader>bq", function() self.send({ type = "client_closing", payload = {} }); vim.cmd("qa!") end, vim.tbl_extend("force", map_options, { desc = "Blink dismiss review (keep change)" }))
   vim.keymap.set("n", "?", function() self:help(item) end, vim.tbl_extend("force", map_options, { desc = "Blink help" }))
 
@@ -158,6 +164,15 @@ function UI:_close_change_list()
   self.list_win = nil
 end
 
+function UI:toggle_change_list()
+  self.list_visible = not self.list_visible
+  if self.list_visible then
+    self:update_change_list(self.list_versions, self.list_active_id)
+  else
+    self:_close_change_list()
+  end
+end
+
 function UI:_snacks()
   if type(Snacks) == "table" and Snacks.win then return Snacks end
   local ok, snacks = pcall(require, "snacks")
@@ -184,7 +199,9 @@ end
 
 function UI:update_change_list(versions, active_id)
   versions = versions or {}
-  if #versions == 0 then
+  self.list_versions = versions
+  self.list_active_id = active_id
+  if #versions == 0 or not self.list_visible then
     self:_close_change_list()
     return
   end
@@ -196,30 +213,46 @@ function UI:update_change_list(versions, active_id)
     vim.bo[self.list_buf].swapfile = false
     vim.bo[self.list_buf].buflisted = false
   end
+  local active_index = #versions
+  for index, item in ipairs(versions) do
+    if item.versionId == active_id then active_index = index; break end
+  end
+  local first = math.max(1, math.min(active_index - 3, #versions - 6))
+  local last = math.min(#versions, first + 6)
   local lines = {}
   local width = 16
   local active_line
-  for index, item in ipairs(versions) do
+  local top_offset = 0
+  if first > 1 then
+    table.insert(lines, string.format("↑ %d older", first - 1))
+    top_offset = 1
+  end
+  for index = first, last do
+    local item = versions[index]
     local line = change_label(item)
-    if item.versionId == active_id then line = "▶ " .. line:sub(3); active_line = index end
+    if item.versionId == active_id then line = "▶ " .. line:sub(3); active_line = #lines + 1 end
     width = math.max(width, vim.fn.strdisplaywidth(line))
     table.insert(lines, line)
   end
+  if last < #versions then table.insert(lines, string.format("↓ %d newer", #versions - last)) end
+  for _, line in ipairs(lines) do width = math.max(width, vim.fn.strdisplaywidth(line)) end
   width = math.min(math.max(width, 16), math.max(16, vim.o.columns - 4))
   vim.bo[self.list_buf].modifiable = true
   vim.api.nvim_buf_set_lines(self.list_buf, 0, -1, false, lines)
   vim.bo[self.list_buf].modifiable = false
   vim.bo[self.list_buf].readonly = true
   vim.api.nvim_buf_clear_namespace(self.list_buf, self.namespace, 0, -1)
-  for index, item in ipairs(versions) do
-    local line = lines[index]
+  for index = first, last do
+    local item = versions[index]
+    local row = index - first + top_offset
+    local line = lines[row + 1]
     if item.versionId == active_id then
-      vim.api.nvim_buf_set_extmark(self.list_buf, self.namespace, index - 1, 0, {
+      vim.api.nvim_buf_set_extmark(self.list_buf, self.namespace, row, 0, {
         end_col = #line,
         hl_group = "SnacksNotifierTitleInfo",
       })
     elseif item.unread then
-      vim.api.nvim_buf_set_extmark(self.list_buf, self.namespace, index - 1, 0, {
+      vim.api.nvim_buf_set_extmark(self.list_buf, self.namespace, row, 0, {
         end_col = math.min(3, #line),
         hl_group = "SnacksNotifierIconInfo",
       })
@@ -436,7 +469,7 @@ end
 
 function UI:help(item)
   local mode = item.transactionId and "Slow" or "Blitz"
-  vim.notify("Blink " .. mode .. ": [c/]c hunks, [f/]f file versions, ]n/]N all versions, <leader>bl list, <leader>bc comment, <leader>bt TODO, <leader>bq close")
+  vim.notify("Blink " .. mode .. ": [c/]c hunks, [f/]f file versions, [n/]n all versions (count supported), [N/]N first/latest, <leader>bl list, <leader>bh panel, <leader>bq close")
 end
 
 function UI:evict(version_id)
