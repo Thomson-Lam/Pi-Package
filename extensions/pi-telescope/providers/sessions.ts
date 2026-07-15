@@ -116,7 +116,12 @@ function parseSession(filePath: string): SessionInfo | null {
 	}
 }
 
-function findSessions(): SessionInfo[] {
+function sameCwd(a: string, b: string): boolean {
+	if (!a || !b) return false;
+	return resolve(a) === resolve(b);
+}
+
+function findSessions(cwd: string): SessionInfo[] {
 	if (!existsSync(SESSION_BASE)) return [];
 
 	const results: SessionInfo[] = [];
@@ -128,7 +133,7 @@ function findSessions(): SessionInfo[] {
 				for (const file of readdirSync(dirPath)) {
 					if (!file.endsWith(".jsonl")) continue;
 					const meta = parseSession(join(dirPath, file));
-					if (meta && meta.messageCount > 0) results.push(meta);
+					if (meta && meta.messageCount > 0 && sameCwd(meta.cwd, cwd)) results.push(meta);
 				}
 			} catch {}
 		}
@@ -328,8 +333,8 @@ export function createSessionsProvider(
 		description: "Pi sessions",
 		enterOpensActions: true,
 
-		load() {
-			return findSessions();
+		load(cwd) {
+			return findSessions(cwd);
 		},
 
 		getSearchText(item) {
