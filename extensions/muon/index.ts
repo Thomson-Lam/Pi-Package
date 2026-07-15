@@ -1,8 +1,13 @@
+import { readFileSync } from "node:fs";
 import type { ExtensionAPI, ExtensionContext } from "@earendil-works/pi-coding-agent";
 import { registerMuonCommands } from "./commands.js";
+import { MUON_ENGINEERING_PROMPT_PATH, MUON_FOUNDATION_PROMPT_PATH } from "./constants.js";
+import { discoverMuonResources } from "./resources.js";
 import { createInitialMuonState, persistMuonState, restoreMuonState, updateMuonStatus } from "./state.js";
-import { discoverSuperpowersResources } from "./superpowers.js";
 import type { MuonState } from "./types.js";
+
+const engineeringPrompt = readFileSync(MUON_ENGINEERING_PROMPT_PATH, "utf8");
+const foundationPrompt = readFileSync(MUON_FOUNDATION_PROMPT_PATH, "utf8");
 
 export default async function muonExtension(pi: ExtensionAPI): Promise<void> {
   let state: MuonState = createInitialMuonState();
@@ -21,5 +26,15 @@ export default async function muonExtension(pi: ExtensionAPI): Promise<void> {
     updateMuonStatus(ctx, state);
   });
 
-  pi.on("resources_discover", async () => discoverSuperpowersResources(state));
+  pi.on("resources_discover", async () => discoverMuonResources(state));
+
+  pi.on("before_agent_start", (event) => {
+    const prompt = state.config.mode === "engineering"
+      ? engineeringPrompt
+      : state.config.mode === "foundation"
+        ? foundationPrompt
+        : undefined;
+    if (!prompt) return;
+    return { systemPrompt: `${event.systemPrompt}\n\n${prompt}` };
+  });
 }

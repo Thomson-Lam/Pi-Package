@@ -9,9 +9,6 @@ description: >
   "/ponytail-audit".
 ---
 
-If `using-muon` has not been invoked yet, invoke it first to ensure proper Muon
-skill routing and usage.
-
 Review code for unnecessary complexity. Go with diff usually, unless the user specifies full codebase. One line per finding: location, what to cut, what replaces it. The best outcome is getting shorter.
 
 ## Format

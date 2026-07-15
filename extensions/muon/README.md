@@ -1,70 +1,97 @@
 # Muon
 
-Muon is a personal Pi extension for governing skill profiles and individual skills in the Pi context window.
+Muon is the control surface for interaction modes and discoverable skills in this Pi package.
+
+## Modes
+
+```text
+/muon mode status
+/muon mode off
+/muon mode engineering
+/muon mode foundation
+```
+
+Only one mode is active at a time:
+
+| Mode | System prompt | Synchronized skill bundle |
+|---|---|---|
+| `off` | Minimal: Pi's default coding-agent prompt | none |
+| `engineering` | `modes/engineering-prompt.md` | `skillsets/engineering` |
+| `foundation` | `modes/foundation-prompt.md` | `skillsets/foundation` |
+
+Mode changes turn off the other mode's skill bundle and enable the selected mode's bundle. Ponytail and individually enabled standalone skills are preserved. The default mode is `off` with Ponytail, cindex, and handoff enabled.
+
+Mode and skill selection are session-global configuration. Navigating conversation branches with `/tree` does not rewind them; change them explicitly through `/muon`.
 
 ## Skills
 
-Muon is the control surface for this package's skills. It exposes selected skill roots through Pi `resources_discover`, then reloads the session so Pi refreshes the skill catalog.
+Muon exposes selected skill roots through Pi `resources_discover`, then reloads the session so Pi refreshes the skill catalog.
 
 ```text
 /muon skills                         # toggle list UI
-/muon skills status                  # show Muon-governed and currently loaded skills
+/muon skills status                  # show managed and loaded skills
+/muon skills engineering             # Engineering skills without changing mode
+/muon skills foundation              # Foundation skills without changing mode
+/muon skills ponytail
+/muon skills off                     # disable profile bundles; preserve standalone skills
 /muon skills on cindex
-/muon skills off ipynb-toolshed
+/muon skills off authoring-skills
 /muon skills toggle handoff
-/muon skills off|auto|ponytail|superpowers  # profile shortcuts
 ```
 
-By default, Muon is on with the `ponytail` profile plus `cindex` and `handoff` enabled. Existing sessions keep their persisted Muon configuration. Changing skills mutates the system prompt skill ledger and invalidates the provider KV cache for the current conversation. When context is >50%, Muon blocks toggles. At 20%+ context, Muon warns before proceeding and suggests `/tree` or a fresh session.
+Profiles are `ponytail`, `engineering`, and `foundation`. Standalone managed skills are `authoring-skills`, `cindex`, `handoff`, `ipynb-toolshed`, and `tmux-tdl-logs`.
 
-| Toggle/profile          | Exposed skill roots |
-| ----------------------- | ------------------- |
-| `ponytail` profile      | `skillsets/muon`, `skillsets/ponytail` |
-| `superpowers` profile   | `skillsets/muon`, `skillsets/superpowers` |
-| `cindex`                | `skillsets/standalone/cindex` |
-| `handoff`               | `skillsets/standalone/handoff` |
-| `ipynb-toolshed`        | `skillsets/standalone/ipynb_toolshed` |
-| `yagni-scope-guard`     | `skillsets/standalone/yagni-scope-guard` |
+Pi may also load external skills from package settings, CLI options, `~/.pi/agent/skills`, `~/.agents/skills`, and trusted project skill directories. Muon shows these as read-only `(external)` rows because an extension cannot remove resources loaded by Pi's discovery layer. In tmux, Enter opens an external skill's `SKILL.md` in a Neovim popup.
 
-`using-muon` routes between available skills when a profile exposes the Muon router. `yagni-scope-guard` is an optional standalone helper for constraining Superpowers scope creep.
+Changing modes or skills mutates the system prompt and invalidates the provider KV cache. Muon blocks changes above 50% context usage and warns at 20% or higher.
 
-Pi can also load skills from package `pi.skills`, settings, CLI `--skill`, `~/.pi/agent/skills`, `~/.agents/skills`, project `.pi/skills`, and trusted project/ancestor `.agents/skills`. Muon detects those already-loaded external skills dynamically through Pi command metadata and shows them in `/muon skills` with `(external)`. External rows are not toggleable because extensions cannot remove resources loaded by Pi's own discovery layer; pressing Enter on an external row opens its `SKILL.md` in a tmux popup with Neovim when Pi is running inside tmux. Without tmux, Muon shows a red “No tmux detected” message.
+## UI
 
-## Manual commands
+`/muon` opens the action menu:
 
-```text
-/muon                 # open the Muon action menu
-/muon help            # show UI-only help
-/muon status          # show skill status
-/muon skills          # open skill toggle modal
-/muon skills status|list
-/muon skills on|off|toggle <skill-id>
-/muon skills off|auto|ponytail|superpowers  # profile shortcut
-/muon skill-dump [pi|agents|claude|codex]
-```
+- **Status** — current mode, enabled skills, and loaded skill commands
+- **Mode** — Minimal, Engineering, or Foundation Mode
+- **Skills** — managed toggles and external skill visibility
+- **Skill dump** — export Muon-managed skills
+- **Help** — command reference
 
-The `/muon` menu supports `j`/`k` navigation, Enter to select, `h`/`?` for help, and Esc to cancel. The `/muon skills` modal supports `j`/`k` navigation, Enter to toggle managed skills, Enter on external skills to open `SKILL.md` in a tmux popup, type-to-search, and Esc to apply + reload.
+The Mode and Skills dialogs support `j`/`k`, arrow keys, Enter, and Esc. The status widget shows both active mode and enabled skills.
 
 ## Skill dump
 
-`/muon skill-dump` writes every Muon-managed skill, regardless of enabled state, into a project-local universal skill folder:
+```text
+/muon skill-dump [pi|agents|claude|codex]
+```
 
 | Target | Destination |
-| ------ | ----------- |
+|---|---|
 | `pi` | `.pi/skills` |
 | `agents` | `.agents/skills` |
 | `claude` | `.claude/skills` |
 | `codex` | `.codex/skills` |
 
-The UI flow is `/muon` → `Skill dump` → choose target → Enter. Existing dumped skill directories with matching skill names are replaced.
+Existing dumped skill directories with matching skill names are replaced.
 
-## Bundled skills
-
-Muon exposes selected roots through Pi resource discovery.
+## Bundled resources
 
 ```text
-skillsets/muon/
-  using-muon
+modes/
+  engineering-prompt.md
+  foundation-prompt.md
+
+skillsets/engineering/
+  brainstorming
+  planning-risky-changes
+  delegating-work
+  choosing-test-strategy
+  systematic-debugging
+  verifying-work
+  reviewing-changes
+  isolating-work
+  finishing-work
+
+skillsets/foundation/
+  caveman
 
 skillsets/ponytail/
   ponytail
@@ -72,24 +99,11 @@ skillsets/ponytail/
   ponytail-debt
 
 skillsets/standalone/
+  authoring-skills
   cindex
   handoff
   ipynb_toolshed
-  yagni-scope-guard
-
-skillsets/superpowers/
-  using-superpowers
-  brainstorming
-  writing-plans
-  executing-plans
-  subagent-driven-development
-  test-driven-development
-  systematic-debugging
-  verification-before-completion
-  using-git-worktrees
-  requesting-code-review
-  receiving-code-review
-  finishing-a-development-branch
-  dispatching-parallel-agents
-  writing-skills
+  tmux-tdl-logs
 ```
+
+The former Superpowers suite is archived under `extensions/superpowers/legacy/` and is not exposed by Muon.

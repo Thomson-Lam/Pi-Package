@@ -1,14 +1,18 @@
-export type MuonSkillset = "off" | "auto" | "ponytail" | "superpowers";
+export type MuonMode = "off" | "engineering" | "foundation";
+export type MuonSkillProfile = "off" | "ponytail" | "engineering" | "foundation";
 export type MuonSkillId =
   | "ponytail"
-  | "superpowers"
+  | "engineering"
+  | "foundation"
+  | "authoring-skills"
   | "cindex"
   | "handoff"
   | "ipynb-toolshed"
-  | "yagni-scope-guard";
+  | "tmux-tdl-logs";
+
 export interface MuonConfig {
-  /** Legacy profile field kept for old session entries and `/muon skillset` compatibility. */
-  skillset: MuonSkillset;
+  /** Active system-prompt mode. Mode changes also synchronize their skill bundle. */
+  mode: MuonMode;
   /** Muon-governed skill/profile ids exposed through resources_discover. */
   enabledSkills: MuonSkillId[];
 }

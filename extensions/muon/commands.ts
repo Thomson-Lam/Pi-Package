@@ -5,15 +5,17 @@ import type { ExtensionAPI, ExtensionCommandContext, ExtensionContext } from "@e
 import { DynamicBorder, getSettingsListTheme } from "@earendil-works/pi-coding-agent";
 import { Container, type SelectItem, SelectList, type SettingItem, SettingsList, Text } from "@earendil-works/pi-tui";
 import {
+  applySkillProfile,
   formatEnabledSkills,
   isMuonSkillId,
   MUON_SKILL_SOURCES,
+  normalizeModeSkillIds,
   resolveEnabledSkillPaths,
-  skillIdsToLegacySkillset,
-  skillsetToSkillIds,
+  selectModeSkillIds,
 } from "./skills.js";
+import { parseMuonAction } from "./command-parser.js";
 import { dumpMuonSkills, getSkillDumpDestRoot, isSkillDumpTarget, type SkillDumpTarget } from "./skill-dump.js";
-import type { MuonSkillId, MuonSkillset, MuonState } from "./types.js";
+import type { MuonMode, MuonSkillId, MuonSkillProfile, MuonState } from "./types.js";
 
 export interface MuonDeps {
   getState: () => MuonState;
@@ -22,110 +24,62 @@ export interface MuonDeps {
 
 const HELP_TEXT = `# /muon
 
-Muon is a personal Pi extension for governing skill profiles and individual skills in the Pi context window.
+Muon governs interaction modes, skill profiles, and individual skills in Pi's context window.
 
 ## Actions
 
-- Status — show Muon skill configuration and currently loaded skill commands.
-- Skills — toggle Muon-governed skill profiles and individual skills in the system prompt.
+- Status — show the active mode, Muon skills, and loaded skill commands.
+- Mode — choose Minimal, Engineering, or Foundation Mode.
+- Skills — toggle Muon-governed skill profiles and individual skills.
 - Skill dump — write all Muon-managed skills to a project-local skill folder.
 - Help — show this help modal.
 
 ## Usage
 
-\`/muon\` opens this menu. You can also invoke actions directly:
-
 \`/muon status\`
-\`/muon skills\` # toggle list
+\`/muon mode [status|off|engineering|foundation]\`
+\`/muon skills\`
 \`/muon skills status|list\`
 \`/muon skills on|off|toggle <skill-id>\`
-\`/muon skills off|auto|ponytail|superpowers\` # profile shortcut
+\`/muon skills off|ponytail|engineering|foundation\`
 \`/muon skill-dump [pi|agents|claude|codex]\`
 \`/muon help\`
 
-This help is rendered in a modal and is not injected into the current agent session.
+## Modes
+
+Only one mode is active at a time. Mode changes synchronize their supporting skill bundle while preserving Ponytail and individually managed standalone skills.
+
+- \`off\` — Minimal: Pi's default coding-agent system prompt.
+- \`engineering\` — adaptive engineering system prompt plus Engineering skills.
+- \`foundation\` — strict apprenticeship system prompt plus Foundation skills.
+
+Skill profiles can also be exposed without activating their mode through \`/muon skills\`.
 
 ## Skills
 
-Muon exposes skills through Pi resource discovery, then reloads so Pi refreshes the skill catalog. Changing skills mutates the system prompt and invalidates the provider KV cache for the current conversation.
+Muon exposes skills through Pi resource discovery, then reloads so Pi refreshes the skill catalog. Changing a mode or skills rewrites the system prompt and invalidates the provider KV cache for the conversation.
 
-Profiles:
-- \`ponytail\` — expose Muon router and Ponytail skills.
-- \`superpowers\` — expose Muon router and Superpowers skills.
+Profiles: \`ponytail\`, \`engineering\`, \`foundation\`.
 
-Managed individual skills:
-- \`cindex\`, \`handoff\`, \`ipynb-toolshed\`, \`yagni-scope-guard\`.
+Standalone skills: \`authoring-skills\`, \`cindex\`, \`handoff\`, \`ipynb-toolshed\`, \`tmux-tdl-logs\`.
 
-External skills discovered by Pi outside Muon are also shown in the skills UI with \`(external)\` and are read-only.
+External skills discovered by Pi outside Muon appear read-only with \`(external)\`.
 
 ## Skill dump
 
-\`/muon skill-dump\` copies all Muon-managed skill directories, regardless of enabled state, into one project-local universal skill folder:
-- \`pi\` → \`.pi/skills\`
-- \`agents\` → \`.agents/skills\`
-- \`claude\` → \`.claude/skills\`
-- \`codex\` → \`.codex/skills\`
-
-Profile shortcuts:
-- \`off\` — expose no Muon-governed skills.
-- \`auto\` — expose Ponytail and Superpowers profiles.
-- \`ponytail\` — expose Ponytail profile only.
-- \`superpowers\` — expose Superpowers profile only.`;
+\`/muon skill-dump\` copies every Muon-managed skill into the selected project-local universal skill folder.`;
 
 type MuonAction =
   | { kind: "status" }
-  | { kind: "skills"; op?: "ui" | "status" | "on" | "off" | "toggle" | "profile"; skillId?: MuonSkillId; profile?: MuonSkillset }
+  | { kind: "mode"; mode?: MuonMode; status?: boolean }
+  | { kind: "skills"; op?: "ui" | "status" | "on" | "off" | "toggle" | "profile"; skillId?: MuonSkillId; profile?: MuonSkillProfile }
   | { kind: "skill-dump"; target?: SkillDumpTarget }
   | { kind: "help" };
 
 type ParsedMuon = { kind: "menu" } | { kind: "action"; action: MuonAction } | { kind: "error"; message: string };
 
-function isMuonSkillset(value: string): value is MuonSkillset {
-  return (
-    value === "off" ||
-    value === "auto" ||
-    value === "ponytail" ||
-    value === "superpowers"
-  );
-}
-
-function parseMuonAction(args: string): ParsedMuon {
-  const normalized = args.trim().toLowerCase().replace(/\s+/g, " ");
-  if (!normalized) return { kind: "menu" };
-
-  const [verb, ...rest] = normalized.split(" ");
-
-  if (verb === "help" || verb === "h" || verb === "?") return { kind: "action", action: { kind: "help" } };
-  if (verb === "status") return { kind: "action", action: { kind: "status" } };
-
-  if (verb === "skill-dump" || verb === "skilldump") {
-    const target = rest[0];
-    if (!target) return { kind: "action", action: { kind: "skill-dump" } };
-    if (!isSkillDumpTarget(target)) {
-      return { kind: "error", message: "Usage: /muon skill-dump [pi|agents|claude|codex]" };
-    }
-    return { kind: "action", action: { kind: "skill-dump", target } };
-  }
-
-  if (verb === "skills") {
-    const op = rest[0];
-    const target = rest[1];
-    if (!op) return { kind: "action", action: { kind: "skills" } };
-    if (op === "status" || op === "list") return { kind: "action", action: { kind: "skills", op: "status" } };
-    if (isMuonSkillset(op)) return { kind: "action", action: { kind: "skills", op: "profile", profile: op } };
-    if (op === "on" || op === "off" || op === "toggle") {
-      if (!target || !isMuonSkillId(target)) {
-        return {
-          kind: "error",
-          message: `Usage: /muon skills ${op} <${MUON_SKILL_SOURCES.map((source) => source.id).join("|")}>`,
-        };
-      }
-      return { kind: "action", action: { kind: "skills", op, skillId: target } };
-    }
-    return { kind: "error", message: "Usage: /muon skills [status|list|on <id>|off <id>|toggle <id>|off|auto|ponytail|superpowers]" };
-  }
-
-  return { kind: "error", message: "Usage: /muon [status|skills|skill-dump|help]" };
+function isMuonMode(value: string): value is MuonMode {
+  return value === "off" || value === "engineering" || value === "foundation";
 }
 
 async function selectModal(ctx: ExtensionCommandContext, title: string, items: SelectItem[]): Promise<string | undefined> {
@@ -167,15 +121,26 @@ async function selectModal(ctx: ExtensionCommandContext, title: string, items: S
 
 async function pickMuonAction(ctx: ExtensionCommandContext): Promise<MuonAction | undefined> {
   const selected = await selectModal(ctx, "Muon", [
-    { value: "status", label: "Status", description: "Show Muon skill configuration and loaded skill commands" },
+    { value: "status", label: "Status", description: "Show Muon mode, skill configuration, and loaded skill commands" },
+    { value: "mode", label: "Mode", description: "Choose Minimal, Engineering, or Foundation Mode" },
     { value: "skills", label: "Skills", description: "Toggle skill profiles and individual skills in context" },
     { value: "skill-dump", label: "Skill dump", description: "Write all Muon-managed skills to .pi/.agents/.claude/.codex" },
     { value: "help", label: "Help", description: "Show Muon help" },
   ]);
   if (!selected) return undefined;
+  if (selected === "mode") return { kind: "mode" };
   if (selected === "skills") return { kind: "skills" };
   if (selected === "skill-dump") return { kind: "skill-dump" };
   return { kind: selected as MuonAction["kind"] };
+}
+
+async function showMuonModePicker(ctx: ExtensionCommandContext, current: MuonMode): Promise<MuonMode | undefined> {
+  const selected = await selectModal(ctx, `Muon mode (current: ${current})`, [
+    { value: "off", label: "Minimal", description: "Default Pi coding-agent system prompt" },
+    { value: "engineering", label: "Engineering", description: "Adaptive engineering prompt and supporting skills" },
+    { value: "foundation", label: "Foundation Mode", description: "Strict apprenticeship prompt and Caveman skill" },
+  ]);
+  return selected && isMuonMode(selected) ? selected : undefined;
 }
 
 async function pickSkillDumpTarget(ctx: ExtensionCommandContext): Promise<SkillDumpTarget | undefined> {
@@ -199,7 +164,7 @@ async function runSkillDump(ctx: ExtensionCommandContext, target: SkillDumpTarge
       `Dumped ${result.dumped.length} Muon skill(s) to ${result.destRoot}`,
       ...result.dumped.map((skill) => `- ${skill.name} -> ${skill.dest}`),
     ].join("\n"),
-    "success",
+    "info",
   );
 }
 
@@ -356,8 +321,8 @@ function buildSkillsStatus(pi: ExtensionAPI, state: MuonState): string {
 
   return [
     "Muon skills",
+    `mode: ${state.config.mode}`,
     `enabled: ${formatEnabledSkills(state.config.enabledSkills)}`,
-    `legacy skillset: ${state.config.skillset}`,
     "",
     "Known sources:",
     ...MUON_SKILL_SOURCES.map((source) => {
@@ -389,18 +354,36 @@ async function applyEnabledSkills(
   reason: string,
   options: { preflight?: boolean } = {},
 ): Promise<void> {
-  const current = deps.getState().config.enabledSkills;
-  if (sameSkillIds(current, next)) {
-    ctx.ui.notify(`Muon skills unchanged: ${formatEnabledSkills(next)}`, "info");
+  const state = deps.getState();
+  const current = state.config.enabledSkills;
+  const normalized = normalizeModeSkillIds(next, state.config.mode);
+  if (sameSkillIds(current, normalized)) {
+    ctx.ui.notify(`Muon skills unchanged: ${formatEnabledSkills(normalized)}`, "info");
     return;
   }
   if (options.preflight !== false && !(await ensureSkillMutationAllowed(ctx))) return;
 
   deps.setState((draft) => {
-    draft.config.enabledSkills = next;
-    draft.config.skillset = skillIdsToLegacySkillset(next);
+    draft.config.enabledSkills = normalized;
   }, ctx);
-  ctx.ui.notify(`Muon skills ${reason}: ${formatEnabledSkills(next)}. Reloading to apply…`, "success");
+  ctx.ui.notify(`Muon skills ${reason}: ${formatEnabledSkills(normalized)}. Reloading to apply…`, "info");
+  await ctx.reload();
+}
+
+async function applyMode(deps: MuonDeps, ctx: ExtensionCommandContext, mode: MuonMode): Promise<void> {
+  const state = deps.getState();
+  const nextSkills = selectModeSkillIds(state.config.enabledSkills, mode);
+  if (state.config.mode === mode && sameSkillIds(state.config.enabledSkills, nextSkills)) {
+    ctx.ui.notify(`Muon mode is already ${mode}.`, "info");
+    return;
+  }
+  if (!(await ensureSkillMutationAllowed(ctx))) return;
+
+  deps.setState((draft) => {
+    draft.config.mode = mode;
+    draft.config.enabledSkills = nextSkills;
+  }, ctx);
+  ctx.ui.notify(`Muon mode set to ${mode}. Reloading to apply…`, "info");
   await ctx.reload();
 }
 
@@ -415,11 +398,13 @@ async function showMuonSkillsToggle(pi: ExtensionAPI, deps: MuonDeps, ctx: Exten
   const result = await ctx.ui.custom<MuonSkillId[] | undefined>((tui, theme, _keybindings, done) => {
     const managedItems: SettingItem[] = MUON_SKILL_SOURCES.map((source) => {
       const available = resolveEnabledSkillPaths([source.id]).skillPaths.length > 0;
+      const requiredByMode = state.config.mode !== "off" && source.id === state.config.mode;
       return {
         id: source.id,
         label: `${source.label}${source.kind === "profile" ? " (profile)" : ""}${available ? "" : " (missing)"}`,
+        description: requiredByMode ? `Required by active ${state.config.mode} mode` : undefined,
         currentValue: staged.has(source.id) ? "enabled" : "disabled",
-        values: ["enabled", "disabled"],
+        values: requiredByMode ? ["enabled"] : ["enabled", "disabled"],
       };
     });
     const externalItems: SettingItem[] = getExternalSkillCommands(pi).map((skill) => ({
@@ -513,10 +498,21 @@ async function runMuonAction(pi: ExtensionAPI, deps: MuonDeps, ctx: ExtensionCom
   if (action.kind === "help") return showMuonHelp(ctx);
   if (action.kind === "skill-dump") return runSkillDump(ctx, action.target);
 
+  if (action.kind === "mode") {
+    if (action.status) {
+      ctx.ui.notify(`Muon mode: ${state.config.mode}`, "info");
+      return;
+    }
+    const mode = action.mode ?? (await showMuonModePicker(ctx, state.config.mode));
+    if (mode) await applyMode(deps, ctx, mode);
+    return;
+  }
+
   if (action.kind === "status") {
     ctx.ui.notify(
       [
         "Muon status",
+        `mode: ${state.config.mode}`,
         `skills: ${formatEnabledSkills(state.config.enabledSkills)}`,
         "",
         buildSkillsStatus(pi, state),
@@ -536,7 +532,8 @@ async function runMuonAction(pi: ExtensionAPI, deps: MuonDeps, ctx: ExtensionCom
       return;
     }
     if (action.op === "profile") {
-      await applyEnabledSkills(deps, ctx, skillsetToSkillIds(action.profile ?? "off"), `set to ${action.profile ?? "off"}`);
+      const profile = action.profile ?? "off";
+      await applyEnabledSkills(deps, ctx, applySkillProfile(state.config.enabledSkills, profile), `profile set to ${profile}`);
       return;
     }
     if (!action.skillId) return;
@@ -558,6 +555,7 @@ export function registerMuonCommands(pi: ExtensionAPI, deps: MuonDeps): void {
     getArgumentCompletions: (prefix) => {
       const items = [
         "status",
+        "mode",
         "skills",
         "skill-dump",
         "help"
@@ -565,7 +563,7 @@ export function registerMuonCommands(pi: ExtensionAPI, deps: MuonDeps): void {
       return items.filter((item) => item.startsWith(prefix.trimStart())).map((value) => ({ value, label: value }));
     },
     handler: async (args, ctx) => {
-      const parsed = parseMuonAction(args || "");
+      const parsed = parseMuonAction(args || "", MUON_SKILL_SOURCES.map((source) => source.id)) as ParsedMuon;
       if (parsed.kind === "error") {
         ctx.ui.notify(parsed.message, "error");
         return;

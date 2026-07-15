@@ -1,14 +1,20 @@
 import { existsSync, realpathSync } from "node:fs";
 import {
+  MUON_AUTHORING_SKILLS_DIR,
+  MUON_CINDEX_SKILL_DIR,
+  MUON_ENGINEERING_SKILLS_DIR,
+  MUON_FOUNDATION_SKILLS_DIR,
   MUON_HANDOFF_SKILL_DIR,
   MUON_IPYNB_TOOLS_SHED_SKILL_DIR,
-  MUON_CINDEX_SKILL_DIR,
   MUON_PONYTAIL_SKILLS_DIR,
-  MUON_ROUTER_SKILLS_DIR,
-  MUON_SUPERPOWERS_SKILLS_DIR,
-  MUON_YAGNI_SCOPE_GUARD_SKILL_DIR,
+  MUON_TMUX_TDL_LOGS_SKILL_DIR,
 } from "./constants.js";
-import type { MuonSkillId, MuonSkillset } from "./types.js";
+import {
+  applySkillProfile as applySkillProfilePolicy,
+  normalizeModeSkillIds as normalizeModeSkillIdsPolicy,
+  selectModeSkillIds as selectModeSkillIdsPolicy,
+} from "./mode-policy.js";
+import type { MuonMode, MuonSkillId, MuonSkillProfile } from "./types.js";
 
 export interface MuonSkillSource {
   id: MuonSkillId;
@@ -23,15 +29,29 @@ export const MUON_SKILL_SOURCES: MuonSkillSource[] = [
     id: "ponytail",
     label: "Ponytail",
     kind: "profile",
-    description: "Muon router plus Ponytail coding, review, and debt skills.",
-    paths: () => [MUON_ROUTER_SKILLS_DIR, MUON_PONYTAIL_SKILLS_DIR],
+    description: "Ponytail coding, review, and debt skills.",
+    paths: () => [MUON_PONYTAIL_SKILLS_DIR],
   },
   {
-    id: "superpowers",
-    label: "Superpowers",
+    id: "engineering",
+    label: "Engineering",
     kind: "profile",
-    description: "Muon router plus Superpowers planning, TDD, debugging, worktree, and review workflows.",
-    paths: () => [MUON_ROUTER_SKILLS_DIR, MUON_SUPERPOWERS_SKILLS_DIR],
+    description: "Adaptive engineering planning, testing, debugging, delegation, review, and completion skills.",
+    paths: () => [MUON_ENGINEERING_SKILLS_DIR],
+  },
+  {
+    id: "foundation",
+    label: "Foundation Mode",
+    kind: "profile",
+    description: "Skills supporting strict Foundation apprenticeship mode.",
+    paths: () => [MUON_FOUNDATION_SKILLS_DIR],
+  },
+  {
+    id: "authoring-skills",
+    label: "authoring-skills",
+    kind: "skill",
+    description: "Create, revise, or evaluate reusable agent skills.",
+    paths: () => [MUON_AUTHORING_SKILLS_DIR],
   },
   {
     id: "cindex",
@@ -55,15 +75,16 @@ export const MUON_SKILL_SOURCES: MuonSkillSource[] = [
     paths: () => [MUON_IPYNB_TOOLS_SHED_SKILL_DIR],
   },
   {
-    id: "yagni-scope-guard",
-    label: "yagni-scope-guard",
+    id: "tmux-tdl-logs",
+    label: "tmux-tdl-logs",
     kind: "skill",
-    description: "Tighten Superpowers brainstorms/plans when scope creep appears.",
-    paths: () => [MUON_YAGNI_SCOPE_GUARD_SKILL_DIR],
+    description: "Inspect companion dev-server pane output in the td tmux workflow.",
+    paths: () => [MUON_TMUX_TDL_LOGS_SKILL_DIR],
   },
 ];
 
 const SOURCE_BY_ID = new Map(MUON_SKILL_SOURCES.map((source) => [source.id, source]));
+const SOURCE_ORDER = MUON_SKILL_SOURCES.map((source) => source.id);
 
 export function isMuonSkillId(value: string): value is MuonSkillId {
   return SOURCE_BY_ID.has(value as MuonSkillId);
@@ -74,38 +95,24 @@ export function getMuonSkillSource(id: MuonSkillId): MuonSkillSource {
 }
 
 export function normalizeMuonSkillIds(values: readonly string[] | undefined): MuonSkillId[] {
-  const normalized: MuonSkillId[] = [];
-  const seen = new Set<string>();
+  const enabled = new Set<MuonSkillId>();
   for (const value of values ?? []) {
-    const id = value.trim() as MuonSkillId;
-    if (!isMuonSkillId(id) || seen.has(id)) continue;
-    normalized.push(id);
-    seen.add(id);
+    const id = value.trim();
+    if (isMuonSkillId(id)) enabled.add(id);
   }
-  return normalized;
+  return MUON_SKILL_SOURCES.map((source) => source.id).filter((id) => enabled.has(id));
 }
 
-export function skillsetToSkillIds(skillset: MuonSkillset): MuonSkillId[] {
-  switch (skillset) {
-    case "off":
-      return [];
-    case "auto":
-      return ["ponytail", "superpowers"];
-    case "ponytail":
-      return ["ponytail"];
-    case "superpowers":
-      return ["superpowers"];
-  }
+export function normalizeModeSkillIds(values: readonly MuonSkillId[], mode: MuonMode): MuonSkillId[] {
+  return normalizeModeSkillIdsPolicy(values, mode, SOURCE_ORDER) as MuonSkillId[];
 }
 
-export function skillIdsToLegacySkillset(ids: readonly MuonSkillId[]): MuonSkillset {
-  const enabled = new Set(ids);
-  const ponytail = enabled.has("ponytail");
-  const superpowers = enabled.has("superpowers");
-  if (ponytail && superpowers) return "auto";
-  if (ponytail) return "ponytail";
-  if (superpowers) return "superpowers";
-  return "off";
+export function selectModeSkillIds(values: readonly MuonSkillId[], mode: MuonMode): MuonSkillId[] {
+  return selectModeSkillIdsPolicy(values, mode, SOURCE_ORDER) as MuonSkillId[];
+}
+
+export function applySkillProfile(values: readonly MuonSkillId[], profile: MuonSkillProfile): MuonSkillId[] {
+  return applySkillProfilePolicy(values, profile, SOURCE_ORDER) as MuonSkillId[];
 }
 
 export function resolveEnabledSkillPaths(enabledSkillIds: readonly MuonSkillId[]): {
