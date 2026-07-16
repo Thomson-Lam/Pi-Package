@@ -115,12 +115,22 @@ for _, map in ipairs(maps) do descs[map.lhs] = map.desc end
 local found = {}
 for _, desc in pairs(descs) do found[desc] = true end
 assert(found["Blink next change"] and found["Blink previous change"] and found["Blink next version for file"] and found["Blink next version globally"] and found["Blink first version"] and found["Blink latest version"] and found["Blink list changes"] and found["Blink toggle change panel"] and found["Blink comment"], "required described mappings missing: " .. vim.inspect(descs))
+vim.api.nvim_buf_call(buf, function()
+  vim.cmd("normal ]N")
+  vim.cmd("normal [N")
+end)
+eq(sent[#sent - 1], { type = "navigate_edge", payload = { edge = "last" } }, "]N dispatches latest edge action")
+eq(sent[#sent], { type = "navigate_edge", payload = { edge = "first" } }, "[N dispatches first edge action")
 
 local panel_versions = {}
 for version_id = 1, 12 do
   table.insert(panel_versions, { versionId = version_id, displayPath = "file" .. version_id .. ".txt", unread = version_id > 6 })
 end
 review:update_change_list(panel_versions, 8)
+eq(review.list_visible, false, "change panel is hidden by default")
+eq(review.list_buf, nil, "hidden panel does not create a buffer")
+review:toggle_change_list()
+eq(review.list_visible, true, "change panel can be shown")
 eq(vim.api.nvim_buf_line_count(review.list_buf), 9, "change panel shows seven items plus older/newer indicators")
 eq(vim.api.nvim_buf_get_lines(review.list_buf, 0, 1, false)[1], "↑ 4 older", "panel reports omitted older changes")
 eq(vim.api.nvim_buf_get_lines(review.list_buf, -2, -1, false)[1], "↓ 1 newer", "panel reports omitted newer changes")

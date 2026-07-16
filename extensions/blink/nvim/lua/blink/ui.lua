@@ -46,7 +46,7 @@ function UI.new(options)
   self.list_buf = nil
   self.list_win = nil
   self.list_panel = nil
-  self.list_visible = true
+  self.list_visible = false
   self.list_versions = {}
   self.list_active_id = nil
   return self
