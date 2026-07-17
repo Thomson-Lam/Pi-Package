@@ -32,6 +32,7 @@ Muon governs interaction modes, skill profiles, and individual skills in Pi's co
 - Mode — choose Minimal, Build, or Spec.
 - Skills — toggle Muon-governed skill profiles and individual skills.
 - Skill dump — write all Muon-managed skills to a project-local skill folder.
+- Handoff continuation — when the handoff skill is enabled, use /handoff or /hcon to continue from docs/handoff TODOs.
 - Help — show this help modal.
 
 ## Usage
@@ -65,6 +66,8 @@ Muon exposes skills through Pi resource discovery, then reloads so Pi refreshes 
 Profiles: \`ponytail\`.
 
 Standalone skills: \`authoring-skills\`, \`cindex\`, \`github-issues-prs\`, \`handoff\`, \`ipynb-toolshed\`, \`tmux-tdl-logs\`.
+
+When \`handoff\` is enabled, \`/handoff\` injects selected handoff file contents and lets you select TODOs; \`/hcon\` first lets you choose which file-context bullets to read and inject.
 
 Spec-owned skill: \`yagni-product-design\`.
 

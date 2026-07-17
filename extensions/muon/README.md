@@ -40,6 +40,15 @@ Muon exposes selected skill roots through Pi `resources_discover`, then reloads 
 
 The managed profile is `ponytail`. Standalone managed skills are `authoring-skills`, `cindex`, `github-issues-prs`, `handoff`, `ipynb-toolshed`, and `tmux-tdl-logs`. The Spec-owned skill is `yagni-product-design`.
 
+When `handoff` is enabled, Muon also registers continuation commands:
+
+```text
+/handoff  # select a docs/handoff TODO list and inject selected file contents
+/hcon     # choose which handoff file-context bullets to read+inject, then select TODOs
+```
+
+Both commands read `docs/handoff/handoff-<subject>.md` plus `docs/handoff/handoff-<subject>.todos.md`, queue the selected files' current contents for the next `before_agent_start`, and populate the editor with selected TODO tasks without auto-submitting.
+
 Pi may also load external skills from package settings, CLI options, `~/.pi/agent/skills`, `~/.agents/skills`, and trusted project skill directories. Muon shows these as read-only `(external)` rows because an extension cannot remove resources loaded by Pi's discovery layer. In tmux, Enter opens an external skill's `SKILL.md` in a Neovim popup.
 
 Changing modes or skills mutates the system prompt and invalidates the provider KV cache. Muon blocks changes above 50% context usage and warns at 20% or higher.
@@ -88,6 +97,7 @@ skillsets/standalone/
   cindex
   github-issues-prs
   handoff
+    /handoff and /hcon continuation commands
   ipynb_toolshed
   tmux-tdl-logs
   yagni-product-design
