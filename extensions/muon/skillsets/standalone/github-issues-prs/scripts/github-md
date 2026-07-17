@@ -1,0 +1,65 @@
+#!/usr/bin/env bash
+set -euo pipefail
+
+usage() {
+  cat <<'EOF'
+Usage:
+  github-md issue-list [gh issue list flags]
+  github-md issue-read <number-or-url> [--repo OWNER/REPO]
+  github-md issue-create <gh issue create flags>
+  github-md pr-create <gh pr create flags>
+EOF
+}
+
+issue_list_template='{{range .}}- #{{.number}} [{{.state}}] {{.title}}{{with .author}} · @{{.login}}{{end}}{{with .assignees}} · assigned: {{range .}}@{{.login}} {{end}}{{end}}{{with .labels}} · labels: {{range .}}{{.name}} {{end}}{{end}} · {{.url}}
+{{end}}'
+
+issue_view_template='# Issue #{{.number}}: {{.title}}
+
+**State:** {{.state}}{{with .author}} · **Author:** @{{.login}}{{end}}{{with .assignees}} · **Assigned:** {{range .}}@{{.login}} {{end}}{{end}}{{with .labels}} · **Labels:** {{range .}}{{.name}} {{end}}{{end}}
+**URL:** {{.url}}
+
+{{.body}}{{if .comments}}
+
+## Comments
+{{range .comments}}
+### @{{.author.login}} · {{timefmt "2006-01-02" .createdAt}}
+
+{{.body}}
+{{end}}{{end}}'
+
+command=${1:-}
+case "$command" in
+  issue-list)
+    shift
+    gh issue list --limit 20 \
+      --json number,title,state,author,assignees,labels,url \
+      --template "$issue_list_template" "$@"
+    ;;
+  issue-read)
+    shift
+    [[ $# -gt 0 ]] || { usage >&2; exit 2; }
+    target=$1
+    shift
+    gh issue view "$target" \
+      --json number,title,state,author,assignees,labels,url,body,comments \
+      --template "$issue_view_template" "$@"
+    ;;
+  issue-create)
+    shift
+    url=$(GH_PROMPT_DISABLED=1 gh issue create "$@")
+    printf '# Created issue\n\n%s\n' "$url"
+    ;;
+  pr-create)
+    shift
+    url=$(GH_PROMPT_DISABLED=1 gh pr create "$@")
+    printf '# Created pull request\n\n%s\n' "$url"
+    ;;
+  -h|--help|help)
+    usage
+    ;;
+  *)
+    usage >&2
+    exit 2
+    ;;
+esac

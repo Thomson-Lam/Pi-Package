@@ -64,7 +64,7 @@ Muon exposes skills through Pi resource discovery, then reloads so Pi refreshes 
 
 Profiles: \`ponytail\`.
 
-Standalone skills: \`authoring-skills\`, \`cindex\`, \`handoff\`, \`ipynb-toolshed\`, \`tmux-tdl-logs\`.
+Standalone skills: \`authoring-skills\`, \`cindex\`, \`github-issues-prs\`, \`handoff\`, \`ipynb-toolshed\`, \`tmux-tdl-logs\`.
 
 Spec-owned skill: \`yagni-product-design\`.
 

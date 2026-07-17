@@ -51,6 +51,7 @@ for (const path of [
   ["ponytail", "ponytail-debt"],
   ["standalone", "authoring-skills"],
   ["standalone", "cindex"],
+  ["standalone", "github-issues-prs"],
   ["standalone", "handoff"],
   ["standalone", "ipynb_toolshed"],
   ["standalone", "tmux-tdl-logs"],
@@ -58,6 +59,14 @@ for (const path of [
 ]) {
   assert.equal(existsSync(join(skillsetsDir, ...path, "SKILL.md")), true, `missing skill ${path.join("/")}`);
 }
+
+const githubSkillDir = join(skillsetsDir, "standalone", "github-issues-prs");
+assert.equal(existsSync(join(githubSkillDir, "scripts", "github-md")), true, "missing github-md helper");
+const githubSkill = readFileSync(join(githubSkillDir, "SKILL.md"), "utf8");
+assert.match(githubSkill, /^---\nname: github-issues-prs\n/);
+assert.match(githubSkill, /issue-read/);
+assert.match(githubSkill, /issue-create/);
+assert.match(githubSkill, /pr-create/);
 
 for (const skill of ["ponytail", "ponytail-review", "ponytail-debt"]) {
   const content = readFileSync(join(skillsetsDir, "ponytail", skill, "SKILL.md"), "utf8");
@@ -94,6 +103,7 @@ assert.match(constants, /MUON_BUILD_PROMPT_PATH/);
 assert.match(constants, /MUON_SPEC_PROMPT_PATH/);
 assert.match(constants, /MUON_YAGNI_PRODUCT_DESIGN_SKILL_DIR/);
 assert.match(constants, /MUON_AUTHORING_SKILLS_DIR/);
+assert.match(constants, /MUON_GITHUB_ISSUES_PRS_SKILL_DIR/);
 assert.doesNotMatch(constants, /engineering|foundation/i);
 assert.doesNotMatch(constants, /MUON_ROUTER_SKILLS_DIR|MUON_SUPERPOWERS_SKILLS_DIR/);
 
@@ -119,6 +129,7 @@ assert.match(resources, /resolveEnabledSkillPaths/);
 
 const skills = readFileSync(join(muonDir, "skills.ts"), "utf8");
 assert.match(skills, /id: "authoring-skills"/);
+assert.match(skills, /id: "github-issues-prs"/);
 assert.match(skills, /id: "yagni-product-design"/);
 assert.doesNotMatch(skills, /engineering|foundation/i);
 assert.match(skills, /normalizeModeSkillIds/);
@@ -144,6 +155,7 @@ assert.match(readme, /\/muon spec/);
 assert.doesNotMatch(readme, /\/muon (?:mode|skills) (?:engineering|foundation)/);
 assert.match(readme, /Minimal/);
 assert.match(readme, /authoring-skills/);
+assert.match(readme, /github-issues-prs/);
 assert.doesNotMatch(readme, /using-muon|skillsets\/superpowers/);
 
 console.log("muon mode and skill smoke checks passed");

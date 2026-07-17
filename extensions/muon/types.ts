@@ -4,6 +4,7 @@ export type MuonSkillId =
   | "ponytail"
   | "authoring-skills"
   | "cindex"
+  | "github-issues-prs"
   | "handoff"
   | "ipynb-toolshed"
   | "tmux-tdl-logs"

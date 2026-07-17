@@ -2,6 +2,7 @@ import { existsSync, realpathSync } from "node:fs";
 import {
   MUON_AUTHORING_SKILLS_DIR,
   MUON_CINDEX_SKILL_DIR,
+  MUON_GITHUB_ISSUES_PRS_SKILL_DIR,
   MUON_HANDOFF_SKILL_DIR,
   MUON_IPYNB_TOOLS_SHED_SKILL_DIR,
   MUON_PONYTAIL_SKILLS_DIR,
@@ -44,6 +45,13 @@ export const MUON_SKILL_SOURCES: MuonSkillSource[] = [
     kind: "skill",
     description: "Create, update, or audit lightweight INDEX.md navigation pointers.",
     paths: () => [MUON_CINDEX_SKILL_DIR],
+  },
+  {
+    id: "github-issues-prs",
+    label: "github-issues-prs",
+    kind: "skill",
+    description: "Read GitHub issues and create issues or pull requests with gh.",
+    paths: () => [MUON_GITHUB_ISSUES_PRS_SKILL_DIR],
   },
   {
     id: "handoff",

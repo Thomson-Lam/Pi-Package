@@ -38,7 +38,7 @@ Muon exposes selected skill roots through Pi `resources_discover`, then reloads 
 /muon skills toggle handoff
 ```
 
-The managed profile is `ponytail`. Standalone managed skills are `authoring-skills`, `cindex`, `handoff`, `ipynb-toolshed`, and `tmux-tdl-logs`. The Spec-owned skill is `yagni-product-design`.
+The managed profile is `ponytail`. Standalone managed skills are `authoring-skills`, `cindex`, `github-issues-prs`, `handoff`, `ipynb-toolshed`, and `tmux-tdl-logs`. The Spec-owned skill is `yagni-product-design`.
 
 Pi may also load external skills from package settings, CLI options, `~/.pi/agent/skills`, `~/.agents/skills`, and trusted project skill directories. Muon shows these as read-only `(external)` rows because an extension cannot remove resources loaded by Pi's discovery layer. In tmux, Enter opens an external skill's `SKILL.md` in a Neovim popup.
 
@@ -86,6 +86,7 @@ skillsets/ponytail/
 skillsets/standalone/
   authoring-skills
   cindex
+  github-issues-prs
   handoff
   ipynb_toolshed
   tmux-tdl-logs
