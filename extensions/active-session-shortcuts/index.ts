@@ -1,16 +1,16 @@
 import type { ExtensionAPI } from "@mariozechner/pi-coding-agent";
 
 export default function activeSessionShortcuts(pi: ExtensionAPI): void {
-	pi.registerShortcut("ctrl+s", {
+	pi.registerCommand("rename", {
 		description: "Rename current session",
-		handler: async (ctx) => {
+		handler: async (args, ctx) => {
 			if (!ctx.isIdle()) {
 				ctx.ui.notify("Rename requires Pi to be idle", "warning");
 				return;
 			}
 
-			const currentName = pi.getSessionName() ?? "";
-			const nextName = await ctx.ui.input("Session name (empty to clear)", currentName);
+			const requestedName = args.trim();
+			const nextName = requestedName || await ctx.ui.input("Session name (empty to clear)", pi.getSessionName() ?? "");
 			if (nextName === undefined) return;
 
 			const normalized = nextName.trim();
