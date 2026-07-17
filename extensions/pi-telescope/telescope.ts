@@ -361,6 +361,10 @@ export async function openTelescope(
 			return state.filtered[state.selectedIndex]?.item;
 		};
 
+		const getActions = (items: any[]) => {
+			return currentProvider.getActions?.(items) ?? currentProvider.actions;
+		};
+
 		// ── Input: mode overlay ──────────────────────
 
 		const handleModeInput = (data: string): boolean => {
@@ -520,10 +524,11 @@ export async function openTelescope(
 
 			// ── Enter — confirm selection or open provider actions ──
 			if (matchesKey(data, Key.enter)) {
-				const actions = currentProvider.actions;
+				const currentItem = getCurrentItem();
+				const actions = currentItem ? getActions([currentItem]) : undefined;
 				if (
 					currentProvider.enterOpensActions &&
-					getCurrentItem() &&
+					currentItem &&
 					actions &&
 					actions.length > 0
 				) {
@@ -532,7 +537,7 @@ export async function openTelescope(
 						label: action.label,
 						description: action.description ?? "",
 					})));
-					state.modeActionItems = [getCurrentItem()];
+					state.modeActionItems = [currentItem];
 					tui.requestRender();
 					return;
 				}
@@ -629,8 +634,9 @@ export async function openTelescope(
 
 			// ── Ctrl+E — action picker ──
 			if (matchesKey(data, Key.ctrl("e"))) {
-				state.modeActionItems = null;
-				const actions = currentProvider.actions;
+				const selectedItems = getSelectedItems();
+				state.modeActionItems = selectedItems;
+				const actions = getActions(selectedItems);
 				if (actions && actions.length > 0) {
 					const entries: ModeEntry[] = actions.map((a) => ({
 						key: a.key,

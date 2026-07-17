@@ -8,6 +8,7 @@ import {
 	type SessionTreeSearchItem,
 	type SessionTreeSearchMode,
 } from "../session-tree.js";
+import { editResponseInNvim } from "../response-editor.js";
 
 const MODE_INFO: Record<SessionTreeSearchMode, { name: string; icon: string; description: string }> = {
 	all: {
@@ -84,6 +85,12 @@ export function createSessionTreeProvider(
 		applyLabel(item, value.trim() || undefined);
 	};
 
+	const actions = [
+		{ key: "l", label: "Label", description: "Set or clear the selected entry label" },
+		{ key: "t", label: "Label by time", description: "Label with the current local date and time" },
+		{ key: "g", label: "Jump", description: "Navigate without summarizing the abandoned branch" },
+	];
+
 	return {
 		name: info.name,
 		icon: info.icon,
@@ -117,11 +124,17 @@ export function createSessionTreeProvider(
 			await editItemLabel(item);
 		},
 
-		actions: [
-			{ key: "l", label: "Label", description: "Set or clear the selected entry label" },
-			{ key: "t", label: "Label by time", description: "Label with the current local date and time" },
-			{ key: "g", label: "Jump", description: "Navigate without summarizing the abandoned branch" },
-		],
+		actions,
+
+		getActions(items) {
+			if (items.length === 1 && items[0]?.kind === "agent") {
+				return [
+					...actions,
+					{ key: "e", label: "Edit and save response", description: "Open in Neovim and save under docs/planning" },
+				];
+			}
+			return actions;
+		},
 
 		async onAction(actionKey, items) {
 			const item = items[0];
@@ -134,6 +147,8 @@ export function createSessionTreeProvider(
 				ctx.ui.notify(`Labeled: ${label}`, "info");
 			} else if (actionKey === "g") {
 				await navigate(item.navigationTargetId);
+			} else if (actionKey === "e" && item.kind === "agent") {
+				await editResponseInNvim(item.previewText, ctx);
 			}
 		},
 

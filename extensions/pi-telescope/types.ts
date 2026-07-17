@@ -77,6 +77,8 @@ export interface TelescopeProvider<T = any> {
 
 	/** Provider-specific actions (shown in action picker via Ctrl+E). */
 	actions?: ProviderAction[];
+	/** Item-dependent actions. When provided, overrides actions for this selection. */
+	getActions?(items: T[]): ProviderAction[];
 
 	/** Handle a custom action. actionKey matches ProviderAction.key. */
 	onAction?(actionKey: string, items: T[], ctx: ExtensionContext): void | Promise<void>;
