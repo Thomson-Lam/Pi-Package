@@ -10,7 +10,7 @@ interface HotkeyItem {
 	action: string;
 	label: string;
 	keys: string[];
-	source: "Pi" | "Telescope";
+	source: "Pi" | "Telescope" | "Package";
 	description?: string;
 }
 
@@ -26,6 +26,10 @@ const TELESCOPE_UI_HOTKEYS: HotkeyItem[] = [
 	{ action: "telescope.help", label: "Telescope help", keys: ["ctrl+g"], source: "Telescope" },
 	{ action: "telescope.previewUp", label: "Scroll preview up", keys: ["alt+p"], source: "Telescope" },
 	{ action: "telescope.previewDown", label: "Scroll preview down", keys: ["alt+n"], source: "Telescope" },
+];
+
+const PACKAGE_HOTKEYS: HotkeyItem[] = [
+	{ action: "active-session.rename", label: "Rename current session", keys: ["ctrl+s"], source: "Package" },
 ];
 
 function humanize(action: string): string {
@@ -79,7 +83,7 @@ export function createHotkeysProvider(
 				})),
 			);
 
-			return [...piItems, ...launchItems, ...TELESCOPE_UI_HOTKEYS];
+			return [...piItems, ...launchItems, ...TELESCOPE_UI_HOTKEYS, ...PACKAGE_HOTKEYS];
 		},
 
 		getSearchText(item) {
@@ -89,7 +93,9 @@ export function createHotkeysProvider(
 		getDisplayText(item, theme) {
 			const source = item.source === "Pi"
 				? theme.fg("accent", "pi")
-				: theme.fg("success", "ts");
+				: item.source === "Telescope"
+					? theme.fg("success", "ts")
+					: theme.fg("warning", "pkg");
 			return `[${source}] ${displayKeys(item.keys, theme)} ${item.label}`;
 		},
 
