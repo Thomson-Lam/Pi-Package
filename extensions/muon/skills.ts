@@ -2,12 +2,11 @@ import { existsSync, realpathSync } from "node:fs";
 import {
   MUON_AUTHORING_SKILLS_DIR,
   MUON_CINDEX_SKILL_DIR,
-  MUON_ENGINEERING_SKILLS_DIR,
-  MUON_FOUNDATION_SKILLS_DIR,
   MUON_HANDOFF_SKILL_DIR,
   MUON_IPYNB_TOOLS_SHED_SKILL_DIR,
   MUON_PONYTAIL_SKILLS_DIR,
   MUON_TMUX_TDL_LOGS_SKILL_DIR,
+  MUON_YAGNI_PRODUCT_DESIGN_SKILL_DIR,
 } from "./constants.js";
 import {
   applySkillProfile as applySkillProfilePolicy,
@@ -31,20 +30,6 @@ export const MUON_SKILL_SOURCES: MuonSkillSource[] = [
     kind: "profile",
     description: "Ponytail coding, review, and debt skills.",
     paths: () => [MUON_PONYTAIL_SKILLS_DIR],
-  },
-  {
-    id: "engineering",
-    label: "Engineering",
-    kind: "profile",
-    description: "Adaptive engineering planning, testing, debugging, delegation, review, and completion skills.",
-    paths: () => [MUON_ENGINEERING_SKILLS_DIR],
-  },
-  {
-    id: "foundation",
-    label: "Foundation Mode",
-    kind: "profile",
-    description: "Skills supporting strict Foundation apprenticeship mode.",
-    paths: () => [MUON_FOUNDATION_SKILLS_DIR],
   },
   {
     id: "authoring-skills",
@@ -80,6 +65,13 @@ export const MUON_SKILL_SOURCES: MuonSkillSource[] = [
     kind: "skill",
     description: "Inspect companion dev-server pane output in the td tmux workflow.",
     paths: () => [MUON_TMUX_TDL_LOGS_SKILL_DIR],
+  },
+  {
+    id: "yagni-product-design",
+    label: "yagni-product-design",
+    kind: "skill",
+    description: "Challenge assumptions and unnecessary scope in product plans.",
+    paths: () => [MUON_YAGNI_PRODUCT_DESIGN_SKILL_DIR],
   },
 ];
 

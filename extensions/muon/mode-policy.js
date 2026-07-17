@@ -1,5 +1,6 @@
-const PROFILE_IDS = new Set(["ponytail", "engineering", "foundation"]);
-const MODE_SKILL_IDS = new Set(["engineering", "foundation"]);
+const PROFILE_IDS = new Set(["ponytail"]);
+const BUILD_SKILL_IDS = ["ponytail", "cindex", "handoff"];
+const SPEC_SKILL_ID = "yagni-product-design";
 
 function ordered(values, sourceOrder) {
   const enabled = new Set(values);
@@ -8,19 +9,19 @@ function ordered(values, sourceOrder) {
 
 export function normalizeModeSkillIds(values, mode, sourceOrder) {
   const enabled = new Set(values);
-  if (mode === "engineering") {
-    enabled.delete("foundation");
-    enabled.add("engineering");
-  } else if (mode === "foundation") {
-    enabled.delete("engineering");
-    enabled.add("foundation");
-  }
+  if (mode === "spec") enabled.add(SPEC_SKILL_ID);
+  else enabled.delete(SPEC_SKILL_ID);
   return ordered(enabled, sourceOrder);
 }
 
 export function selectModeSkillIds(values, mode, sourceOrder) {
-  const enabled = new Set(values.filter((id) => !MODE_SKILL_IDS.has(id)));
-  if (mode === "engineering" || mode === "foundation") enabled.add(mode);
+  const enabled = new Set(values);
+  enabled.delete(SPEC_SKILL_ID);
+  if (mode === "build") {
+    for (const id of BUILD_SKILL_IDS) enabled.add(id);
+  } else if (mode === "spec") {
+    enabled.add(SPEC_SKILL_ID);
+  }
   return ordered(enabled, sourceOrder);
 }
 

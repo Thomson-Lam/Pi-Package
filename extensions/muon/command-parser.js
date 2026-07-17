@@ -1,5 +1,5 @@
-const MODES = new Set(["off", "engineering", "foundation"]);
-const SKILL_PROFILES = new Set(["off", "ponytail", "engineering", "foundation"]);
+const MODES = new Set(["off", "build", "spec"]);
+const SKILL_PROFILES = new Set(["off", "ponytail"]);
 const DUMP_TARGETS = new Set(["pi", "agents", "claude", "codex"]);
 
 export function parseMuonAction(args, skillIds) {
@@ -20,13 +20,16 @@ export function parseMuonAction(args, skillIds) {
       : { kind: "error", message: "Usage: /muon status" };
   }
 
+  if (MODES.has(verb)) {
+    return rest.length === 0
+      ? { kind: "action", action: { kind: "mode", mode: verb } }
+      : { kind: "error", message: `Usage: /muon ${verb}` };
+  }
+
   if (verb === "mode") {
-    const mode = rest[0];
-    if (rest.length === 0) return { kind: "action", action: { kind: "mode" } };
-    if (rest.length > 1) return { kind: "error", message: "Usage: /muon mode [status|off|engineering|foundation]" };
-    if (mode === "status") return { kind: "action", action: { kind: "mode", status: true } };
-    if (MODES.has(mode)) return { kind: "action", action: { kind: "mode", mode } };
-    return { kind: "error", message: "Usage: /muon mode [status|off|engineering|foundation]" };
+    return rest.length === 0
+      ? { kind: "action", action: { kind: "mode" } }
+      : { kind: "error", message: "Usage: /muon mode" };
   }
 
   if (verb === "skill-dump" || verb === "skilldump") {
@@ -56,8 +59,8 @@ export function parseMuonAction(args, skillIds) {
     if (SKILL_PROFILES.has(op) && rest.length === 1) {
       return { kind: "action", action: { kind: "skills", op: "profile", profile: op } };
     }
-    return { kind: "error", message: "Usage: /muon skills [status|list|on <id>|off <id>|toggle <id>|off|ponytail|engineering|foundation]" };
+    return { kind: "error", message: "Usage: /muon skills [status|list|on <id>|off <id>|toggle <id>|off|ponytail]" };
   }
 
-  return { kind: "error", message: "Usage: /muon [status|mode|skills|skill-dump|help]" };
+  return { kind: "error", message: "Usage: /muon [build|spec|off|status|mode|skills|skill-dump|help]" };
 }

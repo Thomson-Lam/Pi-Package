@@ -5,10 +5,11 @@ Muon is the control surface for interaction modes and discoverable skills in thi
 ## Modes
 
 ```text
-/muon mode status
-/muon mode off
-/muon mode engineering
-/muon mode foundation
+/muon status
+/muon off
+/muon build
+/muon spec
+/muon mode      # interactive picker
 ```
 
 Only one mode is active at a time:
@@ -16,10 +17,10 @@ Only one mode is active at a time:
 | Mode | System prompt | Synchronized skill bundle |
 |---|---|---|
 | `off` | Minimal: Pi's default coding-agent prompt | none |
-| `engineering` | `modes/engineering-prompt.md` | `skillsets/engineering` |
-| `foundation` | `modes/foundation-prompt.md` | `skillsets/foundation` |
+| `build` | `modes/build-prompt.md` | Ponytail, cindex, and handoff |
+| `spec` | `modes/spec-prompt.md` | `yagni-product-design` |
 
-Mode changes turn off the other mode's skill bundle and enable the selected mode's bundle. Ponytail and individually enabled standalone skills are preserved. The default mode is `off` with Ponytail, cindex, and handoff enabled.
+Activating Build enables Ponytail, cindex, and handoff. They remain independently toggleable afterward. Activating Spec enables `yagni-product-design`; leaving Spec disables that mode-owned skill. The default mode is `off` with Ponytail, cindex, and handoff enabled.
 
 Mode and skill selection are session-global configuration. Navigating conversation branches with `/tree` does not rewind them; change them explicitly through `/muon`.
 
@@ -30,8 +31,6 @@ Muon exposes selected skill roots through Pi `resources_discover`, then reloads 
 ```text
 /muon skills                         # toggle list UI
 /muon skills status                  # show managed and loaded skills
-/muon skills engineering             # Engineering skills without changing mode
-/muon skills foundation              # Foundation skills without changing mode
 /muon skills ponytail
 /muon skills off                     # disable profile bundles; preserve standalone skills
 /muon skills on cindex
@@ -39,7 +38,7 @@ Muon exposes selected skill roots through Pi `resources_discover`, then reloads 
 /muon skills toggle handoff
 ```
 
-Profiles are `ponytail`, `engineering`, and `foundation`. Standalone managed skills are `authoring-skills`, `cindex`, `handoff`, `ipynb-toolshed`, and `tmux-tdl-logs`.
+The managed profile is `ponytail`. Standalone managed skills are `authoring-skills`, `cindex`, `handoff`, `ipynb-toolshed`, and `tmux-tdl-logs`. The Spec-owned skill is `yagni-product-design`.
 
 Pi may also load external skills from package settings, CLI options, `~/.pi/agent/skills`, `~/.agents/skills`, and trusted project skill directories. Muon shows these as read-only `(external)` rows because an extension cannot remove resources loaded by Pi's discovery layer. In tmux, Enter opens an external skill's `SKILL.md` in a Neovim popup.
 
@@ -50,7 +49,7 @@ Changing modes or skills mutates the system prompt and invalidates the provider 
 `/muon` opens the action menu:
 
 - **Status** — current mode, enabled skills, and loaded skill commands
-- **Mode** — Minimal, Engineering, or Foundation Mode
+- **Mode** — Minimal, Build, or Spec
 - **Skills** — managed toggles and external skill visibility
 - **Skill dump** — export Muon-managed skills
 - **Help** — command reference
@@ -76,22 +75,8 @@ Existing dumped skill directories with matching skill names are replaced.
 
 ```text
 modes/
-  engineering-prompt.md
-  foundation-prompt.md
-
-skillsets/engineering/
-  brainstorming
-  planning-risky-changes
-  delegating-work
-  choosing-test-strategy
-  systematic-debugging
-  verifying-work
-  reviewing-changes
-  isolating-work
-  finishing-work
-
-skillsets/foundation/
-  caveman
+  build-prompt.md
+  spec-prompt.md
 
 skillsets/ponytail/
   ponytail
@@ -104,6 +89,11 @@ skillsets/standalone/
   handoff
   ipynb_toolshed
   tmux-tdl-logs
+  yagni-product-design
 ```
 
-The former Superpowers suite is archived under `extensions/superpowers/legacy/` and is not exposed by Muon.
+Retired resources are not exposed by Muon:
+
+- Engineering Mode is archived under `archive/engineering-mode/`.
+- Foundation Mode is archived under `archive/foundation-mode/`.
+- The former Superpowers suite is archived under `extensions/superpowers/legacy/`.

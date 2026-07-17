@@ -6,6 +6,8 @@ const root = resolve(new URL("../../..", import.meta.url).pathname);
 const muonDir = join(root, "extensions", "muon");
 const skillsetsDir = join(muonDir, "skillsets");
 const modesDir = join(muonDir, "modes");
+const foundationArchiveDir = join(muonDir, "archive", "foundation-mode");
+const engineeringArchiveDir = join(muonDir, "archive", "engineering-mode");
 
 for (const file of [
   "index.ts",
@@ -23,8 +25,8 @@ for (const file of [
   "commands.ts",
   "skill-dump.ts",
   "README.md",
-  "modes/engineering-prompt.md",
-  "modes/foundation-prompt.md",
+  "modes/build-prompt.md",
+  "modes/spec-prompt.md",
 ]) {
   assert.equal(existsSync(join(muonDir, file)), true, `missing ${file}`);
 }
@@ -33,21 +35,26 @@ assert.equal(existsSync(join(muonDir, "superpowers.ts")), false, "stale superpow
 assert.equal(existsSync(join(skillsetsDir, "muon", "using-muon", "SKILL.md")), false, "stale using-muon skill remains");
 assert.equal(existsSync(join(skillsetsDir, "superpowers")), false, "Superpowers should not remain in Muon's active skillsets");
 assert.equal(existsSync(join(root, "extensions", "foundation-mode", "index.ts")), false, "separate Foundation entrypoint remains");
+assert.equal(existsSync(join(skillsetsDir, "foundation")), false, "Foundation should not remain in active skillsets");
+assert.equal(existsSync(join(modesDir, "foundation-prompt.md")), false, "Foundation prompt should not remain active");
+assert.equal(existsSync(join(skillsetsDir, "engineering")), false, "Engineering should not remain in active skillsets");
+assert.equal(existsSync(join(modesDir, "engineering-prompt.md")), false, "Engineering prompt should not remain active");
+assert.equal(existsSync(join(foundationArchiveDir, "modes", "foundation-prompt.md")), true, "missing archived Foundation prompt");
+assert.equal(existsSync(join(engineeringArchiveDir, "modes", "engineering-prompt.md")), true, "missing archived Engineering prompt");
+assert.equal(existsSync(join(engineeringArchiveDir, "skillsets", "engineering", "brainstorming", "SKILL.md")), true, "missing archived Engineering skills");
+assert.equal(existsSync(join(foundationArchiveDir, "skillsets", "foundation", "caveman", "SKILL.md")), true, "missing archived Caveman skill");
 assert.equal(existsSync(join(root, "extensions", "superpowers", "legacy", "skillsets", "superpowers")), true, "missing legacy Superpowers archive");
 
 for (const path of [
   ["ponytail", "ponytail"],
   ["ponytail", "ponytail-review"],
   ["ponytail", "ponytail-debt"],
-  ["engineering", "brainstorming"],
-  ["engineering", "planning-risky-changes"],
-  ["engineering", "systematic-debugging"],
-  ["foundation", "caveman"],
   ["standalone", "authoring-skills"],
   ["standalone", "cindex"],
   ["standalone", "handoff"],
   ["standalone", "ipynb_toolshed"],
   ["standalone", "tmux-tdl-logs"],
+  ["standalone", "yagni-product-design"],
 ]) {
   assert.equal(existsSync(join(skillsetsDir, ...path, "SKILL.md")), true, `missing skill ${path.join("/")}`);
 }
@@ -57,28 +64,42 @@ for (const skill of ["ponytail", "ponytail-review", "ponytail-debt"]) {
   assert.doesNotMatch(content, /using-muon/, `${skill} still routes through using-muon`);
 }
 
-const engineeringPrompt = readFileSync(join(modesDir, "engineering-prompt.md"), "utf8");
-const foundationPrompt = readFileSync(join(modesDir, "foundation-prompt.md"), "utf8");
-assert.match(engineeringPrompt, /^You are operating in Muon Engineering Mode/);
-assert.match(engineeringPrompt, /## Skill Invocation Policy/);
-assert.match(foundationPrompt, /^# Foundation Mode/);
-assert.match(foundationPrompt, /## Teach-Back Gate/);
+const yagniSkill = readFileSync(join(skillsetsDir, "standalone", "yagni-product-design", "SKILL.md"), "utf8");
+assert.match(yagniSkill, /^---\nname: yagni-product-design\n/);
+assert.match(yagniSkill, /simplest direct product/);
+
+const buildPrompt = readFileSync(join(modesDir, "build-prompt.md"), "utf8");
+const specPrompt = readFileSync(join(modesDir, "spec-prompt.md"), "utf8");
+const archivedEngineeringPrompt = readFileSync(join(engineeringArchiveDir, "modes", "engineering-prompt.md"), "utf8");
+const archivedFoundationPrompt = readFileSync(join(foundationArchiveDir, "modes", "foundation-prompt.md"), "utf8");
+assert.match(buildPrompt, /^Assist the user in turning their structure and idea into systems and code/);
+assert.match(buildPrompt, /NOT a planning agent/);
+assert.match(specPrompt, /^You are a spec agent/);
+assert.match(specPrompt, /Do NOT write detailed project implementation/);
+assert.match(archivedEngineeringPrompt, /^You are operating in Muon Engineering Mode/);
+assert.match(archivedEngineeringPrompt, /## Skill Invocation Policy/);
+assert.match(archivedFoundationPrompt, /^# Foundation Mode/);
+assert.match(archivedFoundationPrompt, /## Teach-Back Gate/);
 
 const index = readFileSync(join(muonDir, "index.ts"), "utf8");
 assert.match(index, /registerMuonCommands/);
 assert.match(index, /discoverMuonResources/);
 assert.match(index, /before_agent_start/);
-assert.match(index, /engineeringPrompt/);
-assert.match(index, /foundationPrompt/);
+assert.match(index, /buildPrompt/);
+assert.match(index, /specPrompt/);
+assert.doesNotMatch(index, /engineering|foundation/i);
 
 const constants = readFileSync(join(muonDir, "constants.ts"), "utf8");
-assert.match(constants, /MUON_ENGINEERING_SKILLS_DIR/);
-assert.match(constants, /MUON_FOUNDATION_SKILLS_DIR/);
+assert.match(constants, /MUON_BUILD_PROMPT_PATH/);
+assert.match(constants, /MUON_SPEC_PROMPT_PATH/);
+assert.match(constants, /MUON_YAGNI_PRODUCT_DESIGN_SKILL_DIR/);
 assert.match(constants, /MUON_AUTHORING_SKILLS_DIR/);
+assert.doesNotMatch(constants, /engineering|foundation/i);
 assert.doesNotMatch(constants, /MUON_ROUTER_SKILLS_DIR|MUON_SUPERPOWERS_SKILLS_DIR/);
 
 const types = readFileSync(join(muonDir, "types.ts"), "utf8");
-assert.match(types, /MuonMode = "off" \| "engineering" \| "foundation"/);
+assert.match(types, /MuonMode = "off" \| "build" \| "spec"/);
+assert.doesNotMatch(types, /engineering|foundation/i);
 assert.match(types, /mode: MuonMode/);
 assert.doesNotMatch(types, /MuonSkillset|skillset:/);
 
@@ -89,7 +110,7 @@ assert.match(state, /restoreConfigFromEntries/);
 assert.match(state, /normalizeModeSkillIds/);
 
 const statePolicy = readFileSync(join(muonDir, "state-policy.js"), "utf8");
-assert.match(statePolicy, /foundation-mode-state/);
+assert.doesNotMatch(statePolicy, /engineering|foundation/i);
 assert.match(statePolicy, /superpowersMode/); // restore-only migration
 
 const resources = readFileSync(join(muonDir, "resources.ts"), "utf8");
@@ -97,9 +118,9 @@ assert.match(resources, /discoverMuonResources/);
 assert.match(resources, /resolveEnabledSkillPaths/);
 
 const skills = readFileSync(join(muonDir, "skills.ts"), "utf8");
-assert.match(skills, /id: "engineering"/);
-assert.match(skills, /id: "foundation"/);
 assert.match(skills, /id: "authoring-skills"/);
+assert.match(skills, /id: "yagni-product-design"/);
+assert.doesNotMatch(skills, /engineering|foundation/i);
 assert.match(skills, /normalizeModeSkillIds/);
 assert.match(skills, /selectModeSkillIds/);
 assert.doesNotMatch(skills, /id: "superpowers"|using-muon/);
@@ -111,14 +132,16 @@ assert.match(parser, /rest\.length/);
 const commands = readFileSync(join(muonDir, "commands.ts"), "utf8");
 assert.match(commands, /showMuonModePicker/);
 assert.match(commands, /Mode/);
-assert.match(commands, /engineering/);
-assert.match(commands, /foundation/);
+assert.match(commands, /build/);
+assert.match(commands, /spec/);
+assert.doesNotMatch(commands, /engineering|foundation/i);
 assert.doesNotMatch(commands, /auto\|ponytail\|superpowers|isMuonSkillset|legacy skillset/);
 
 const readme = readFileSync(join(muonDir, "README.md"), "utf8");
-assert.match(readme, /\/muon mode off/);
-assert.match(readme, /\/muon mode engineering/);
-assert.match(readme, /\/muon mode foundation/);
+assert.match(readme, /\/muon off/);
+assert.match(readme, /\/muon build/);
+assert.match(readme, /\/muon spec/);
+assert.doesNotMatch(readme, /\/muon (?:mode|skills) (?:engineering|foundation)/);
 assert.match(readme, /Minimal/);
 assert.match(readme, /authoring-skills/);
 assert.doesNotMatch(readme, /using-muon|skillsets\/superpowers/);

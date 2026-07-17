@@ -4,13 +4,12 @@ import { restoreConfigFromEntries } from "../state-policy.js";
 
 const order = [
   "ponytail",
-  "engineering",
-  "foundation",
   "authoring-skills",
   "cindex",
   "handoff",
   "ipynb-toolshed",
   "tmux-tdl-logs",
+  "yagni-product-design",
 ];
 const valid = new Set(order);
 const policies = {
@@ -27,36 +26,34 @@ const custom = (customType, data) => ({ type: "custom", customType, data });
 
 assert.deepEqual(
   restoreConfigFromEntries([
-    custom("muon-state", { config: { mode: "engineering", enabledSkills: ["ponytail", "engineering", "cindex"] } }),
+    custom("muon-state", { config: { mode: "build", enabledSkills: [] } }),
   ], initial, policies),
-  { mode: "engineering", enabledSkills: ["ponytail", "engineering", "cindex"] },
+  { mode: "build", enabledSkills: [] },
+  "Build mode should restore explicitly toggled skills",
+);
+
+assert.deepEqual(
+  restoreConfigFromEntries([
+    custom("muon-state", { config: { mode: "spec", enabledSkills: [] } }),
+  ], initial, policies),
+  { mode: "spec", enabledSkills: ["yagni-product-design"] },
+  "Spec mode should restore with its required scope guard",
+);
+
+assert.deepEqual(
+  restoreConfigFromEntries([
+    custom("muon-state", { config: { mode: "off", enabledSkills: ["authoring-skills", "cindex"] } }),
+  ], initial, policies),
+  { mode: "off", enabledSkills: ["authoring-skills", "cindex"] },
   "current Muon state should restore",
 );
 
 assert.deepEqual(
   restoreConfigFromEntries([
-    custom("foundation-mode-state", { enabled: true }),
-    custom("muon-state", { config: { enabledSkills: ["ponytail", "cindex", "handoff"] } }),
-  ], initial, policies),
-  { mode: "foundation", enabledSkills: ["ponytail", "foundation", "cindex", "handoff"] },
-  "enabled legacy Foundation state should migrate across reload",
-);
-
-assert.deepEqual(
-  restoreConfigFromEntries([
-    custom("muon-state", { config: { mode: "off", enabledSkills: ["engineering", "authoring-skills"] } }),
-  ], initial, policies),
-  { mode: "off", enabledSkills: ["engineering", "authoring-skills"] },
-  "off mode should retain a manually exposed mode skill profile",
-);
-
-assert.deepEqual(
-  restoreConfigFromEntries([
     custom("muon-state", { config: { skillset: "auto" } }),
-    custom("foundation-mode-state", { enabled: false }),
   ], initial, policies),
   { mode: "off", enabledSkills: ["ponytail"] },
-  "legacy Muon and disabled Foundation state should migrate",
+  "legacy Muon state should migrate",
 );
 
 assert.deepEqual(

@@ -13,12 +13,12 @@ Purpose: Help agents locate extension entry points, supporting modules, skills, 
 
 - `extensions/context-inspector/index.ts` — package entrypoint forwarding to `src/index.ts`.
 - `extensions/context-inspector/src/index.ts` — registers `/ctx`, `/reads`, `/ctfresh`, and the context-inspector shortcut; `src/collector.ts`, `src/reconstruct.ts`, and `src/state.ts` collect and rebuild context metadata, while `src/ui/` owns panels and the status widget.
-- `extensions/muon/modes/` — Engineering and Foundation system prompts selected through Muon's mutually exclusive interaction modes.
+- `extensions/muon/modes/` — Build and Spec system prompts selected through Muon's interaction mode control.
 - `extensions/feedback-editor/index.ts` and `client.lua` — register `/fb` and `/fpr`, opening a right-side tmux Neovim pane and returning saved text to Pi's chat editor without storing it in a file.
 - `extensions/muon/index.ts` — initializes persisted Muon mode/skill state, injects the selected mode prompt, and registers resource discovery.
 - `extensions/muon/commands.ts` — user-facing `/muon` flows for mode selection, skill toggles/status, and skill export.
 - `extensions/muon/skills.ts`, `resources.ts`, and `skill-dump.ts` — skill profile control, resource discovery, and universal skill export.
-- `extensions/muon/skillsets/` — bundled Engineering, Foundation, Ponytail, and standalone skills; each skill's `SKILL.md` is its source of truth. The retired Superpowers suite is archived under `extensions/superpowers/legacy/`.
+- `extensions/muon/skillsets/` — bundled Ponytail and standalone skills; each skill's `SKILL.md` is its source of truth. Retired Engineering and Foundation resources are archived under `extensions/muon/archive/`; the retired Superpowers suite is archived under `extensions/superpowers/legacy/`.
 - `extensions/muon/tests/smoke.mjs` — Muon smoke coverage.
 - `extensions/pi-telescope/index.ts` — registers Telescope commands, shortcut, providers, and fuzzy `@` file completion.
 - `extensions/pi-telescope/telescope.ts`, `scoring.ts`, and `frecency.ts` — finder UI, query scoring, and ranking history; `providers/` contains files, branches, log, sessions, skills, and commands sources.
@@ -29,7 +29,7 @@ Purpose: Help agents locate extension entry points, supporting modules, skills, 
 
 ## Supporting files
 
-- `docs/planning/super-foundations/` — research conversation and source draft for the adaptive Engineering Mode prompt.
+- `docs/planning/super-foundations/` — research conversation and source draft for the retired Engineering Mode prompt.
 - `scripts/install-npm-packages.sh` and `scripts/install-npm-packages.ps1` — install companion registry packages on Unix and Windows.
 - `scripts/install-personal-package.sh` and `scripts/install-personal-package.ps1` — install this personal package on Unix and Windows.
 

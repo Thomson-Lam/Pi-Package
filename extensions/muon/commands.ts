@@ -29,7 +29,7 @@ Muon governs interaction modes, skill profiles, and individual skills in Pi's co
 ## Actions
 
 - Status — show the active mode, Muon skills, and loaded skill commands.
-- Mode — choose Minimal, Engineering, or Foundation Mode.
+- Mode — choose Minimal, Build, or Spec.
 - Skills — toggle Muon-governed skill profiles and individual skills.
 - Skill dump — write all Muon-managed skills to a project-local skill folder.
 - Help — show this help modal.
@@ -37,31 +37,36 @@ Muon governs interaction modes, skill profiles, and individual skills in Pi's co
 ## Usage
 
 \`/muon status\`
-\`/muon mode [status|off|engineering|foundation]\`
+\`/muon build\`
+\`/muon spec\`
+\`/muon off\`
+\`/muon mode\`
 \`/muon skills\`
 \`/muon skills status|list\`
 \`/muon skills on|off|toggle <skill-id>\`
-\`/muon skills off|ponytail|engineering|foundation\`
+\`/muon skills off|ponytail\`
 \`/muon skill-dump [pi|agents|claude|codex]\`
 \`/muon help\`
 
 ## Modes
 
-Only one mode is active at a time. Mode changes synchronize their supporting skill bundle while preserving Ponytail and individually managed standalone skills.
+Only one mode is active at a time. Activating Build enables Ponytail, cindex, and handoff; each skill can then be toggled independently. Spec enables its YAGNI product-design scope guard, which is disabled when leaving Spec.
 
 - \`off\` — Minimal: Pi's default coding-agent system prompt.
-- \`engineering\` — adaptive engineering system prompt plus Engineering skills.
-- \`foundation\` — strict apprenticeship system prompt plus Foundation skills.
+- \`build\` — implementation-focused system prompt plus Ponytail, cindex, and handoff.
+- \`spec\` — product-specification system prompt plus the YAGNI product-design scope guard.
 
-Skill profiles can also be exposed without activating their mode through \`/muon skills\`.
+Skills and profiles can be toggled independently through \`/muon skills\`.
 
 ## Skills
 
 Muon exposes skills through Pi resource discovery, then reloads so Pi refreshes the skill catalog. Changing a mode or skills rewrites the system prompt and invalidates the provider KV cache for the conversation.
 
-Profiles: \`ponytail\`, \`engineering\`, \`foundation\`.
+Profiles: \`ponytail\`.
 
 Standalone skills: \`authoring-skills\`, \`cindex\`, \`handoff\`, \`ipynb-toolshed\`, \`tmux-tdl-logs\`.
+
+Spec-owned skill: \`yagni-product-design\`.
 
 External skills discovered by Pi outside Muon appear read-only with \`(external)\`.
 
@@ -79,7 +84,7 @@ type MuonAction =
 type ParsedMuon = { kind: "menu" } | { kind: "action"; action: MuonAction } | { kind: "error"; message: string };
 
 function isMuonMode(value: string): value is MuonMode {
-  return value === "off" || value === "engineering" || value === "foundation";
+  return value === "off" || value === "build" || value === "spec";
 }
 
 async function selectModal(ctx: ExtensionCommandContext, title: string, items: SelectItem[]): Promise<string | undefined> {
@@ -122,7 +127,7 @@ async function selectModal(ctx: ExtensionCommandContext, title: string, items: S
 async function pickMuonAction(ctx: ExtensionCommandContext): Promise<MuonAction | undefined> {
   const selected = await selectModal(ctx, "Muon", [
     { value: "status", label: "Status", description: "Show Muon mode, skill configuration, and loaded skill commands" },
-    { value: "mode", label: "Mode", description: "Choose Minimal, Engineering, or Foundation Mode" },
+    { value: "mode", label: "Mode", description: "Choose Minimal, Build, or Spec" },
     { value: "skills", label: "Skills", description: "Toggle skill profiles and individual skills in context" },
     { value: "skill-dump", label: "Skill dump", description: "Write all Muon-managed skills to .pi/.agents/.claude/.codex" },
     { value: "help", label: "Help", description: "Show Muon help" },
@@ -137,8 +142,8 @@ async function pickMuonAction(ctx: ExtensionCommandContext): Promise<MuonAction 
 async function showMuonModePicker(ctx: ExtensionCommandContext, current: MuonMode): Promise<MuonMode | undefined> {
   const selected = await selectModal(ctx, `Muon mode (current: ${current})`, [
     { value: "off", label: "Minimal", description: "Default Pi coding-agent system prompt" },
-    { value: "engineering", label: "Engineering", description: "Adaptive engineering prompt and supporting skills" },
-    { value: "foundation", label: "Foundation Mode", description: "Strict apprenticeship prompt and Caveman skill" },
+    { value: "build", label: "Build", description: "Implementation prompt with Ponytail, cindex, and handoff" },
+    { value: "spec", label: "Spec", description: "Product-specification prompt with YAGNI scope guard" },
   ]);
   return selected && isMuonMode(selected) ? selected : undefined;
 }
@@ -398,11 +403,11 @@ async function showMuonSkillsToggle(pi: ExtensionAPI, deps: MuonDeps, ctx: Exten
   const result = await ctx.ui.custom<MuonSkillId[] | undefined>((tui, theme, _keybindings, done) => {
     const managedItems: SettingItem[] = MUON_SKILL_SOURCES.map((source) => {
       const available = resolveEnabledSkillPaths([source.id]).skillPaths.length > 0;
-      const requiredByMode = state.config.mode !== "off" && source.id === state.config.mode;
+      const requiredByMode = state.config.mode === "spec" && source.id === "yagni-product-design";
       return {
         id: source.id,
         label: `${source.label}${source.kind === "profile" ? " (profile)" : ""}${available ? "" : " (missing)"}`,
-        description: requiredByMode ? `Required by active ${state.config.mode} mode` : undefined,
+        description: requiredByMode ? "Required by active spec mode" : undefined,
         currentValue: staged.has(source.id) ? "enabled" : "disabled",
         values: requiredByMode ? ["enabled"] : ["enabled", "disabled"],
       };
@@ -554,6 +559,9 @@ export function registerMuonCommands(pi: ExtensionAPI, deps: MuonDeps): void {
     description: "Open Muon menu",
     getArgumentCompletions: (prefix) => {
       const items = [
+        "build",
+        "spec",
+        "off",
         "status",
         "mode",
         "skills",

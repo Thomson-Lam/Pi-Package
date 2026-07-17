@@ -1,14 +1,13 @@
-export type MuonMode = "off" | "engineering" | "foundation";
-export type MuonSkillProfile = "off" | "ponytail" | "engineering" | "foundation";
+export type MuonMode = "off" | "build" | "spec";
+export type MuonSkillProfile = "off" | "ponytail";
 export type MuonSkillId =
   | "ponytail"
-  | "engineering"
-  | "foundation"
   | "authoring-skills"
   | "cindex"
   | "handoff"
   | "ipynb-toolshed"
-  | "tmux-tdl-logs";
+  | "tmux-tdl-logs"
+  | "yagni-product-design";
 
 export interface MuonConfig {
   /** Active system-prompt mode. Mode changes also synchronize their skill bundle. */

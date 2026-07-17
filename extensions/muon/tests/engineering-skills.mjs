@@ -3,7 +3,7 @@ import { existsSync, readFileSync } from "node:fs";
 import { join, resolve } from "node:path";
 
 const root = resolve(new URL("../../..", import.meta.url).pathname);
-const skillsetsRoot = join(root, "extensions", "muon", "skillsets");
+const skillsetsRoot = join(root, "extensions", "muon", "archive", "engineering-mode", "skillsets");
 
 const expected = {
   brainstorming: /unresolved product behavior|unclear success criteria/,
@@ -15,7 +15,6 @@ const expected = {
   "reviewing-changes": /evaluating a consequential diff|review feedback/,
   "isolating-work": /risky, long-running|current checkout/,
   "finishing-work": /ready for merge|pull request/,
-  "authoring-skills": /creating, revising, or evaluating reusable agent skills/,
 };
 
 const additionalTriggers = {
@@ -29,10 +28,9 @@ const forbiddenTriggers = {
 
 const selected = process.argv[2] ? [process.argv[2]] : Object.keys(expected);
 for (const name of selected) {
-  assert.ok(name in expected, `unknown engineering skill: ${name}`);
-  const group = name === "authoring-skills" ? "standalone" : "engineering";
-  const path = join(skillsetsRoot, group, name, "SKILL.md");
-  assert.equal(existsSync(path), true, `missing engineering skill: ${name}`);
+  assert.ok(name in expected, `unknown archived engineering skill: ${name}`);
+  const path = join(skillsetsRoot, "engineering", name, "SKILL.md");
+  assert.equal(existsSync(path), true, `missing archived engineering skill: ${name}`);
 
   const content = readFileSync(path, "utf8");
   const frontmatterMatch = content.match(/^---\n([\s\S]*?)\n---\n/);
@@ -55,4 +53,4 @@ for (const name of selected) {
   assert.doesNotMatch(content, /invoke every|always invoke|mandatory workflow|follow (?:each step|this process) exactly/i);
 }
 
-console.log(`engineering skill checks passed: ${selected.join(", ")}`);
+console.log(`archived engineering skill checks passed: ${selected.join(", ")}`);

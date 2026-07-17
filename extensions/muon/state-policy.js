@@ -1,7 +1,6 @@
 const MUON_STATE_ENTRY_TYPE = "muon-state";
-const LEGACY_FOUNDATION_STATE_ENTRY_TYPE = "foundation-mode-state";
 
-const isMuonMode = (value) => value === "off" || value === "engineering" || value === "foundation";
+const isMuonMode = (value) => value === "off" || value === "build" || value === "spec";
 
 function migrateLegacySkillset(value) {
   if (value === "ponytail" || value === "auto") return ["ponytail"];
@@ -17,13 +16,6 @@ export function restoreConfigFromEntries(entries, initial, policies) {
 
   for (const entry of entries) {
     if (entry?.type !== "custom" || !entry.data) continue;
-
-    if (entry.customType === LEGACY_FOUNDATION_STATE_ENTRY_TYPE) {
-      if (typeof entry.data.enabled === "boolean") {
-        configState.mode = entry.data.enabled ? "foundation" : "off";
-      }
-      continue;
-    }
 
     if (entry.customType !== MUON_STATE_ENTRY_TYPE) continue;
     const config = entry.data.config;
