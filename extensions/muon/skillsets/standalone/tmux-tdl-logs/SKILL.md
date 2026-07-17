@@ -1,43 +1,47 @@
 ---
 name: tmux-tdl-logs
-description: Use in a td tmux workflow to inspect dev server panes output, server logs, terminal stdout, errors, or warnings from the companion <repo>-servers window.
+description: Inspect selected tmux pane output, dev server logs, terminal stdout, errors, or warnings with the /tdlogs workflow or bundled CLI.
+compatibility: Requires bash and tmux.
 ---
 
 # tmux td Logs
 
-Read dev-server panes in the current `td` tmux workflow with `tmux-tdl-logs`. It only captures `<repo>-servers`, never window 1 / `<repo>-agent`. Keep it read-only; do not send keys or restart servers unless the user asks.
+When this Muon skill is enabled, Muon also exposes the `tmux_tdl_logs` tool. Prefer the `/tdlogs` workflow: the user selects panes from any tmux window, chooses a one-line workflow prompt, and the agent queries only that selection. Keep it read-only; do not send keys or restart servers unless the user asks.
+
+The bundled `scripts/tmux-tdl-logs` remains a CLI fallback. Resolve it relative to this `SKILL.md` and invoke its absolute path from any repository. Without an explicit `TDL_PANES` selection it retains the legacy behavior of reading the companion `<repo>-servers` window.
 
 ## Quick reference
 
 | Need | Command |
 | --- | --- |
-| Find server panes | `tmux-tdl-logs panes` |
-| Read one pane | `tmux-tdl-logs capture-pane <index-or-%pane-id> 200` |
-| Read all server panes | `tmux-tdl-logs capture-servers 200` |
-| Poll one pane briefly | `timeout 20s tmux-tdl-logs watch-pane %12 5 4 120` |
-| Poll all server panes briefly | `timeout 20s tmux-tdl-logs watch-servers 5 4 120` |
-| Start repro recording | `tmux-tdl-logs record-start latest 2 120 600` |
-| Stop repro recording | `tmux-tdl-logs record-stop latest` |
-| Check recording size/status | `tmux-tdl-logs record-info latest` |
-| Read recent recording lines | `tmux-tdl-logs record-read latest 200` |
-| Read a page | `tmux-tdl-logs record-page latest 2 200` |
-| Search recording first | `tmux-tdl-logs record-grep latest 'error|fail|exception|warn' 4` |
+| Find server panes | `<SKILL_DIR>/scripts/tmux-tdl-logs panes` |
+| Read one pane | `<SKILL_DIR>/scripts/tmux-tdl-logs capture-pane <index-or-%pane-id> 200` |
+| Read all server panes | `<SKILL_DIR>/scripts/tmux-tdl-logs capture-servers 200` |
+| Poll one pane briefly | `timeout 20s <SKILL_DIR>/scripts/tmux-tdl-logs watch-pane %12 5 4 120` |
+| Poll all server panes briefly | `timeout 20s <SKILL_DIR>/scripts/tmux-tdl-logs watch-servers 5 4 120` |
+| Start repro recording | `<SKILL_DIR>/scripts/tmux-tdl-logs record-start latest 2 120 600` |
+| Stop repro recording | `<SKILL_DIR>/scripts/tmux-tdl-logs record-stop latest` |
+| Check recording size/status | `<SKILL_DIR>/scripts/tmux-tdl-logs record-info latest` |
+| Read recent recording lines | `<SKILL_DIR>/scripts/tmux-tdl-logs record-read latest 200` |
+| Read a page | `<SKILL_DIR>/scripts/tmux-tdl-logs record-page latest 2 200` |
+| Search recording first | `<SKILL_DIR>/scripts/tmux-tdl-logs record-grep latest 'error|fail|exception|warn' 4` |
 
 ## Workflow
 
-1. Run `tmux-tdl-logs panes` to identify panes in `<repo>-servers`.
-2. Capture the relevant pane, or use `capture-servers` if unsure.
-3. For changes that affect a running server, patch first, then do one bounded poll with `timeout`.
-4. If the user needs time to reproduce a bug, run `record-start`, tell them to reproduce it, then wait for "done" before `record-stop`.
-5. After a recording, inspect cheaply: `record-info`, then `record-grep`, then `record-read 200`; use `record-page` only if needed.
-6. Keep captures small: 120-300 lines usually beats dumping history.
+1. Ask the user to run `/tdlogs`, select panes, and choose a workflow prompt.
+2. Use `tmux_tdl_logs panes` if the attached selection needs confirmation.
+3. Capture one selected pane or all selected panes with `capture-servers`.
+4. For changes that affect a running server, patch first, then do one bounded watch.
+5. For a user-driven reproduction, call `record-start`, tell the user it is ready, and wait for "done" before calling `record-stop`.
+6. After stopping, inspect cheaply: `record-info`, then `record-grep`, then `record-read`; use `record-page` only if needed.
+7. Keep captures small: 120-300 lines usually beats dumping history.
 
 ## Rules
 
 - Foreground watching is not streaming. Use bounded `watch`: small interval, small count, `timeout`.
 - Background recording is for user-driven repros; stop it before reading, unless checking status.
-- Prefer pane ids (`%12`) after `list`; pane indexes are fine too.
-- Imported panes in `<repo>-agent` are intentionally ignored/rejected; send them back before capturing if needed.
+- The extension accepts only the `%pane-id`s attached by `/tdlogs`; legacy CLI mode also accepts pane indexes in `<repo>-servers`.
+- Explicitly selected panes may come from any tmux window.
 - Server output can contain secrets. Quote only the relevant lines back to the user.
 
 ## Common mistakes

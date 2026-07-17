@@ -25,6 +25,7 @@ Purpose: Help agents locate extension entry points, supporting modules, skills, 
 - `extensions/plan-mode/index.ts` — initializes plan storage/state, prompt injection, tool guardrails, attachment freshness notifications, and `plan_diff`.
 - `extensions/plan-mode/commands.ts`, `storage.ts`, and `attachment.ts` — plan command flows, global/project plan stores, and attached-snapshot diff tracking. See `extensions/plan-mode/README.md` for current capabilities and deferred work.
 - `extensions/plan-mode/guardrails.ts` and `prompt.ts` — active-plan tool restrictions and system-prompt construction; strings/templates live in `prompts.json` and `prompts.ts`.
+- `extensions/muon/skillsets/standalone/tmux-tdl-logs/extension.ts` — Muon-governed `/tdlogs` pane selection, workflow prompts, session state, and the selection-restricted `tmux_tdl_logs` tool backed by its adjacent bundled script.
 - `extensions/review/INDEX.md` — detailed child index for the review-artifact extension, including `/pr`, its CLI, schema, render pipeline, templates, fixtures, and manual checks.
 
 ## Supporting files

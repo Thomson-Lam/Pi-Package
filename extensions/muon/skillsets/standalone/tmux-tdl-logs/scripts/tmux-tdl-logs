@@ -1,0 +1,316 @@
+#!/usr/bin/env bash
+set -euo pipefail
+
+usage() {
+  cat <<'EOF'
+Usage:
+  tmux-tdl-logs panes
+  tmux-tdl-logs capture-pane <pane-index|%pane-id> [lines]
+  tmux-tdl-logs capture-servers [lines]
+  tmux-tdl-logs watch-pane <pane-index|%pane-id> [interval-seconds] [count] [lines]
+  tmux-tdl-logs watch-servers [interval-seconds] [count] [lines]
+  tmux-tdl-logs record-start [name] [interval-seconds] [lines] [max-seconds]
+  tmux-tdl-logs record-stop [name]
+  tmux-tdl-logs record-list
+  tmux-tdl-logs record-info [name]
+  tmux-tdl-logs record-read [name] [tail-lines]
+  tmux-tdl-logs record-page [name] [page] [page-lines]
+  tmux-tdl-logs record-grep [name] <pattern> [context-lines]
+
+By default, reads panes only from the td companion <repo>-servers window and
+never captures <repo>-agent panes. Set TDL_PANES to a comma-separated list of
+explicit %pane-ids to restrict every command to that selection across windows.
+EOF
+}
+
+servers_window_for() {
+  local window="$1" base
+  base="${window%-agent}"
+  base="${base%-servers}"
+  printf '%s-servers' "$base"
+}
+
+selected_mode() {
+  [[ -n "${TDL_PANES:-}" ]]
+}
+
+selected_panes() {
+  local pane
+  local -a panes
+  IFS=',' read -ra panes <<<"${TDL_PANES:-}"
+  for pane in "${panes[@]}"; do
+    [[ "$pane" =~ ^%[0-9]+$ ]] || {
+      echo "tmux-tdl-logs: invalid pane in TDL_PANES: $pane" >&2
+      exit 1
+    }
+    tmux display-message -p -t "$pane" '#{pane_id}' >/dev/null 2>&1 || {
+      echo "tmux-tdl-logs: selected pane not found: $pane" >&2
+      exit 1
+    }
+    printf '%s\n' "$pane"
+  done
+}
+
+context() {
+  if selected_mode; then
+    selected_panes >/dev/null
+    return
+  fi
+  if [[ -z "${TMUX:-}" ]]; then
+    echo "tmux-tdl-logs: not inside tmux" >&2
+    exit 1
+  fi
+  session="$(tmux display-message -p '#S')"
+  current_window="$(tmux display-message -p '#W')"
+  servers_window="$(servers_window_for "$current_window")"
+  if ! tmux list-panes -t "${session}:${servers_window}" >/dev/null 2>&1; then
+    echo "tmux-tdl-logs: no servers window ${session}:${servers_window}" >&2
+    exit 1
+  fi
+  servers_window_id="$(tmux display-message -p -t "${session}:${servers_window}" '#{window_id}')"
+}
+
+pane_rows() {
+  local pane
+  if selected_mode; then
+    while IFS= read -r pane; do
+      tmux display-message -p -t "$pane" \
+        '#{pane_id}|#{pane_index}|#{pane_current_command}|#{pane_current_path}|#{pane_title}|#{session_name}:#{window_name}'
+    done < <(selected_panes)
+  else
+    tmux list-panes -t "${session}:${servers_window}" \
+      -F '#{pane_id}|#{pane_index}|#{pane_current_command}|#{pane_current_path}|#{pane_title}|server'
+  fi
+}
+
+list_panes() {
+  context
+  printf 'pane_id|index|command|path|title|location\n'
+  pane_rows
+}
+
+pane_selected() {
+  local target="$1" pane
+  while IFS= read -r pane; do
+    [[ "$pane" == "$target" ]] && return 0
+  done < <(selected_panes)
+  return 1
+}
+
+resolve_target() {
+  local target="$1"
+  context
+  if selected_mode; then
+    [[ "$target" == %* ]] || {
+      echo "tmux-tdl-logs: selected mode requires a %pane-id target" >&2
+      exit 1
+    }
+    pane_selected "$target" || {
+      echo "tmux-tdl-logs: refusing to capture unselected pane: $target" >&2
+      exit 1
+    }
+    printf '%s' "$target"
+  elif [[ "$target" == %* ]]; then
+    tmux display-message -p -t "$target" '#{pane_id}' >/dev/null 2>&1 || {
+      echo "tmux-tdl-logs: pane not found: $target" >&2; exit 1;
+    }
+    local target_window
+    target_window="$(tmux display-message -p -t "$target" '#{window_id}')"
+    if [[ "$target_window" != "$servers_window_id" ]]; then
+      echo "tmux-tdl-logs: refusing to capture non-server-window pane: $target" >&2
+      exit 1
+    fi
+    printf '%s' "$target"
+  elif [[ "$target" =~ ^[0-9]+$ ]]; then
+    local tmux_target="${session}:${servers_window}.${target}"
+    tmux display-message -p -t "$tmux_target" '#{pane_id}' >/dev/null 2>&1 || {
+      echo "tmux-tdl-logs: server pane index not found: $target" >&2; exit 1;
+    }
+    printf '%s' "$tmux_target"
+  else
+    echo "tmux-tdl-logs: target must be pane index or %pane-id" >&2
+    exit 1
+  fi
+}
+
+capture_one() {
+  local target="$1" lines="${2:-${TDL_LOG_LINES:-200}}" tmux_target
+  tmux_target="$(resolve_target "$target")"
+  local output
+  output="$(tmux capture-pane -J -p -S "-${lines}" -t "$tmux_target")"
+  printf '%s\n' "$output" | tail -n "$lines"
+}
+
+capture_all() {
+  local lines="${1:-${TDL_LOG_LINES:-200}}" pane idx cmd path title loc
+  context
+  while IFS='|' read -r pane idx cmd path title loc; do
+    [[ -z "$pane" ]] && continue
+    printf '\n===== %s index=%s command=%s location=%s path=%s =====\n' "$pane" "$idx" "$cmd" "$loc" "${path/#$HOME/~}"
+    local output
+    output="$(tmux capture-pane -J -p -S "-${lines}" -t "$pane")"
+    printf '%s\n' "$output" | tail -n "$lines"
+  done < <(pane_rows)
+}
+
+watch_logs() {
+  local target="$1" interval="${2:-5}" count="${3:-3}" lines="${4:-120}" i
+  for ((i = 1; i <= count; i++)); do
+    printf '\n### sample %d/%d at %s ###\n' "$i" "$count" "$(date '+%H:%M:%S')"
+    if [[ "$target" == all ]]; then capture_all "$lines"; else capture_one "$target" "$lines"; fi
+    if (( i < count )); then
+      sleep "$interval"
+    fi
+  done
+}
+
+record_dir() {
+  local dir="/tmp/tmux-tdl-logs-${USER:-user}" key
+  if selected_mode; then
+    key="${TDL_PANES//%/}"
+    key="${key//,/-}"
+    [[ "$key" =~ ^[0-9-]+$ ]] || { echo "tmux-tdl-logs: invalid TDL_PANES" >&2; exit 1; }
+    dir="$dir/selection-$key"
+  fi
+  printf '%s' "$dir"
+}
+
+record_name() {
+  local name="${1:-latest}"
+  [[ "$name" =~ ^[A-Za-z0-9._-]+$ ]] || { echo "tmux-tdl-logs: bad record name: $name" >&2; exit 1; }
+  printf '%s' "$name"
+}
+
+record_path() {
+  local name
+  name="$(record_name "${1:-latest}")"
+  printf '%s/%s.log' "$(record_dir)" "$name"
+}
+
+record_pid_path() {
+  local name
+  name="$(record_name "${1:-latest}")"
+  printf '%s/%s.pid' "$(record_dir)" "$name"
+}
+
+record_loop() {
+  local name="$1" interval="$2" lines="$3" max_seconds="$4" log started now elapsed
+  log="$(record_path "$name")"
+  started="$(date +%s)"
+  while true; do
+    now="$(date +%s)"
+    elapsed=$((now - started))
+    if (( max_seconds > 0 && elapsed >= max_seconds )); then
+      printf '\n### recorder max-seconds reached at %s ###\n' "$(date '+%F %T')" >>"$log"
+      break
+    fi
+    {
+      printf '\n### record sample at %s elapsed=%ss ###\n' "$(date '+%F %T')" "$elapsed"
+      "$0" capture-servers "$lines" || true
+    } >>"$log" 2>&1
+    sleep "$interval"
+  done
+}
+
+record_start() {
+  local name="$(record_name "${1:-latest}")" interval="${2:-2}" lines="${3:-120}" max_seconds="${4:-600}" dir log pidfile pid
+  dir="$(record_dir)"; log="$(record_path "$name")"; pidfile="$(record_pid_path "$name")"
+  mkdir -p "$dir"
+  if [[ -s "$pidfile" ]]; then
+    pid="$(cat "$pidfile")"
+    if kill -0 "$pid" 2>/dev/null; then
+      echo "tmux-tdl-logs: recorder already running: $name pid=$pid log=$log"
+      return 0
+    fi
+  fi
+  : >"$log"
+  nohup "$0" __record-loop "$name" "$interval" "$lines" "$max_seconds" >/dev/null 2>&1 &
+  pid=$!
+  printf '%s\n' "$pid" >"$pidfile"
+  echo "recording $name pid=$pid log=$log interval=${interval}s lines=$lines max=${max_seconds}s"
+}
+
+record_stop() {
+  local name="$(record_name "${1:-latest}")" pidfile pid
+  pidfile="$(record_pid_path "$name")"
+  [[ -s "$pidfile" ]] || { echo "tmux-tdl-logs: no recorder pid for $name"; return 0; }
+  pid="$(cat "$pidfile")"
+  if kill -0 "$pid" 2>/dev/null; then
+    kill "$pid" 2>/dev/null || true
+    sleep 0.1
+  fi
+  rm -f "$pidfile"
+  echo "stopped $name"
+}
+
+record_list() {
+  local dir file name pidfile pid status
+  dir="$(record_dir)"
+  mkdir -p "$dir"
+  printf 'name|status|lines|bytes|path\n'
+  for file in "$dir"/*.log; do
+    [[ -e "$file" ]] || continue
+    name="$(basename "$file" .log)"
+    pidfile="$(record_pid_path "$name")"
+    status=stopped
+    if [[ -s "$pidfile" ]]; then
+      pid="$(cat "$pidfile")"
+      kill -0 "$pid" 2>/dev/null && status="running:$pid"
+    fi
+    printf '%s|%s|%s|%s|%s\n' "$name" "$status" "$(wc -l <"$file")" "$(wc -c <"$file")" "$file"
+  done
+}
+
+record_info() {
+  local name="$(record_name "${1:-latest}")" log pidfile pid status
+  log="$(record_path "$name")"; pidfile="$(record_pid_path "$name")"
+  [[ -e "$log" ]] || { echo "tmux-tdl-logs: no record: $name" >&2; exit 1; }
+  status=stopped
+  if [[ -s "$pidfile" ]]; then
+    pid="$(cat "$pidfile")"
+    kill -0 "$pid" 2>/dev/null && status="running:$pid"
+  fi
+  printf 'name=%s\nstatus=%s\nlines=%s\nbytes=%s\npath=%s\n' "$name" "$status" "$(wc -l <"$log")" "$(wc -c <"$log")" "$log"
+}
+
+record_read() {
+  local name="$(record_name "${1:-latest}")" lines="${2:-200}" log
+  log="$(record_path "$name")"
+  [[ -e "$log" ]] || { echo "tmux-tdl-logs: no record: $name" >&2; exit 1; }
+  tail -n "$lines" "$log"
+}
+
+record_page() {
+  local name="$(record_name "${1:-latest}")" page="${2:-1}" page_lines="${3:-200}" log start end
+  log="$(record_path "$name")"
+  [[ -e "$log" ]] || { echo "tmux-tdl-logs: no record: $name" >&2; exit 1; }
+  start=$(( (page - 1) * page_lines + 1 ))
+  end=$(( page * page_lines ))
+  sed -n "${start},${end}p" "$log"
+}
+
+record_grep() {
+  local name="$(record_name "${1:-latest}")" pattern="${2:-}" context="${3:-3}" log
+  [[ -n "$pattern" ]] || { usage; exit 1; }
+  log="$(record_path "$name")"
+  [[ -e "$log" ]] || { echo "tmux-tdl-logs: no record: $name" >&2; exit 1; }
+  grep -Ein -C "$context" -- "$pattern" "$log" || true
+}
+
+case "${1:-}" in
+  panes) [[ $# -eq 1 ]] || { usage; exit 1; }; list_panes ;;
+  capture-pane) [[ $# -ge 2 && $# -le 3 ]] || { usage; exit 1; }; capture_one "$2" "${3:-}" ;;
+  capture-servers) [[ $# -le 2 ]] || { usage; exit 1; }; capture_all "${2:-}" ;;
+  watch-pane) [[ $# -ge 2 && $# -le 5 ]] || { usage; exit 1; }; watch_logs "$2" "${3:-}" "${4:-}" "${5:-}" ;;
+  watch-servers) [[ $# -le 4 ]] || { usage; exit 1; }; watch_logs all "${2:-}" "${3:-}" "${4:-}" ;;
+  record-start) [[ $# -le 5 ]] || { usage; exit 1; }; record_start "${2:-}" "${3:-}" "${4:-}" "${5:-}" ;;
+  record-stop) [[ $# -le 2 ]] || { usage; exit 1; }; record_stop "${2:-}" ;;
+  record-list) [[ $# -eq 1 ]] || { usage; exit 1; }; record_list ;;
+  record-info) [[ $# -le 2 ]] || { usage; exit 1; }; record_info "${2:-}" ;;
+  record-read) [[ $# -le 3 ]] || { usage; exit 1; }; record_read "${2:-}" "${3:-}" ;;
+  record-page) [[ $# -le 4 ]] || { usage; exit 1; }; record_page "${2:-}" "${3:-}" "${4:-}" ;;
+  record-grep) [[ $# -ge 3 && $# -le 4 ]] || { usage; exit 1; }; record_grep "$2" "$3" "${4:-}" ;;
+  __record-loop) record_loop "$2" "$3" "$4" "$5" ;;
+  -h|--help|help) usage ;;
+  *) usage; exit 1 ;;
+esac

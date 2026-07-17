@@ -60,6 +60,14 @@ for (const path of [
   assert.equal(existsSync(join(skillsetsDir, ...path, "SKILL.md")), true, `missing skill ${path.join("/")}`);
 }
 
+const tmuxLogsSkillDir = join(skillsetsDir, "standalone", "tmux-tdl-logs");
+assert.equal(existsSync(join(tmuxLogsSkillDir, "extension.ts")), true, "missing Muon-governed tmux logs extension");
+assert.equal(existsSync(join(tmuxLogsSkillDir, "scripts", "tmux-tdl-logs")), true, "missing tmux logs helper");
+assert.equal(existsSync(join(root, "extensions", "tmux-tdl-logs")), false, "tmux logs should not have a separate extension entrypoint");
+const tmuxLogsExtension = readFileSync(join(tmuxLogsSkillDir, "extension.ts"), "utf8");
+assert.match(tmuxLogsExtension, /isEnabled/);
+assert.match(tmuxLogsExtension, /setActiveTools/);
+
 const githubSkillDir = join(skillsetsDir, "standalone", "github-issues-prs");
 assert.equal(existsSync(join(githubSkillDir, "scripts", "github-md")), true, "missing github-md helper");
 const githubSkill = readFileSync(join(githubSkillDir, "SKILL.md"), "utf8");
@@ -92,6 +100,7 @@ assert.match(archivedFoundationPrompt, /## Teach-Back Gate/);
 
 const index = readFileSync(join(muonDir, "index.ts"), "utf8");
 assert.match(index, /registerMuonCommands/);
+assert.match(index, /registerTmuxTdlLogs/);
 assert.match(index, /discoverMuonResources/);
 assert.match(index, /before_agent_start/);
 assert.match(index, /buildPrompt/);
