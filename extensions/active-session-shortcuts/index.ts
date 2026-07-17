@@ -1,7 +1,7 @@
 import type { ExtensionAPI } from "@mariozechner/pi-coding-agent";
 
 export default function activeSessionShortcuts(pi: ExtensionAPI): void {
-	pi.registerShortcut("ctrl+r", {
+	pi.registerShortcut("ctrl+shift+r", {
 		description: "Rename current session",
 		handler: async (ctx) => {
 			if (!ctx.isIdle()) {
