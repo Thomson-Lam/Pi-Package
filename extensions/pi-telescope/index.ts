@@ -53,6 +53,7 @@ import { createMuonSkillsProvider } from "./providers/muon-skills.js";
 import { createCommandsProvider } from "./providers/commands.js";
 import { createSessionTreeProvider } from "./providers/session-tree.js";
 import { createHotkeysProvider } from "./providers/hotkeys.js";
+import { editResponseInNvim } from "./response-editor.js";
 
 type ProviderFactory = (
 	ctx: ExtensionCommandContext,
@@ -203,6 +204,19 @@ async function runTelescope(
 	await openTelescope(provider, ctx, {
 		allProviders: buildAllProviders(ctx, pi),
 	});
+}
+
+function lastAssistantText(ctx: ExtensionCommandContext): string | undefined {
+	const branch = ctx.sessionManager.getBranch();
+	for (let i = branch.length - 1; i >= 0; i--) {
+		const entry = branch[i];
+		if (entry.type !== "message" || entry.message.role !== "assistant") continue;
+		const text = entry.message.content
+			.filter((part): part is { type: "text"; text: string } => part.type === "text")
+			.map((part) => part.text)
+			.join("\n");
+		if (text.trim()) return text;
+	}
 }
 
 // ---------------------------------------------------------------------------
@@ -409,6 +423,18 @@ export default function (pi: ExtensionAPI) {
 	pi.registerCommand("telescope-hotkeys", {
 		description: "Search Pi and Telescope keyboard shortcuts",
 		handler: (_args, ctx) => runTelescope(pi, ctx, "help"),
+	});
+
+	pi.registerCommand("ar", {
+		description: "Edit and save the latest agent response under docs/planning",
+		handler: async (_args, ctx) => {
+			const text = lastAssistantText(ctx);
+			if (!text) {
+				ctx.ui.notify("No agent response found", "warning");
+				return;
+			}
+			await editResponseInNvim(text, ctx);
+		},
 	});
 
 	pi.registerCommand("telescope-tree-navigate", {
