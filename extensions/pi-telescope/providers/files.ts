@@ -25,7 +25,7 @@ const useFd = hasBinary("fd");
 export function listFiles(cwd: string): string[] {
 	try {
 		const cmd = useFd
-			? "fd --type f --hidden --follow --exclude .git --exclude node_modules --exclude .venv --exclude dist --exclude build --max-results 10000"
+			? "fd --type f --hidden --no-ignore --follow --exclude .git --exclude node_modules --exclude .venv --exclude dist --exclude build --max-results 10000"
 			: "find . -type f -not -path '*/.git/*' -not -path '*/node_modules/*' -not -path '*/.venv/*' -not -path '*/dist/*' -not -path '*/build/*' | head -10000";
 
 		const output = execSync(cmd, {
