@@ -28,12 +28,12 @@ Muon governs interaction modes, skill profiles, and individual skills in Pi's co
 
 ## Actions
 
-- Status — show the active mode, Muon skills, and loaded skill commands.
-- Mode — choose Minimal, Build, or Spec.
 - Skills — toggle Muon-governed skill profiles and individual skills.
+- Mode — choose Minimal, Build, or Spec.
 - Skill dump — write all Muon-managed skills to a project-local skill folder.
-- Handoff continuation — when the handoff skill is enabled, use /handoff or /hcon to continue from docs/handoff TODOs.
+- Status — show the active mode, Muon skills, and loaded skill commands.
 - Help — show this help modal.
+- Handoff continuation — when the handoff skill is enabled, use /handoff or /hcon to continue from docs/handoff TODOs.
 
 ## Usage
 
@@ -42,6 +42,7 @@ Muon governs interaction modes, skill profiles, and individual skills in Pi's co
 \`/muon spec\`
 \`/muon off\`
 \`/muon mode\`
+\`/mus\`
 \`/muon skills\`
 \`/muon skills status|list\`
 \`/muon skills on|off|toggle <skill-id>\`
@@ -51,17 +52,17 @@ Muon governs interaction modes, skill profiles, and individual skills in Pi's co
 
 ## Modes
 
-Only one mode is active at a time. Activating Build enables Ponytail, cindex, and handoff; each skill can then be toggled independently. Spec enables its YAGNI product-design scope guard, which is disabled when leaving Spec.
+Only one mode is active at a time. Activating Build enables Ponytail, cindex, github-issues-prs, handoff, and tmux-tdl-logs; each skill can then be toggled independently. Spec enables its YAGNI product-design scope guard, which is disabled when leaving Spec.
 
 - \`off\` — Minimal: Pi's default coding-agent system prompt.
-- \`build\` — implementation-focused system prompt plus Ponytail, cindex, and handoff.
+- \`build\` — implementation-focused system prompt plus Ponytail, cindex, github-issues-prs, handoff, and tmux-tdl-logs.
 - \`spec\` — product-specification system prompt plus the YAGNI product-design scope guard.
 
 Skills and profiles can be toggled independently through \`/muon skills\`.
 
 ## Skills
 
-Muon exposes skills through Pi resource discovery, then reloads so Pi refreshes the skill catalog. Changing a mode or skills rewrites the system prompt and invalidates the provider KV cache for the conversation.
+Muon exposes skills through Pi resource discovery, then reloads so Pi refreshes the skill catalog.
 
 Profiles: \`ponytail\`.
 
@@ -129,10 +130,10 @@ async function selectModal(ctx: ExtensionCommandContext, title: string, items: S
 
 async function pickMuonAction(ctx: ExtensionCommandContext): Promise<MuonAction | undefined> {
   const selected = await selectModal(ctx, "Muon", [
-    { value: "status", label: "Status", description: "Show Muon mode, skill configuration, and loaded skill commands" },
-    { value: "mode", label: "Mode", description: "Choose Minimal, Build, or Spec" },
     { value: "skills", label: "Skills", description: "Toggle skill profiles and individual skills in context" },
+    { value: "mode", label: "Mode", description: "Choose Minimal, Build, or Spec" },
     { value: "skill-dump", label: "Skill dump", description: "Write all Muon-managed skills to .pi/.agents/.claude/.codex" },
+    { value: "status", label: "Status", description: "Show Muon mode, skill configuration, and loaded skill commands" },
     { value: "help", label: "Help", description: "Show Muon help" },
   ]);
   if (!selected) return undefined;
@@ -145,7 +146,7 @@ async function pickMuonAction(ctx: ExtensionCommandContext): Promise<MuonAction 
 async function showMuonModePicker(ctx: ExtensionCommandContext, current: MuonMode): Promise<MuonMode | undefined> {
   const selected = await selectModal(ctx, `Muon mode (current: ${current})`, [
     { value: "off", label: "Minimal", description: "Default Pi coding-agent system prompt" },
-    { value: "build", label: "Build", description: "Implementation prompt with Ponytail, cindex, and handoff" },
+    { value: "build", label: "Build", description: "Implementation prompt with default Muon skills" },
     { value: "spec", label: "Spec", description: "Product-specification prompt with YAGNI scope guard" },
   ]);
   return selected && isMuonMode(selected) ? selected : undefined;
@@ -174,62 +175,6 @@ async function runSkillDump(ctx: ExtensionCommandContext, target: SkillDumpTarge
     ].join("\n"),
     "info",
   );
-}
-
-type SkillMutationRisk = {
-  level: "safe" | "warn" | "reject";
-  tokens?: number;
-  contextWindow?: number;
-  ratio?: number;
-  message: string;
-};
-
-function getSkillMutationRisk(ctx: ExtensionCommandContext): SkillMutationRisk {
-  const usage = ctx.getContextUsage?.() as { tokens?: number; inputTokens?: number; totalTokens?: number; contextWindow?: number } | undefined;
-  const tokens = usage?.tokens ?? usage?.inputTokens ?? usage?.totalTokens;
-  const contextWindow = usage?.contextWindow ?? (ctx.model as { contextWindow?: number } | undefined)?.contextWindow;
-  const ratio = tokens !== undefined && contextWindow ? tokens / contextWindow : undefined;
-  const formatted = tokens !== undefined ? `${tokens.toLocaleString()} tokens` : "unknown token count";
-
-  if (ratio !== undefined && ratio > 0.5) {
-    return {
-      level: "reject",
-      tokens,
-      contextWindow,
-      ratio,
-      message: `Skill changes are blocked at ${formatted} (>50% context). Changing the skill ledger now would invalidate the provider KV cache for a large context. Use /tree or start a fresh session before toggling skills.`,
-    };
-  }
-
-  if (ratio !== undefined && ratio >= 0.2) {
-    return {
-      level: "warn",
-      tokens,
-      contextWindow,
-      ratio,
-      message: `Changing skills at ${formatted} (20%+ context) will rewrite the system prompt and invalidate the provider KV cache. Consider /tree or a fresh session first.`,
-    };
-  }
-
-  return {
-    level: "safe",
-    tokens,
-    contextWindow,
-    ratio,
-    message: "Skill changes are safe for the current context size.",
-  };
-}
-
-async function ensureSkillMutationAllowed(ctx: ExtensionCommandContext): Promise<boolean> {
-  const risk = getSkillMutationRisk(ctx);
-  if (risk.level === "reject") {
-    ctx.ui.notify(risk.message, "error");
-    return false;
-  }
-  if (risk.level === "warn") {
-    return ctx.ui.confirm("Changing skills invalidates KV cache", `${risk.message}\n\nProceed anyway?`);
-  }
-  return true;
 }
 
 function sameSkillIds(a: readonly MuonSkillId[], b: readonly MuonSkillId[]): boolean {
@@ -360,7 +305,6 @@ async function applyEnabledSkills(
   ctx: ExtensionCommandContext,
   next: MuonSkillId[],
   reason: string,
-  options: { preflight?: boolean } = {},
 ): Promise<void> {
   const state = deps.getState();
   const current = state.config.enabledSkills;
@@ -369,8 +313,6 @@ async function applyEnabledSkills(
     ctx.ui.notify(`Muon skills unchanged: ${formatEnabledSkills(normalized)}`, "info");
     return;
   }
-  if (options.preflight !== false && !(await ensureSkillMutationAllowed(ctx))) return;
-
   deps.setState((draft) => {
     draft.config.enabledSkills = normalized;
   }, ctx);
@@ -385,7 +327,6 @@ async function applyMode(deps: MuonDeps, ctx: ExtensionCommandContext, mode: Muo
     ctx.ui.notify(`Muon mode is already ${mode}.`, "info");
     return;
   }
-  if (!(await ensureSkillMutationAllowed(ctx))) return;
 
   deps.setState((draft) => {
     draft.config.mode = mode;
@@ -396,12 +337,9 @@ async function applyMode(deps: MuonDeps, ctx: ExtensionCommandContext, mode: Muo
 }
 
 async function showMuonSkillsToggle(pi: ExtensionAPI, deps: MuonDeps, ctx: ExtensionCommandContext): Promise<void> {
-  if (!(await ensureSkillMutationAllowed(ctx))) return;
-
   const state = deps.getState();
   const initial = new Set(state.config.enabledSkills);
   const staged = new Set(state.config.enabledSkills);
-  const risk = getSkillMutationRisk(ctx);
 
   const result = await ctx.ui.custom<MuonSkillId[] | undefined>((tui, theme, _keybindings, done) => {
     const managedItems: SettingItem[] = MUON_SKILL_SOURCES.map((source) => {
@@ -439,7 +377,6 @@ async function showMuonSkillsToggle(pi: ExtensionAPI, deps: MuonDeps, ctx: Exten
     const container = new Container();
     container.addChild(new DynamicBorder((s: string) => theme.fg("accent", s)));
     container.addChild(new Text(theme.fg("accent", theme.bold("Muon Skills")), 1, 0));
-    container.addChild(new Text(theme.fg(risk.level === "safe" ? "dim" : "warning", risk.message), 1, 0));
 
     const settingsList = new SettingsList(
       items,
@@ -475,7 +412,7 @@ async function showMuonSkillsToggle(pi: ExtensionAPI, deps: MuonDeps, ctx: Exten
   if (!result) return;
   const selected = new Set(result.filter((id) => initial.has(id) || isMuonSkillId(id)));
   const next = MUON_SKILL_SOURCES.map((source) => source.id).filter((id) => selected.has(id));
-  await applyEnabledSkills(deps, ctx, next, "updated", { preflight: false });
+  await applyEnabledSkills(deps, ctx, next, "updated");
 }
 
 async function showMuonHelp(ctx: ExtensionCommandContext): Promise<void> {
@@ -558,6 +495,13 @@ async function runMuonAction(pi: ExtensionAPI, deps: MuonDeps, ctx: ExtensionCom
 }
 
 export function registerMuonCommands(pi: ExtensionAPI, deps: MuonDeps): void {
+  pi.registerCommand("mus", {
+    description: "Open Muon skill selection",
+    handler: async (_args, ctx) => {
+      await showMuonSkillsToggle(pi, deps, ctx);
+    },
+  });
+
   pi.registerCommand("muon", {
     description: "Open Muon menu",
     getArgumentCompletions: (prefix) => {

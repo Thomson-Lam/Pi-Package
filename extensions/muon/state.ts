@@ -9,7 +9,7 @@ export function createInitialMuonState(): MuonState {
   return {
     config: {
       mode: "off",
-      enabledSkills: ["ponytail", "cindex", "handoff"],
+      enabledSkills: ["ponytail", "cindex", "github-issues-prs", "handoff", "tmux-tdl-logs"],
     },
   };
 }

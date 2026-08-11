@@ -17,10 +17,10 @@ Only one mode is active at a time:
 | Mode | System prompt | Synchronized skill bundle |
 |---|---|---|
 | `off` | Minimal: Pi's default coding-agent prompt | none |
-| `build` | `modes/build-prompt.md` | Ponytail, cindex, and handoff |
+| `build` | `modes/build-prompt.md` | Ponytail, cindex, github-issues-prs, handoff, and tmux-tdl-logs |
 | `spec` | `modes/spec-prompt.md` | `yagni-product-design` |
 
-Activating Build enables Ponytail, cindex, and handoff. They remain independently toggleable afterward. Activating Spec enables `yagni-product-design`; leaving Spec disables that mode-owned skill. The default mode is `off` with Ponytail, cindex, and handoff enabled.
+Activating Build enables Ponytail, cindex, github-issues-prs, handoff, and tmux-tdl-logs. They remain independently toggleable afterward. Activating Spec enables `yagni-product-design`; leaving Spec disables that mode-owned skill. The default mode is `off` with Ponytail, cindex, github-issues-prs, handoff, and tmux-tdl-logs enabled.
 
 Mode and skill selection are session-global configuration. Navigating conversation branches with `/tree` does not rewind them; change them explicitly through `/muon`.
 
@@ -29,7 +29,8 @@ Mode and skill selection are session-global configuration. Navigating conversati
 Muon exposes selected skill roots through Pi `resources_discover`, then reloads the session so Pi refreshes the skill catalog.
 
 ```text
-/muon skills                         # toggle list UI
+/mus                                 # open skill selection and apply changes
+/muon skills                         # same toggle list UI
 /muon skills status                  # show managed and loaded skills
 /muon skills ponytail
 /muon skills off                     # disable profile bundles; preserve standalone skills
@@ -51,16 +52,14 @@ Both commands read `docs/handoff/handoff-<subject>.md` plus `docs/handoff/handof
 
 Pi may also load external skills from package settings, CLI options, `~/.pi/agent/skills`, `~/.agents/skills`, and trusted project skill directories. Muon shows these as read-only `(external)` rows because an extension cannot remove resources loaded by Pi's discovery layer. In tmux, Enter opens an external skill's `SKILL.md` in a Neovim popup.
 
-Changing modes or skills mutates the system prompt and invalidates the provider KV cache. Muon blocks changes above 50% context usage and warns at 20% or higher.
-
 ## UI
 
 `/muon` opens the action menu:
 
-- **Status** — current mode, enabled skills, and loaded skill commands
-- **Mode** — Minimal, Build, or Spec
 - **Skills** — managed toggles and external skill visibility
+- **Mode** — Minimal, Build, or Spec
 - **Skill dump** — export Muon-managed skills
+- **Status** — current mode, enabled skills, and loaded skill commands
 - **Help** — command reference
 
 The Mode and Skills dialogs support `j`/`k`, arrow keys, Enter, and Esc. The status widget shows both active mode and enabled skills.

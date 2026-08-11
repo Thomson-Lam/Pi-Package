@@ -6,6 +6,7 @@ const order = [
   "ponytail",
   "authoring-skills",
   "cindex",
+  "github-issues-prs",
   "handoff",
   "ipynb-toolshed",
   "tmux-tdl-logs",
@@ -21,7 +22,10 @@ const policies = {
     return normalizeModeSkillIds(values, mode, order);
   },
 };
-const initial = { mode: "off", enabledSkills: ["ponytail", "cindex", "handoff"] };
+const initial = {
+  mode: "off",
+  enabledSkills: ["ponytail", "cindex", "github-issues-prs", "handoff", "tmux-tdl-logs"],
+};
 const custom = (customType, data) => ({ type: "custom", customType, data });
 
 assert.deepEqual(

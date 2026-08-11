@@ -126,7 +126,7 @@ assert.doesNotMatch(types, /MuonSkillset|skillset:/);
 
 const state = readFileSync(join(muonDir, "state.ts"), "utf8");
 assert.match(state, /mode: "off"/);
-assert.match(state, /enabledSkills: \["ponytail", "cindex", "handoff"\]/);
+assert.match(state, /enabledSkills: \["ponytail", "cindex", "github-issues-prs", "handoff", "tmux-tdl-logs"\]/);
 assert.match(state, /restoreConfigFromEntries/);
 assert.match(state, /normalizeModeSkillIds/);
 
@@ -152,7 +152,9 @@ assert.match(parser, /verb === "mode"/);
 assert.match(parser, /rest\.length/);
 
 const commands = readFileSync(join(muonDir, "commands.ts"), "utf8");
+assert.match(commands, /registerCommand\("mus"/);
 assert.match(commands, /showMuonModePicker/);
+assert.match(commands, /\{ value: "skills"[\s\S]*\{ value: "mode"[\s\S]*\{ value: "skill-dump"[\s\S]*\{ value: "status"[\s\S]*\{ value: "help"/);
 assert.match(commands, /Mode/);
 assert.match(commands, /build/);
 assert.match(commands, /spec/);

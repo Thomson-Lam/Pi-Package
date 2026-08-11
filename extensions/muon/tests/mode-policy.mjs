@@ -5,17 +5,18 @@ const order = [
   "ponytail",
   "authoring-skills",
   "cindex",
+  "github-issues-prs",
   "handoff",
   "ipynb-toolshed",
   "tmux-tdl-logs",
   "yagni-product-design",
 ];
-const defaults = ["ponytail", "cindex", "handoff"];
+const defaults = ["ponytail", "cindex", "github-issues-prs", "handoff", "tmux-tdl-logs"];
 
 assert.deepEqual(
   selectModeSkillIds([], "build", order),
   defaults,
-  "Build mode should enable Ponytail, cindex, and handoff",
+  "Build mode should enable the default Muon skills",
 );
 assert.deepEqual(
   normalizeModeSkillIds(["authoring-skills"], "build", order),
