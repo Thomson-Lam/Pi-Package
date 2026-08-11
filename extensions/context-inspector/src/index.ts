@@ -2,9 +2,11 @@ import type { ExtensionAPI, ExtensionCommandContext } from "@earendil-works/pi-c
 import { DynamicBorder } from "@earendil-works/pi-coding-agent";
 import { Container, type SelectItem, SelectList, Text } from "@earendil-works/pi-tui";
 import { registerCollectors } from "./collector.js";
-import { rebuild, openContextPanel } from "./ui/panel.js";
+import { openContextPanel } from "./ui/panel.js";
 import { openContextUsagePanel } from "./ui/context-usage-panel.js";
-import { refreshWidget } from "./ui/widget.js";
+import { FRESH_CONTEXT_MESSAGE_TYPE } from "./fresh/context-message.js";
+import { runFreshContextSession } from "./fresh/transition.js";
+import { renderFreshContextMessage } from "./ui/fresh-message.js";
 
 type CtxAction = "inspect" | "reads" | "help";
 type ParsedCtx = { kind: "menu" } | { kind: "action"; action: CtxAction } | { kind: "error"; message: string };
@@ -19,13 +21,16 @@ Open a UI-only context inspector. This help is rendered in a modal and is not in
 - Reads — inspect files and read-tool snapshots that are likely in session context.
 - Help — show this help modal.
 
+## Fresh sessions
+
+- /cnew — select relevant files read on the active branch, review their current contents and size, then start a fresh session with a user-authored objective.
+
 ## Related commands
 
 - /ctx — open the context menu
 - /ctx inspect — open the usage overview directly
 - /ctx reads — open read snapshots directly
 - /reads — shortcut for read snapshots
-- /ctfresh — refresh reconstructed context metadata
 
 ## Notes
 
@@ -112,6 +117,7 @@ async function runCtxAction(ctx: ExtensionCommandContext, action: CtxAction): Pr
 
 export default function (pi: ExtensionAPI) {
   registerCollectors(pi);
+  pi.registerMessageRenderer(FRESH_CONTEXT_MESSAGE_TYPE, renderFreshContextMessage);
 
   pi.registerCommand("ctx", {
     description: "Open context inspector menu",
@@ -131,6 +137,13 @@ export default function (pi: ExtensionAPI) {
     },
   });
 
+  pi.registerCommand("cnew", {
+    description: "Start a fresh session with relevant files already in context",
+    handler: async (args, ctx) => {
+      await runFreshContextSession(ctx, args || "");
+    },
+  });
+
   pi.registerCommand("reads", {
     description: "Open read snapshot inspector",
     handler: async (_args, ctx) => {
@@ -138,20 +151,4 @@ export default function (pi: ExtensionAPI) {
     },
   });
 
-  pi.registerCommand("ctfresh", {
-    description: "Refresh Context Inspector reconstruction",
-    handler: async (_args, ctx) => {
-      const items = rebuild(ctx);
-      refreshWidget(ctx);
-      ctx.ui.notify(`Context Inspector refreshed: ${items.length} items`, "info");
-    },
-  });
-
-
-  pi.registerShortcut("ctrl+shift+i", {
-    description: "Open Context Inspector",
-    handler: async (ctx) => {
-      await openContextPanel(ctx);
-    },
-  });
 }

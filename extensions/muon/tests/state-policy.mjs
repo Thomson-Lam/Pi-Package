@@ -7,7 +7,6 @@ const order = [
   "authoring-skills",
   "cindex",
   "github-issues-prs",
-  "handoff",
   "ipynb-toolshed",
   "tmux-tdl-logs",
   "yagni-product-design",
@@ -24,7 +23,7 @@ const policies = {
 };
 const initial = {
   mode: "off",
-  enabledSkills: ["ponytail", "cindex", "github-issues-prs", "handoff", "tmux-tdl-logs"],
+  enabledSkills: ["ponytail", "cindex", "github-issues-prs", "tmux-tdl-logs"],
 };
 const custom = (customType, data) => ({ type: "custom", customType, data });
 

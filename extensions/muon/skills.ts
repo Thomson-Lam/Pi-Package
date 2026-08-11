@@ -3,7 +3,6 @@ import {
   MUON_AUTHORING_SKILLS_DIR,
   MUON_CINDEX_SKILL_DIR,
   MUON_GITHUB_ISSUES_PRS_SKILL_DIR,
-  MUON_HANDOFF_SKILL_DIR,
   MUON_IPYNB_TOOLS_SHED_SKILL_DIR,
   MUON_PONYTAIL_SKILLS_DIR,
   MUON_TMUX_TDL_LOGS_SKILL_DIR,
@@ -52,13 +51,6 @@ export const MUON_SKILL_SOURCES: MuonSkillSource[] = [
     kind: "skill",
     description: "Read GitHub issues and create issues or pull requests with gh.",
     paths: () => [MUON_GITHUB_ISSUES_PRS_SKILL_DIR],
-  },
-  {
-    id: "handoff",
-    label: "handoff",
-    kind: "skill",
-    description: "Create/update a handoff file for current work and context.",
-    paths: () => [MUON_HANDOFF_SKILL_DIR],
   },
   {
     id: "ipynb-toolshed",

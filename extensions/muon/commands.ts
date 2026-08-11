@@ -33,7 +33,6 @@ Muon governs interaction modes, skill profiles, and individual skills in Pi's co
 - Skill dump — write all Muon-managed skills to a project-local skill folder.
 - Status — show the active mode, Muon skills, and loaded skill commands.
 - Help — show this help modal.
-- Handoff continuation — when the handoff skill is enabled, use /handoff or /hcon to continue from docs/handoff TODOs.
 
 ## Usage
 
@@ -52,10 +51,10 @@ Muon governs interaction modes, skill profiles, and individual skills in Pi's co
 
 ## Modes
 
-Only one mode is active at a time. Activating Build enables Ponytail, cindex, github-issues-prs, handoff, and tmux-tdl-logs; each skill can then be toggled independently. Spec enables its YAGNI product-design scope guard, which is disabled when leaving Spec.
+Only one mode is active at a time. Activating Build enables Ponytail, cindex, github-issues-prs, and tmux-tdl-logs; each skill can then be toggled independently. Spec enables its YAGNI product-design scope guard, which is disabled when leaving Spec.
 
 - \`off\` — Minimal: Pi's default coding-agent system prompt.
-- \`build\` — implementation-focused system prompt plus Ponytail, cindex, github-issues-prs, handoff, and tmux-tdl-logs.
+- \`build\` — implementation-focused system prompt plus Ponytail, cindex, github-issues-prs, and tmux-tdl-logs.
 - \`spec\` — product-specification system prompt plus the YAGNI product-design scope guard.
 
 Skills and profiles can be toggled independently through \`/muon skills\`.
@@ -66,9 +65,7 @@ Muon exposes skills through Pi resource discovery, then reloads so Pi refreshes 
 
 Profiles: \`ponytail\`.
 
-Standalone skills: \`authoring-skills\`, \`cindex\`, \`github-issues-prs\`, \`handoff\`, \`ipynb-toolshed\`, \`tmux-tdl-logs\`.
-
-When \`handoff\` is enabled, \`/handoff\` injects selected handoff file contents and lets you select TODOs; \`/hcon\` first lets you choose which file-context bullets to read and inject.
+Standalone skills: \`authoring-skills\`, \`cindex\`, \`github-issues-prs\`, \`ipynb-toolshed\`, \`tmux-tdl-logs\`.
 
 Spec-owned skill: \`yagni-product-design\`.
 

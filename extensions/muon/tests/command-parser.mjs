@@ -1,7 +1,7 @@
 import assert from "node:assert/strict";
 import { parseMuonAction } from "../command-parser.js";
 
-const skillIds = ["ponytail", "authoring-skills", "cindex", "handoff", "yagni-product-design"];
+const skillIds = ["ponytail", "authoring-skills", "cindex", "yagni-product-design"];
 const parse = (input) => parseMuonAction(input, skillIds);
 
 assert.deepEqual(parse(""), { kind: "menu" });

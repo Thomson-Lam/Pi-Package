@@ -5,7 +5,6 @@ export type MuonSkillId =
   | "authoring-skills"
   | "cindex"
   | "github-issues-prs"
-  | "handoff"
   | "ipynb-toolshed"
   | "tmux-tdl-logs"
   | "yagni-product-design";

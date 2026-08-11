@@ -17,6 +17,5 @@ export const MUON_AUTHORING_SKILLS_DIR = join(MUON_STANDALONE_SKILLS_DIR, "autho
 export const MUON_CINDEX_SKILL_DIR = join(MUON_STANDALONE_SKILLS_DIR, "cindex");
 export const MUON_GITHUB_ISSUES_PRS_SKILL_DIR = join(MUON_STANDALONE_SKILLS_DIR, "github-issues-prs");
 export const MUON_IPYNB_TOOLS_SHED_SKILL_DIR = join(MUON_STANDALONE_SKILLS_DIR, "ipynb_toolshed");
-export const MUON_HANDOFF_SKILL_DIR = join(MUON_STANDALONE_SKILLS_DIR, "handoff");
 export const MUON_TMUX_TDL_LOGS_SKILL_DIR = join(MUON_STANDALONE_SKILLS_DIR, "tmux-tdl-logs");
 export const MUON_YAGNI_PRODUCT_DESIGN_SKILL_DIR = join(MUON_STANDALONE_SKILLS_DIR, "yagni-product-design");

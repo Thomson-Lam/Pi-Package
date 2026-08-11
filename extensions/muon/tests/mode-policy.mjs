@@ -6,12 +6,11 @@ const order = [
   "authoring-skills",
   "cindex",
   "github-issues-prs",
-  "handoff",
   "ipynb-toolshed",
   "tmux-tdl-logs",
   "yagni-product-design",
 ];
-const defaults = ["ponytail", "cindex", "github-issues-prs", "handoff", "tmux-tdl-logs"];
+const defaults = ["ponytail", "cindex", "github-issues-prs", "tmux-tdl-logs"];
 
 assert.deepEqual(
   selectModeSkillIds([], "build", order),

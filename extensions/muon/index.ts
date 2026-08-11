@@ -5,7 +5,6 @@ import { MUON_BUILD_PROMPT_PATH, MUON_SPEC_PROMPT_PATH, MUON_STATE_ENTRY_TYPE } 
 import { discoverMuonResources } from "./resources.js";
 import { selectModeSkillIds } from "./skills.js";
 import { createInitialMuonState, persistMuonState, restoreMuonState, updateMuonStatus } from "./state.js";
-import registerHandoffContinuation from "./handoff-continuation.js";
 import registerTmuxTdlLogs from "./skillsets/standalone/tmux-tdl-logs/extension.js";
 import type { MuonMode, MuonState } from "./types.js";
 
@@ -86,7 +85,6 @@ export default async function muonExtension(pi: ExtensionAPI): Promise<void> {
   });
 
   registerTmuxTdlLogs(pi, () => state.config.enabledSkills.includes("tmux-tdl-logs"));
-  registerHandoffContinuation(pi, () => state.config.enabledSkills.includes("handoff"));
 
   pi.on("resources_discover", async () => discoverMuonResources(state));
 

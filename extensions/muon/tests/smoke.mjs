@@ -15,7 +15,6 @@ for (const file of [
   "types.ts",
   "state.ts",
   "resources.ts",
-  "handoff-continuation.js",
   "command-parser.js",
   "command-parser.d.ts",
   "mode-policy.js",
@@ -53,7 +52,6 @@ for (const path of [
   ["standalone", "authoring-skills"],
   ["standalone", "cindex"],
   ["standalone", "github-issues-prs"],
-  ["standalone", "handoff"],
   ["standalone", "ipynb_toolshed"],
   ["standalone", "tmux-tdl-logs"],
   ["standalone", "yagni-product-design"],
@@ -102,7 +100,6 @@ assert.match(archivedFoundationPrompt, /## Teach-Back Gate/);
 const index = readFileSync(join(muonDir, "index.ts"), "utf8");
 assert.match(index, /registerMuonCommands/);
 assert.match(index, /registerTmuxTdlLogs/);
-assert.match(index, /registerHandoffContinuation/);
 assert.match(index, /discoverMuonResources/);
 assert.match(index, /before_agent_start/);
 assert.match(index, /buildPrompt/);
@@ -126,7 +123,7 @@ assert.doesNotMatch(types, /MuonSkillset|skillset:/);
 
 const state = readFileSync(join(muonDir, "state.ts"), "utf8");
 assert.match(state, /mode: "off"/);
-assert.match(state, /enabledSkills: \["ponytail", "cindex", "github-issues-prs", "handoff", "tmux-tdl-logs"\]/);
+assert.match(state, /enabledSkills: \["ponytail", "cindex", "github-issues-prs", "tmux-tdl-logs"\]/);
 assert.match(state, /restoreConfigFromEntries/);
 assert.match(state, /normalizeModeSkillIds/);
 
@@ -160,22 +157,6 @@ assert.match(commands, /build/);
 assert.match(commands, /spec/);
 assert.doesNotMatch(commands, /engineering|foundation/i);
 assert.doesNotMatch(commands, /auto\|ponytail\|superpowers|isMuonSkillset|legacy skillset/);
-
-const handoffContinuation = readFileSync(join(muonDir, "handoff-continuation.js"), "utf8");
-assert.match(handoffContinuation, /registerCommand\("handoff"/);
-assert.match(handoffContinuation, /registerCommand\("hcon"/);
-assert.match(handoffContinuation, /parseHandoffBullets/);
-assert.match(handoffContinuation, /parseTodoTasks/);
-assert.match(handoffContinuation, /readSelectedFileContexts/);
-assert.match(handoffContinuation, /readFileSync\(resolved\.absolute, "utf8"\)/);
-assert.match(handoffContinuation, /before_agent_start/);
-assert.match(handoffContinuation, /bytes of content/);
-assert.doesNotMatch(handoffContinuation, /deliverAs: "nextTurn"/);
-
-const handoffSkill = readFileSync(join(skillsetsDir, "standalone", "handoff", "SKILL.md"), "utf8");
-assert.match(handoffSkill, /handoff-<subject>\.todos\.md/);
-assert.doesNotMatch(handoffSkill, /detail level|\/skill:handoff brief|\/skill:handoff detailed|references\/templates/);
-assert.equal(existsSync(join(skillsetsDir, "standalone", "handoff", "references")), false, "stale handoff detail templates remain");
 
 const readme = readFileSync(join(muonDir, "README.md"), "utf8");
 assert.match(readme, /\/muon off/);

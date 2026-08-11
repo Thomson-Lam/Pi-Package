@@ -25,7 +25,7 @@ function contextWarning(ctx: any): { text: string; color: string } | undefined {
   const usage = ctx?.getContextUsage?.();
   const percent = typeof usage?.percent === "number" ? usage.percent : undefined;
   if (percent === undefined || percent <= 40) return undefined;
-  if (percent > 60) return { text: "60% context exceeded, run /skill:handoff", color: ANSI_RED };
+  if (percent > 60) return { text: "60% context exceeded, run /cnew", color: ANSI_RED };
   return { text: "> 40% context used, /tree or subagents if possible", color: ANSI_CYAN };
 }
 
