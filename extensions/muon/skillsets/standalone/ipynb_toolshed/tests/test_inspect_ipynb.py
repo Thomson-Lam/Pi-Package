@@ -207,11 +207,139 @@ class InspectIpynbCliTests(unittest.TestCase):
         self.assertEqual(result.returncode, 1, result.stderr)
         self.assertEqual(json.loads(result.stdout)["matches"], [])
 
-    def test_json_budget_exhaustion_remains_valid(self) -> None:
+    def test_json_budget_uses_valid_paginated_output(self) -> None:
         result = self.run_cli("--cells", "1", "--budget", "10", "--json")
         self.assertEqual(result.returncode, 0, result.stderr)
         payload = json.loads(result.stdout)
-        self.assertTrue(payload["budget_exhausted"])
+        self.assertGreater(payload["pagination"]["page_count"], 1)
+        self.assertEqual(payload["pagination"]["next_page"], 2)
+        self.assertLessEqual(len(payload["cells"][0]["source"]), 10)
+
+    def test_source_pages_reconstruct_complete_source(self) -> None:
+        data = notebook_data()
+        source = "α" * 12_000 + "LATE_SOURCE_TARGET"
+        data["cells"][1]["source"] = [source]
+        data["cells"][1]["outputs"] = []
+        self.notebook.write_text(json.dumps(data, ensure_ascii=False), encoding="utf-8")
+
+        first = self.run_cli("--cells", "1", "--json")
+        second = self.run_cli("--cells", "1", "--page", "2", "--json")
+        self.assertEqual((first.returncode, second.returncode), (0, 0))
+        first_payload = json.loads(first.stdout)
+        second_payload = json.loads(second.stdout)
+        self.assertEqual(first_payload["pagination"]["page_count"], 2)
+        self.assertEqual(first_payload["cells"][0]["source"] + second_payload["cells"][0]["source"], source)
+        self.assertEqual(first_payload["pagination"]["detail_sha256"], second_payload["pagination"]["detail_sha256"])
+
+        search = self.run_cli("--search-source", "LATE_SOURCE_TARGET")
+        self.assertEqual(search.returncode, 0, search.stderr)
+        self.assertIn("cell 1 code", search.stdout)
+
+    def test_source_at_budget_limit_is_not_paginated(self) -> None:
+        data = notebook_data()
+        data["cells"][1]["source"] = ["x" * 12_000]
+        data["cells"][1]["outputs"] = []
+        self.notebook.write_text(json.dumps(data), encoding="utf-8")
+        result = self.run_cli("--cells", "1", "--json")
+        self.assertEqual(result.returncode, 0, result.stderr)
+        payload = json.loads(result.stdout)
+        self.assertNotIn("pagination", payload)
+        self.assertEqual(len(payload["cells"][0]["source"]), 12_000)
+
+    def test_output_pages_reconstruct_and_search_complete_output(self) -> None:
+        data = notebook_data()
+        output = "log line\n" * 1_500 + "final accuracy: 0.97\n"
+        data["cells"][1]["source"] = ["run_training()\n"]
+        data["cells"][1]["outputs"] = [{"output_type": "stream", "name": "stdout", "text": [output]}]
+        self.notebook.write_text(json.dumps(data), encoding="utf-8")
+
+        search = self.run_cli("--search-output", "final accuracy", "--context-lines", "1")
+        self.assertEqual(search.returncode, 0, search.stderr)
+        self.assertIn("final accuracy: 0.97", search.stdout)
+
+        first = json.loads(self.run_cli("--cells", "1", "--only-outputs", "--json").stdout)
+        second = json.loads(self.run_cli("--cells", "1", "--only-outputs", "--page", "2", "--json").stdout)
+        chunks = first["cells"][0]["outputs"][0]["text"] + second["cells"][0]["outputs"][0]["text"]
+        self.assertEqual(chunks, output)
+
+    def test_multiple_output_items_and_traceback_paginate_with_metadata(self) -> None:
+        data = notebook_data()
+        data["cells"][1]["source"] = []
+        data["cells"][1]["outputs"] = [
+            {"output_type": "stream", "name": "stdout", "text": ["a" * 10]},
+            {
+                "output_type": "error",
+                "ename": "RuntimeError",
+                "evalue": "late failure",
+                "traceback": ["b" * 11],
+            },
+        ]
+        self.notebook.write_text(json.dumps(data), encoding="utf-8")
+
+        pages = [
+            json.loads(self.run_cli("--cells", "1", "--only-outputs", "--budget", "10", "--page", str(page), "--json").stdout)
+            for page in (1, 2, 3)
+        ]
+        self.assertEqual(pages[0]["cells"][0]["outputs"][0]["text"], "a" * 10)
+        error_page = pages[1]["cells"][0]["outputs"][0]
+        self.assertEqual(error_page["ename"], "RuntimeError")
+        self.assertEqual(error_page["evalue"], "late failure")
+        traceback = error_page["traceback"] + pages[2]["cells"][0]["outputs"][0]["traceback"]
+        self.assertEqual(traceback, "b" * 11)
+
+    def test_mixed_source_and_output_cross_page_without_loss(self) -> None:
+        data = notebook_data()
+        source = "s" * 11_995
+        output = "output-crossing-boundary"
+        data["cells"][1]["source"] = [source]
+        data["cells"][1]["outputs"] = [{"output_type": "stream", "name": "stdout", "text": [output]}]
+        self.notebook.write_text(json.dumps(data), encoding="utf-8")
+
+        first = json.loads(self.run_cli("--cells", "1", "--json").stdout)
+        second = json.loads(self.run_cli("--cells", "1", "--page", "2", "--json").stdout)
+        first_cell = first["cells"][0]
+        second_cell = second["cells"][0]
+        self.assertEqual(first_cell["source"], source)
+        output_chunks = first_cell["outputs"][0]["text"] + second_cell["outputs"][0]["text"]
+        self.assertEqual(output_chunks, output)
+
+    def test_text_page_reports_exact_continuation(self) -> None:
+        data = notebook_data()
+        data["cells"][1]["source"] = ["x" * 12_001]
+        data["cells"][1]["outputs"] = []
+        self.notebook.write_text(json.dumps(data), encoding="utf-8")
+        result = self.run_cli("--cells", "1")
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertIn("detail page 1 of 2", result.stdout)
+        self.assertIn("next_page: 2", result.stdout)
+        self.assertIn("re-run with --page 2", result.stdout)
+
+    def test_only_outputs_page_count_excludes_large_source(self) -> None:
+        data = notebook_data()
+        data["cells"][1]["source"] = ["s" * 19_000]
+        data["cells"][1]["outputs"] = [{"output_type": "stream", "name": "stdout", "text": ["small output"]}]
+        self.notebook.write_text(json.dumps(data), encoding="utf-8")
+        payload = json.loads(self.run_cli("--cells", "1", "--only-outputs", "--json").stdout)
+        self.assertNotIn("pagination", payload)
+        self.assertNotIn("source", payload["cells"][0])
+        self.assertEqual(payload["cells"][0]["outputs"][0]["text"], "small output")
+
+    def test_page_and_budget_validation(self) -> None:
+        zero_page = self.run_cli("--cells", "1", "--page", "0")
+        self.assertEqual(zero_page.returncode, 2)
+        self.assertIn("at least 1", zero_page.stderr)
+
+        excessive_budget = self.run_cli("--cells", "1", "--budget", "20001")
+        self.assertEqual(excessive_budget.returncode, 2)
+        self.assertIn("between 1 and 20000", excessive_budget.stderr)
+
+        no_detail = self.run_cli("--page", "2")
+        self.assertEqual(no_detail.returncode, 2)
+        self.assertIn("requires", no_detail.stderr)
+
+        out_of_range = self.run_cli("--cells", "1", "--page", "99", "--json")
+        self.assertEqual(out_of_range.returncode, 2)
+        self.assertIn("out of range", json.loads(out_of_range.stderr)["error"])
 
     def test_json_runtime_error_is_json_on_stderr(self) -> None:
         self.notebook.write_text("not JSON", encoding="utf-8")

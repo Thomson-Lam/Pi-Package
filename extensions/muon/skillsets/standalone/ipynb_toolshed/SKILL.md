@@ -58,7 +58,7 @@ Search both source and outputs:
 python3 <PATH>/inspect_ipynb.py notebook.ipynb --grep 'loss|accuracy' --where both
 ```
 
-Match output is intentionally compact: cell index, cell type, run state, source hash, line number or multiline range, and a short matching line.
+Match output: cell index, cell type, run state, source hash, line number or multiline range, and a short matching line.
 
 ## Show surrounding match lines
 
@@ -122,11 +122,31 @@ Show error cells:
 python3 <PATH>/inspect_ipynb.py notebook.ipynb --errors
 ```
 
-Use a larger output budget only when the default truncates needed context:
+## Large cell and output guardrail
+
+Detailed reads return complete source and textual outputs when they fit within the default 12,000-character page. If unusually large detail crosses that hard call guardrail, the response reports its page count and exact next page:
+
+```text
+--- detail page 1 of 3 ---
+next_page: 2
+...
+...[detail continues; re-run with --page 2]
+```
+
+Continue without choosing offsets or ranges:
 
 ```bash
-python3 <PATH>/inspect_ipynb.py notebook.ipynb --cells 6:11 --budget 20000
+python3 <PATH>/inspect_ipynb.py notebook.ipynb --cells 6 --page 2
+python3 <PATH>/inspect_ipynb.py notebook.ipynb --cells 6 --only-outputs --page 2
 ```
+
+`--budget` sets characters per page, up to the non-bypassable maximum of 20,000:
+
+```bash
+python3 <PATH>/inspect_ipynb.py notebook.ipynb --cells 6 --budget 20000
+```
+
+Pagination applies only to detailed rendering. Source/output search and `--context-lines` always inspect the complete underlying text, including content on later detail pages. 
 
 Detailed cell output includes:
 
@@ -158,7 +178,7 @@ python3 <PATH>/inspect_ipynb.py notebook.ipynb \
 
 JSON mode emits exactly one compact JSON document on stdout. Its `mode` is `summary`, `matches`, or `cells`. Search misses emit an empty `matches` array and exit with status 1. Selected-cell output includes structured textual outputs but lists only MIME keys for non-text data; it does not emit image/base64 payloads.
 
-`--budget` still limits selected cell source/output content while preserving valid JSON. Use `--only-outputs --json` to omit cell source.
+Use `--only-outputs --json` to omit cell source. Multi-page JSON detail includes a `pagination` object with page count, next/previous page, total characters, and a stable detail hash. Text fields that cross a page boundary include character-range metadata while the JSON document remains valid.
 
 ## Filter cells
 
