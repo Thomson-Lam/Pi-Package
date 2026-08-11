@@ -6,6 +6,7 @@ import { openContextPanel } from "./ui/panel.js";
 import { openContextUsagePanel } from "./ui/context-usage-panel.js";
 import { FRESH_CONTEXT_MESSAGE_TYPE } from "./fresh/context-message.js";
 import { runFreshContextSession } from "./fresh/transition.js";
+import { observeFreshSelectionMessage } from "./fresh/selection.js";
 import { renderFreshContextMessage } from "./ui/fresh-message.js";
 
 type CtxAction = "inspect" | "reads" | "help";
@@ -13,7 +14,7 @@ type ParsedCtx = { kind: "menu" } | { kind: "action"; action: CtxAction } | { ki
 
 const HELP_TEXT = `# /ctx
 
-Open a UI-only context inspector. This help is rendered in a modal and is not injected into the current agent session.
+Open the UI-only /ctx context viewer. This help is rendered in a modal and is not injected into the current agent session.
 
 ## Actions
 
@@ -79,10 +80,10 @@ async function selectModal(ctx: ExtensionCommandContext, title: string, items: S
 }
 
 async function pickCtxAction(ctx: ExtensionCommandContext): Promise<CtxAction | undefined> {
-  const selected = await selectModal(ctx, "Context Inspector", [
+  const selected = await selectModal(ctx, "Ctx", [
     { value: "inspect", label: "Inspect", description: "Open context usage overview" },
     { value: "reads", label: "Reads", description: "Inspect read-tool snapshots and context files" },
-    { value: "help", label: "Help", description: "Show UI-only context inspector help" },
+    { value: "help", label: "Help", description: "Show UI-only /ctx help" },
   ]);
   return selected as CtxAction | undefined;
 }
@@ -92,7 +93,7 @@ async function showCtxHelp(ctx: ExtensionCommandContext): Promise<void> {
     (tui, theme, _keybindings, done) => {
       const container = new Container();
       container.addChild(new DynamicBorder((s: string) => theme.fg("accent", s)));
-      container.addChild(new Text(theme.fg("accent", theme.bold("Context Inspector Help")), 1, 0));
+      container.addChild(new Text(theme.fg("accent", theme.bold("Ctx Help")), 1, 0));
       container.addChild(new Text(HELP_TEXT, 1, 1));
       container.addChild(new Text(theme.fg("dim", "Press Enter or Esc to dismiss"), 1, 0));
       container.addChild(new DynamicBorder((s: string) => theme.fg("accent", s)));
@@ -118,9 +119,10 @@ async function runCtxAction(ctx: ExtensionCommandContext, action: CtxAction): Pr
 export default function (pi: ExtensionAPI) {
   registerCollectors(pi);
   pi.registerMessageRenderer(FRESH_CONTEXT_MESSAGE_TYPE, renderFreshContextMessage);
+  pi.on("message_end", observeFreshSelectionMessage);
 
   pi.registerCommand("ctx", {
-    description: "Open context inspector menu",
+    description: "Open /ctx context menu",
     getArgumentCompletions: (prefix) => {
       const items = ["inspect", "reads", "help"];
       return items.filter((item) => item.startsWith(prefix.trimStart())).map((value) => ({ value, label: value }));
@@ -140,7 +142,7 @@ export default function (pi: ExtensionAPI) {
   pi.registerCommand("cnew", {
     description: "Start a fresh session with relevant files already in context",
     handler: async (args, ctx) => {
-      await runFreshContextSession(ctx, args || "");
+      await runFreshContextSession(pi, ctx, args || "");
     },
   });
 

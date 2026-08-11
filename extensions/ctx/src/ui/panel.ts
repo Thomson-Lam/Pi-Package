@@ -7,7 +7,7 @@ import { refreshWidget } from "./widget.js";
 
 export async function openContextPanel(ctx: ExtensionContext) {
   if (!(ctx as any).hasUI && (ctx as any).hasUI !== undefined) {
-    ctx.ui.notify("Context Inspector needs interactive UI.", "warning");
+    ctx.ui.notify("Ctx needs interactive UI.", "warning");
     return;
   }
 
@@ -57,7 +57,7 @@ class ContextPanel {
     const mode = inspectorState.mode;
     const innerWidth = Math.max(10, width - 2);
     const lines: string[] = [];
-    lines.push(this.fit(innerWidth, this.theme.fg("accent", this.theme.bold("Context Inspector")) + this.theme.fg("dim", "  Files read + snapshots")));
+    lines.push(this.fit(innerWidth, this.theme.fg("accent", this.theme.bold("Ctx")) + this.theme.fg("dim", "  Files read + snapshots")));
 
     if (mode === "summary") this.renderSummary(lines, innerWidth);
     else if (mode === "detail") this.renderDetail(lines, innerWidth);

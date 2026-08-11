@@ -38,7 +38,7 @@ export function refreshWidget(ctx: any) {
     const uniqueFiles = uniqueReadFileCount(items);
     const line = `${uniqueFiles} files read (${counts.readFile} reads)`;
     const warning = contextWarning(ctx);
-    ctx.ui.setWidget("context-inspector", (_tui: any, theme: any) => ({
+    ctx.ui.setWidget("ctx", (_tui: any, theme: any) => ({
       render(width: number) {
         const left = theme.fg("accent", width < 34 ? `${uniqueFiles} files` : line);
         if (!warning) return [left];
@@ -57,7 +57,7 @@ export function refreshWidget(ctx: any) {
       },
       invalidate() {},
     }), { placement: "belowEditor" });
-    ctx.ui.setStatus("context-inspector", undefined);
+    ctx.ui.setStatus("ctx", undefined);
   } catch {
     // TUI may be unavailable in print/RPC modes; fail closed.
   }

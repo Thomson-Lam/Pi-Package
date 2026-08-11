@@ -19,7 +19,7 @@ test("extension registers /cnew without adding /ctx fresh", async () => {
   assert.equal(commands.has("cnew"), true);
   assert.equal(commands.has("ctfresh"), false);
   assert.deepEqual(shortcuts, []);
-  assert.equal(renderers.has("context-inspector:fresh-files"), true);
+  assert.equal(renderers.has("ctx:fresh-files"), true);
   assert.deepEqual(commands.get("ctx").getArgumentCompletions("f"), []);
 
   const notifications = [];

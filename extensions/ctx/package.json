@@ -1,5 +1,5 @@
 {
-  "name": "pi-context-inspector",
+  "name": "pi-ctx",
   "version": "0.1.0",
   "private": true,
   "description": "Inspect Pi's inferred active context from session state and extension snapshots.",

@@ -1,6 +1,6 @@
 import type { FreshContextMessageDetails, PreparedContext } from "./types.js";
 
-export const FRESH_CONTEXT_MESSAGE_TYPE = "context-inspector:fresh-files";
+export const FRESH_CONTEXT_MESSAGE_TYPE = "ctx:fresh-files";
 
 export function serializeFreshFiles(files: PreparedContext["included"]): string {
   return files.map((file) => [

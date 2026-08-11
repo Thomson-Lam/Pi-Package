@@ -95,8 +95,8 @@ export function buildContextItems(ctx: any, state: InspectorState): ContextItem[
       path: pathForDisplay(ev.path, cwd),
       status: "likely-active",
       includedReason: ev.resultContent
-        ? "Captured by Context Inspector during this runtime from the read tool result."
-        : "Observed by Context Inspector's tool_call hook; result snapshot has not arrived yet.",
+        ? "Captured by Ctx during this runtime from the read tool result."
+        : "Observed by Ctx's tool_call hook; result snapshot has not arrived yet.",
       preview: previewText(ev.resultPreview || `${ev.path}${ev.offset ? ` offset ${ev.offset}` : ""}${ev.limit ? ` limit ${ev.limit}` : ""}`),
       contentText: ev.resultContent,
       metadata: { toolCallId: ev.toolCallId, timestamp: ev.timestamp, offset: ev.offset, limit: ev.limit, isError: ev.isError },

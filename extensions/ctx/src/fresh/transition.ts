@@ -1,4 +1,4 @@
-import type { ExtensionCommandContext } from "@earendil-works/pi-coding-agent";
+import type { ExtensionAPI, ExtensionCommandContext } from "@earendil-works/pi-coding-agent";
 import { buildFreshContextMessage, FRESH_CONTEXT_MESSAGE_TYPE } from "./context-message.js";
 import { prepareSelectedFiles, verifyPreparedFilesUnchanged } from "./files.js";
 import { buildReadLedger } from "./ledger.js";
@@ -8,6 +8,7 @@ import type { FreshOutcome, PreparedContext } from "./types.js";
 import { reviewFreshTransition, runSelectionLoader } from "../ui/fresh-review.js";
 
 export async function runFreshContextSession(
+  pi: ExtensionAPI,
   ctx: ExtensionCommandContext,
   initialObjective = "",
 ): Promise<FreshOutcome> {
@@ -27,24 +28,28 @@ export async function runFreshContextSession(
     return fail(ctx, "ledger", `The active branch has more than ${limits.maxLedgerFiles} read files; no files were silently omitted`);
   }
 
-  let selectedPaths: string[] | undefined;
+  let selection;
   try {
-    selectedPaths = await runSelectionLoader(ctx, (signal) => selectRelevantPaths(ctx, ledger, limits.maxSelectedFiles, signal));
+    selection = await runSelectionLoader(ctx, () => selectRelevantPaths(pi, ledger, limits.maxSelectedFiles));
   } catch (error) {
     return fail(ctx, "selection", messageOf(error));
   }
-  if (!selectedPaths) {
+  if (!selection) {
     ctx.ui.notify("Fresh session cancelled", "info");
     return { status: "cancelled" };
   }
 
   let prepared: PreparedContext;
   try {
-    prepared = await prepareSelectedFiles(selectedPaths, ledger, limits);
+    prepared = await prepareSelectedFiles(selection.selectedPaths, selection.ledger, limits);
   } catch (error) {
     return fail(ctx, "preparation", messageOf(error));
   }
   if (prepared.blockedReason) return fail(ctx, "preparation", prepared.blockedReason);
+
+  if (selection.suggestedPaths.length > 0) {
+    ctx.ui.notify(`Agent added ${selection.suggestedPaths.length} suggested file(s) outside the read ledger for review`, "info");
+  }
 
   const review = await reviewFreshTransition(ctx, prepared, initialObjective);
   if (review.action === "cancel") {
@@ -54,7 +59,7 @@ export async function runFreshContextSession(
   }
 
   try {
-    await verifyPreparedFilesUnchanged(prepared.included, ledger.projectRoot);
+    await verifyPreparedFilesUnchanged(prepared.included, selection.ledger.projectRoot);
   } catch (error) {
     restoreObjectiveDraft(ctx, review.objective);
     return fail(ctx, "verification", `${messageOf(error)}. Review the file set again before transitioning.`);

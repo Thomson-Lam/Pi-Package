@@ -3,14 +3,14 @@ import { BorderedLoader } from "@earendil-works/pi-coding-agent";
 import { Editor, Key, matchesKey, truncateToWidth, wrapTextWithAnsi, type EditorTheme, type Focusable } from "@earendil-works/pi-tui";
 import type { FreshReviewResult, PreparedContext } from "../fresh/types.js";
 
-export async function runSelectionLoader(
+export async function runSelectionLoader<T>(
   ctx: ExtensionCommandContext,
-  operation: (signal: AbortSignal) => Promise<string[]>,
-): Promise<string[] | undefined> {
-  const result = await ctx.ui.custom<{ value?: string[]; error?: unknown; cancelled?: boolean }>((tui, theme, _kb, done) => {
+  operation: (signal: AbortSignal) => Promise<T>,
+): Promise<T | undefined> {
+  const result = await ctx.ui.custom<{ value?: T; error?: unknown; cancelled?: boolean }>((tui, theme, _kb, done) => {
     const loader = new BorderedLoader(tui, theme, "Selecting fresh-session files...");
     let settled = false;
-    const finish = (value: { value?: string[]; error?: unknown; cancelled?: boolean }) => {
+    const finish = (value: { value?: T; error?: unknown; cancelled?: boolean }) => {
       if (settled) return;
       settled = true;
       done(value);

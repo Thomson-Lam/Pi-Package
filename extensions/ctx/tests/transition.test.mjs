@@ -30,7 +30,7 @@ test("prepared session appends context before submitting the exact objective", a
   const outcome = await createPreparedSession(ctx, prepared, "  exact objective\n");
   assert.equal(outcome.status, "completed");
   assert.equal(events[0][0], "context");
-  assert.equal(events[0][1], "context-inspector:fresh-files");
+  assert.equal(events[0][1], "ctx:fresh-files");
   assert.equal(events[1][0], "objective");
   assert.equal(events[1][1], "  exact objective\n");
 });
@@ -38,6 +38,7 @@ test("prepared session appends context before submitting the exact objective", a
 test("empty active-branch ledger never creates a session", async () => {
   let created = false;
   const notifications = [];
+  const pi = { sendUserMessage() {} };
   const ctx = {
     mode: "tui",
     model: { contextWindow: 200_000 },
@@ -47,7 +48,7 @@ test("empty active-branch ledger never creates a session", async () => {
     sessionManager: { getBranch: () => [] },
     newSession: async () => { created = true; return { cancelled: false }; },
   };
-  const outcome = await runFreshContextSession(ctx);
+  const outcome = await runFreshContextSession(pi, ctx);
   assert.equal(outcome.status, "failed");
   assert.equal(outcome.stage, "ledger");
   assert.equal(created, false);

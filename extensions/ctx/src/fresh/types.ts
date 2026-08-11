@@ -9,11 +9,6 @@ export interface ReadLedger {
   candidates: ReadCandidate[];
 }
 
-export interface SelectionEnvelope {
-  version: 1;
-  paths: string[];
-}
-
 export type FileExclusionReason =
   | "missing"
   | "outside-project"

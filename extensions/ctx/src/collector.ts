@@ -11,8 +11,8 @@ export function registerCollectors(pi: ExtensionAPI) {
 
   pi.on("session_shutdown", async (_event, ctx) => {
     try {
-      ctx.ui.setWidget("context-inspector", undefined);
-      ctx.ui.setStatus("context-inspector", undefined);
+      ctx.ui.setWidget("ctx", undefined);
+      ctx.ui.setStatus("ctx", undefined);
     } catch {
       // no-op outside interactive UI
     }

@@ -11,8 +11,8 @@ Purpose: Help agents locate extension entry points, supporting modules, skills, 
 
 ## Extensions
 
-- `extensions/context-inspector/index.ts` — package entrypoint forwarding to `src/index.ts`.
-- `extensions/context-inspector/src/index.ts` — registers `/ctx`, `/cnew`, and `/reads`; `src/fresh/` owns the prepared fresh-session workflow, `src/collector.ts`, `src/reconstruct.ts`, and `src/state.ts` collect and rebuild context metadata, while `src/ui/` owns panels and widgets.
+- `extensions/ctx/index.ts` — package entrypoint forwarding to `src/index.ts`.
+- `extensions/ctx/src/index.ts` — registers `/ctx`, `/cnew`, and `/reads`; `src/fresh/` owns the prepared fresh-session workflow, `src/collector.ts`, `src/reconstruct.ts`, and `src/state.ts` collect and rebuild context metadata, while `src/ui/` owns panels and widgets.
 - `extensions/muon/modes/` — Build and Spec system prompts selected through Muon's interaction mode control.
 - `extensions/feedback-editor/index.ts` and `client.lua` — register `/fb` and `/fpr`, opening a right-side tmux Neovim pane and returning saved text to Pi's chat editor without storing it in a file.
 - `extensions/muon/index.ts` — initializes persisted Muon mode/skill state, injects the selected mode prompt, and registers resource discovery.
