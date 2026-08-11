@@ -17,6 +17,9 @@ test("extension registers /cnew without adding /ctx fresh", async () => {
   };
   register(pi);
   assert.equal(commands.has("cnew"), true);
+  assert.equal(commands.has("can"), true);
+  assert.equal(commands.has("cana"), true);
+  assert.equal(commands.has("canu"), true);
   assert.equal(commands.has("ctfresh"), false);
   assert.deepEqual(shortcuts, []);
   assert.equal(renderers.has("ctx:fresh-files"), true);

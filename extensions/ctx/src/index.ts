@@ -8,6 +8,7 @@ import { FRESH_CONTEXT_MESSAGE_TYPE } from "./fresh/context-message.js";
 import { runFreshContextSession } from "./fresh/transition.js";
 import { observeFreshSelectionMessage } from "./fresh/selection.js";
 import { renderFreshContextMessage } from "./ui/fresh-message.js";
+import { jumpToAnchor, labelLatestMessage } from "./anchors.js";
 
 type CtxAction = "inspect" | "reads" | "help";
 type ParsedCtx = { kind: "menu" } | { kind: "action"; action: CtxAction } | { kind: "error"; message: string };
@@ -150,6 +151,27 @@ export default function (pi: ExtensionAPI) {
     description: "Open read snapshot inspector",
     handler: async (_args, ctx) => {
       await openContextPanel(ctx);
+    },
+  });
+
+  pi.registerCommand("can", {
+    description: "Open labeled session anchors",
+    handler: async (_args, ctx) => {
+      await jumpToAnchor(ctx);
+    },
+  });
+
+  pi.registerCommand("cana", {
+    description: "Label the latest agent message",
+    handler: async (args, ctx) => {
+      await labelLatestMessage(pi, ctx, args || "", "assistant");
+    },
+  });
+
+  pi.registerCommand("canu", {
+    description: "Label the latest user message",
+    handler: async (args, ctx) => {
+      await labelLatestMessage(pi, ctx, args || "", "user");
     },
   });
 
