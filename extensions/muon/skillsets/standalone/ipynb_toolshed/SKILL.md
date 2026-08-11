@@ -32,6 +32,13 @@ Find a source snippet cheaply:
 python3 <PATH>/inspect_ipynb.py notebook.ipynb --search-source "fit_transform"
 ```
 
+`--search-source` searches the complete cell source, so an exact multiline snippet can cross source lines:
+
+```bash
+python3 <PATH>/inspect_ipynb.py notebook.ipynb \
+  --search-source $'model.fit(X_train, y_train)\npredictions = model.predict(X_test)'
+```
+
 Regex-search source, grep-style:
 
 ```bash
@@ -51,7 +58,21 @@ Search both source and outputs:
 python3 <PATH>/inspect_ipynb.py notebook.ipynb --grep 'loss|accuracy' --where both
 ```
 
-Match output is intentionally compact: cell index, cell type, run state, source hash, line number, and a short matching line.
+Match output is intentionally compact: cell index, cell type, run state, source hash, line number or multiline range, and a short matching line.
+
+## Show surrounding match lines
+
+Use a small line context to inspect nearby source or output without rendering the whole cell:
+
+```bash
+python3 <PATH>/inspect_ipynb.py notebook.ipynb \
+  --search-output "validation accuracy" \
+  --context-lines 2
+```
+
+`--context-lines N` marks the matched line(s) and shows up to N lines before and after them. It requires `--search-source`, `--search-output`, or `--grep`. Prefer small values such as 1–3.
+
+`--context-lines` means lines inside matched source/output text. The separate `--context-cells` option means neighboring notebook cells.
 
 ## Show matched cells and neighbors
 
@@ -121,6 +142,23 @@ has_error: false
 ```
 
 Keep `cell` and `source_sha256` when planning an edit.
+
+## Structured JSON output
+
+Add `--json` to summaries, searches, or selected-cell reads when a program needs machine-readable output:
+
+```bash
+python3 <PATH>/inspect_ipynb.py notebook.ipynb --json
+python3 <PATH>/inspect_ipynb.py notebook.ipynb --cells 6 --json
+python3 <PATH>/inspect_ipynb.py notebook.ipynb \
+  --search-output "accuracy" \
+  --context-lines 2 \
+  --json
+```
+
+JSON mode emits exactly one compact JSON document on stdout. Its `mode` is `summary`, `matches`, or `cells`. Search misses emit an empty `matches` array and exit with status 1. Selected-cell output includes structured textual outputs but lists only MIME keys for non-text data; it does not emit image/base64 payloads.
+
+`--budget` still limits selected cell source/output content while preserving valid JSON. Use `--only-outputs --json` to omit cell source.
 
 ## Filter cells
 
