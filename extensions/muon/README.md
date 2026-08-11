@@ -106,4 +106,3 @@ Retired resources are not exposed by Muon:
 
 - Engineering Mode is archived under `archive/engineering-mode/`.
 - Foundation Mode is archived under `archive/foundation-mode/`.
-- The former Superpowers suite is archived under `extensions/superpowers/legacy/`.

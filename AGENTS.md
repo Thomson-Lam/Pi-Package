@@ -18,7 +18,7 @@ Purpose: Help agents locate extension entry points, supporting modules, skills, 
 - `extensions/muon/index.ts` — initializes persisted Muon mode/skill state, injects the selected mode prompt, and registers resource discovery.
 - `extensions/muon/commands.ts` — user-facing `/muon` flows for mode selection, skill toggles/status, and skill export.
 - `extensions/muon/skills.ts`, `resources.ts`, and `skill-dump.ts` — skill profile control, resource discovery, and universal skill export.
-- `extensions/muon/skillsets/` — bundled Ponytail and standalone skills; each skill's `SKILL.md` is its source of truth. Retired Engineering and Foundation resources are archived under `extensions/muon/archive/`; the retired Superpowers suite is archived under `extensions/superpowers/legacy/`.
+- `extensions/muon/skillsets/` — bundled Ponytail and standalone skills; each skill's `SKILL.md` is its source of truth. Retired Engineering and Foundation resources are archived under `extensions/muon/archive/`.
 - `extensions/muon/tests/smoke.mjs` — Muon smoke coverage.
 - `extensions/olive-agents/index.ts` — registers human-approved `Agent`, result, steering, agent-management, and scheduling flows; `src/approval.ts` owns the mandatory per-launch review while the remaining `src/` modules provide the reused subagent runtime, sessions, transcripts, and UI.
 - `extensions/pi-telescope/index.ts` — registers Telescope commands, shortcut, providers, and fuzzy `@` file completion.

@@ -44,7 +44,7 @@ assert.equal(existsSync(join(foundationArchiveDir, "modes", "foundation-prompt.m
 assert.equal(existsSync(join(engineeringArchiveDir, "modes", "engineering-prompt.md")), true, "missing archived Engineering prompt");
 assert.equal(existsSync(join(engineeringArchiveDir, "skillsets", "engineering", "brainstorming", "SKILL.md")), true, "missing archived Engineering skills");
 assert.equal(existsSync(join(foundationArchiveDir, "skillsets", "foundation", "caveman", "SKILL.md")), true, "missing archived Caveman skill");
-assert.equal(existsSync(join(root, "extensions", "superpowers", "legacy", "skillsets", "superpowers")), true, "missing legacy Superpowers archive");
+assert.equal(existsSync(join(root, "extensions", "superpowers")), false, "stale Superpowers archive remains");
 
 for (const path of [
   ["ponytail", "ponytail"],
