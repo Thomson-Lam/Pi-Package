@@ -157,12 +157,10 @@ function UI:_make_buffer(name, item, lines, has_eol)
   local map_options = { buffer = buf, silent = true }
   vim.keymap.set("n", "]c", function() self:navigate_hunk(1, vim.v.count1) end, vim.tbl_extend("force", map_options, { desc = "Blink next change" }))
   vim.keymap.set("n", "[c", function() self:navigate_hunk(-1, vim.v.count1) end, vim.tbl_extend("force", map_options, { desc = "Blink previous change" }))
-  vim.keymap.set("n", "]f", function() self.send({ type = "navigate_file", payload = { delta = 1 } }) end, vim.tbl_extend("force", map_options, { desc = "Blink next version for file" }))
-  vim.keymap.set("n", "[f", function() self.send({ type = "navigate_file", payload = { delta = -1 } }) end, vim.tbl_extend("force", map_options, { desc = "Blink previous version for file" }))
-  vim.keymap.set("n", "]n", function() self.send({ type = "navigate_global", payload = { delta = vim.v.count1 } }) end, vim.tbl_extend("force", map_options, { desc = "Blink next version globally" }))
-  vim.keymap.set("n", "[n", function() self.send({ type = "navigate_global", payload = { delta = -vim.v.count1 } }) end, vim.tbl_extend("force", map_options, { desc = "Blink previous version globally" }))
-  vim.keymap.set("n", "]N", function() self.send({ type = "navigate_edge", payload = { edge = "last" } }) end, vim.tbl_extend("force", map_options, { desc = "Blink latest version" }))
-  vim.keymap.set("n", "[N", function() self.send({ type = "navigate_edge", payload = { edge = "first" } }) end, vim.tbl_extend("force", map_options, { desc = "Blink first version" }))
+  vim.keymap.set("n", "]n", function() self.send({ type = "navigate_global", payload = { delta = vim.v.count1 } }) end, vim.tbl_extend("force", map_options, { desc = "Blink next changed file" }))
+  vim.keymap.set("n", "[n", function() self.send({ type = "navigate_global", payload = { delta = -vim.v.count1 } }) end, vim.tbl_extend("force", map_options, { desc = "Blink previous changed file" }))
+  vim.keymap.set("n", "]N", function() self.send({ type = "navigate_edge", payload = { edge = "last" } }) end, vim.tbl_extend("force", map_options, { desc = "Blink latest changed file" }))
+  vim.keymap.set("n", "[N", function() self.send({ type = "navigate_edge", payload = { edge = "first" } }) end, vim.tbl_extend("force", map_options, { desc = "Blink first changed file" }))
   local function current_item()
     return self.review_state and self.review_state.item or item
   end
@@ -590,7 +588,7 @@ function UI:help(item)
     and "<leader>bq dismiss/close"
     or "<leader>bq checkpoint/close, <leader>bQ close/retain"
   local mode = item.transactionId and "Slow" or "Blitz"
-  vim.notify("Blink " .. mode .. ": [c/]c hunks, [f/]f file versions, [n/]n all versions (count supported), [N/]N first/latest, <leader>bl list, <leader>bh panel, " .. close_help)
+  vim.notify("Blink " .. mode .. ": [c/]c hunks, [n/]n changed files (count supported), [N/]N first/latest changed file, <leader>bl list, <leader>bh panel, " .. close_help)
 end
 
 function UI:evict(version_id)

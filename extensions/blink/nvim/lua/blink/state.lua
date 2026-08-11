@@ -103,10 +103,6 @@ function M.evict(model, version_id)
   return model.activeVersionId and model.by_id[model.activeVersionId] or nil
 end
 
-local function file_key(version)
-  return version and (version.fileId or version.displayPath or version.path) or nil
-end
-
 function M.navigate_global(model, current_id, delta)
   if #model.versions == 0 then return nil end
   local index = 1
@@ -121,24 +117,6 @@ function M.navigate_edge(model, edge)
   if #model.versions == 0 then return nil end
   local version = edge == "first" and model.versions[1] or model.versions[#model.versions]
   return M.set_active(model, version.versionId)
-end
-
-function M.navigate_file(model, current_id, delta)
-  if #model.versions == 0 then return nil end
-  local current = model.by_id[current_id] or model.versions[#model.versions]
-  local key = file_key(current)
-  if not key then return M.navigate_global(model, current_id, delta) end
-  local candidates = {}
-  local current_index = 1
-  for _, version in ipairs(model.versions) do
-    if file_key(version) == key then
-      table.insert(candidates, version)
-      if version.versionId == current_id then current_index = #candidates end
-    end
-  end
-  if #candidates == 0 then return nil end
-  current_index = ((current_index - 1 + delta) % #candidates) + 1
-  return M.set_active(model, candidates[current_index].versionId)
 end
 
 return M

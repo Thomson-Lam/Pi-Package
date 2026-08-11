@@ -55,9 +55,8 @@ local function notify(message, level)
 end
 
 local function send(action)
-  if action.type == "navigate_file" or action.type == "navigate_global" then
-    local navigate = action.type == "navigate_file" and State.navigate_file or State.navigate_global
-    local selected = navigate(model, model.activeVersionId, action.payload.delta)
+  if action.type == "navigate_global" then
+    local selected = State.navigate_global(model, model.activeVersionId, action.payload.delta)
     if selected then ui:show_version(selected); refresh_change_list() end
     return
   end

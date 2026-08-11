@@ -32,7 +32,6 @@ eq(vim.tbl_map(function(v) return v.versionId end, model.versions), { 3 })
 state.upsert(model, { versionId = 4, fileId = "g", displayPath = "b.txt", snapshotPath = "/tmp/4", originKind = "absent" }, nil)
 eq(model.activeVersionId, 3, "another file does not replace the active view")
 eq(model.by_id[4].unread, true, "inactive incoming file is unread")
-eq(state.navigate_file(model, 3, 1).versionId, 3, "one-version file navigation wraps to itself")
 eq(state.navigate_global(model, 3, 1).versionId, 4, "global navigation crosses files")
 eq(state.navigate_global(model, 3, 2).versionId, 3, "global navigation supports counted deltas")
 eq(state.navigate_edge(model, "first").versionId, 3, "first edge selects oldest retained file")
@@ -169,8 +168,14 @@ local descs = {}
 for _, map in ipairs(maps) do descs[map.lhs] = map.desc end
 local found = {}
 for _, desc in pairs(descs) do found[desc] = true end
-assert(found["Blink next change"] and found["Blink previous change"] and found["Blink next version for file"] and found["Blink next version globally"] and found["Blink first version"] and found["Blink latest version"] and found["Blink list changes"] and found["Blink toggle change panel"] and found["Blink comment"], "required described mappings missing: " .. vim.inspect(descs))
+assert(found["Blink next change"] and found["Blink previous change"] and found["Blink next changed file"] and found["Blink previous changed file"] and found["Blink first changed file"] and found["Blink latest changed file"] and found["Blink list changes"] and found["Blink toggle change panel"] and found["Blink comment"] and found["Blink help"], "required described mappings missing: " .. vim.inspect(descs))
 assert(found["Blink checkpoint and close"] and found["Blink close and retain history"], "Blitz close mappings missing: " .. vim.inspect(descs))
+local help_message
+local original_notify = vim.notify
+vim.notify = function(message) help_message = message end
+press("?")
+vim.notify = original_notify
+assert(help_message and help_message:match("%[c/%]c hunks") and help_message:match("%[n/%]n changed files"), "Blink help omits current navigation: " .. tostring(help_message))
 vim.api.nvim_buf_call(buf, function()
   vim.cmd("normal ]N")
   vim.cmd("normal [N")
