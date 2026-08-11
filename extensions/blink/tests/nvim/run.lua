@@ -163,6 +163,23 @@ live_review_buffers = vim.tbl_filter(function(candidate)
 end, vim.api.nvim_list_bufs())
 eq(#live_review_buffers, 1, "150 navigations still leave one live primary review buffer")
 
+local function map_desc(lhs)
+  for _, map in ipairs(vim.api.nvim_buf_get_keymap(buf, "n")) do
+    if map.lhs == lhs then return map.desc end
+  end
+end
+vim.keymap.set("n", "]c", function() end, { buffer = buf, desc = "Next Class Start" })
+vim.api.nvim_exec_autocmds("User", { pattern = "VeryLazy" })
+vim.wait(100, function() return map_desc("]c") == "Blink next change" end)
+eq(map_desc("]c"), "Blink next change", "Blink reclaims mappings after VeryLazy plugin attachment")
+vim.api.nvim_create_autocmd("FileType", {
+  buffer = buf,
+  callback = function() vim.keymap.set("n", "[c", function() end, { buffer = buf, desc = "Prev Class Start" }) end,
+})
+vim.api.nvim_exec_autocmds("FileType", { buffer = buf })
+vim.wait(100, function() return map_desc("[c") == "Blink previous change" end)
+eq(map_desc("[c"), "Blink previous change", "Blink reclaims mappings after FileType plugin attachment")
+
 local maps = vim.api.nvim_buf_get_keymap(buf, "n")
 local descs = {}
 for _, map in ipairs(maps) do descs[map.lhs] = map.desc end

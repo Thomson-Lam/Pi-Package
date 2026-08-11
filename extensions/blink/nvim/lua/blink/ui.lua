@@ -123,6 +123,54 @@ function UI:_set_review_name(buf, name)
   if not fallback_ok then error(fallback_err) end
 end
 
+function UI:_install_keymaps(buf)
+  if not vim.api.nvim_buf_is_valid(buf) then return end
+  local state = self.buffer_state[buf]
+  if not state or not state.item then return end
+  local item = state.item
+  local function current_item()
+    local current = self.buffer_state[buf]
+    return current and current.item or item
+  end
+
+  local map_options = { buffer = buf, silent = true }
+  vim.keymap.set("n", "]c", function() self:navigate_hunk(1, vim.v.count1) end, vim.tbl_extend("force", map_options, { desc = "Blink next change" }))
+  vim.keymap.set("n", "[c", function() self:navigate_hunk(-1, vim.v.count1) end, vim.tbl_extend("force", map_options, { desc = "Blink previous change" }))
+  vim.keymap.set("n", "]n", function() self.send({ type = "navigate_global", payload = { delta = vim.v.count1 } }) end, vim.tbl_extend("force", map_options, { desc = "Blink next changed file" }))
+  vim.keymap.set("n", "[n", function() self.send({ type = "navigate_global", payload = { delta = -vim.v.count1 } }) end, vim.tbl_extend("force", map_options, { desc = "Blink previous changed file" }))
+  vim.keymap.set("n", "]N", function() self.send({ type = "navigate_edge", payload = { edge = "last" } }) end, vim.tbl_extend("force", map_options, { desc = "Blink latest changed file" }))
+  vim.keymap.set("n", "[N", function() self.send({ type = "navigate_edge", payload = { edge = "first" } }) end, vim.tbl_extend("force", map_options, { desc = "Blink first changed file" }))
+  vim.keymap.set("n", "<leader>bc", function() self:comment(current_item(), nil) end, vim.tbl_extend("force", map_options, { desc = "Blink comment" }))
+  vim.keymap.set("x", "<leader>bc", function()
+    local first, last = vim.fn.line("'<"), vim.fn.line("'>")
+    self:comment(current_item(), { startLine = math.min(first, last), endLine = math.max(first, last) })
+  end, vim.tbl_extend("force", map_options, { desc = "Blink comment on selection" }))
+  vim.keymap.set("n", "<leader>bt", function() self:todo(current_item()) end, vim.tbl_extend("force", map_options, { desc = "Blink submit TODO" }))
+  if item.transactionId then
+    vim.keymap.set("n", "<leader>bq", function() self:request_close("slow") end, vim.tbl_extend("force", map_options, { desc = "Blink dismiss and close" }))
+    vim.keymap.set("n", "<leader>ba", function() self.send({ type = "slow_accept", payload = { transactionId = current_item().transactionId } }) end, vim.tbl_extend("force", map_options, { desc = "Blink accept" }))
+    vim.keymap.set("n", "<leader>br", function() self.send({ type = "slow_reject", payload = { transactionId = current_item().transactionId } }) end, vim.tbl_extend("force", map_options, { desc = "Blink reject" }))
+    vim.keymap.set("n", "<leader>bR", function()
+      vim.ui.input({ prompt = "Blink rejection comment: " }, function(comment)
+        if not comment or vim.trim(comment) == "" then return end
+        self.send({ type = "slow_comment_reject", payload = { transactionId = current_item().transactionId, comment = comment } })
+      end)
+    end, vim.tbl_extend("force", map_options, { desc = "Blink reject with comment" }))
+  else
+    vim.keymap.set("n", "<leader>bq", function() self:request_close("checkpoint") end, vim.tbl_extend("force", map_options, { desc = "Blink checkpoint and close" }))
+    vim.keymap.set("n", "<leader>bQ", function() self:request_close("retain") end, vim.tbl_extend("force", map_options, { desc = "Blink close and retain history" }))
+    vim.keymap.set("n", "<leader>bp", function() self.send({ type = "toggle_pin", payload = {} }) end, vim.tbl_extend("force", map_options, { desc = "Blink toggle pin" }))
+    vim.keymap.set("n", "<leader>bx", function()
+      vim.ui.select({ "No", "Yes" }, { prompt = "Abort the running Pi agent?" }, function(choice)
+        if choice == "Yes" then self.send({ type = "abort_agent", payload = {} }) end
+      end)
+    end, vim.tbl_extend("force", map_options, { desc = "Blink abort agent" }))
+  end
+  vim.keymap.set("n", "<leader>bl", function() self.send({ type = "list_changes", payload = {} }) end, vim.tbl_extend("force", map_options, { desc = "Blink list changes" }))
+  vim.keymap.set("n", "<leader>bh", function() self:toggle_change_list() end, vim.tbl_extend("force", map_options, { desc = "Blink toggle change panel" }))
+  vim.keymap.set("n", "?", function() self:help(current_item()) end, vim.tbl_extend("force", map_options, { desc = "Blink help" }))
+end
+
 function UI:_make_buffer(name, item, lines, has_eol)
   local buf = vim.api.nvim_create_buf(true, true)
   self.review_buf = buf
@@ -153,46 +201,21 @@ function UI:_make_buffer(name, item, lines, has_eol)
       self.buffer_state[buf] = nil
     end,
   })
-
-  local map_options = { buffer = buf, silent = true }
-  vim.keymap.set("n", "]c", function() self:navigate_hunk(1, vim.v.count1) end, vim.tbl_extend("force", map_options, { desc = "Blink next change" }))
-  vim.keymap.set("n", "[c", function() self:navigate_hunk(-1, vim.v.count1) end, vim.tbl_extend("force", map_options, { desc = "Blink previous change" }))
-  vim.keymap.set("n", "]n", function() self.send({ type = "navigate_global", payload = { delta = vim.v.count1 } }) end, vim.tbl_extend("force", map_options, { desc = "Blink next changed file" }))
-  vim.keymap.set("n", "[n", function() self.send({ type = "navigate_global", payload = { delta = -vim.v.count1 } }) end, vim.tbl_extend("force", map_options, { desc = "Blink previous changed file" }))
-  vim.keymap.set("n", "]N", function() self.send({ type = "navigate_edge", payload = { edge = "last" } }) end, vim.tbl_extend("force", map_options, { desc = "Blink latest changed file" }))
-  vim.keymap.set("n", "[N", function() self.send({ type = "navigate_edge", payload = { edge = "first" } }) end, vim.tbl_extend("force", map_options, { desc = "Blink first changed file" }))
-  local function current_item()
-    return self.review_state and self.review_state.item or item
+  vim.api.nvim_create_autocmd("FileType", {
+    buffer = buf,
+    callback = function()
+      vim.schedule(function() self:_install_keymaps(buf) end)
+    end,
+  })
+  if not vim.g.did_very_lazy then
+    vim.api.nvim_create_autocmd("User", {
+      pattern = "VeryLazy",
+      once = true,
+      callback = function()
+        vim.schedule(function() self:_install_keymaps(buf) end)
+      end,
+    })
   end
-  vim.keymap.set("n", "<leader>bc", function() self:comment(current_item(), nil) end, vim.tbl_extend("force", map_options, { desc = "Blink comment" }))
-  vim.keymap.set("x", "<leader>bc", function()
-    local first, last = vim.fn.line("'<"), vim.fn.line("'>")
-    self:comment(current_item(), { startLine = math.min(first, last), endLine = math.max(first, last) })
-  end, vim.tbl_extend("force", map_options, { desc = "Blink comment on selection" }))
-  vim.keymap.set("n", "<leader>bt", function() self:todo(current_item()) end, vim.tbl_extend("force", map_options, { desc = "Blink submit TODO" }))
-  if item.transactionId then
-    vim.keymap.set("n", "<leader>bq", function() self:request_close("slow") end, vim.tbl_extend("force", map_options, { desc = "Blink dismiss and close" }))
-    vim.keymap.set("n", "<leader>ba", function() self.send({ type = "slow_accept", payload = { transactionId = current_item().transactionId } }) end, vim.tbl_extend("force", map_options, { desc = "Blink accept" }))
-    vim.keymap.set("n", "<leader>br", function() self.send({ type = "slow_reject", payload = { transactionId = current_item().transactionId } }) end, vim.tbl_extend("force", map_options, { desc = "Blink reject" }))
-    vim.keymap.set("n", "<leader>bR", function()
-      vim.ui.input({ prompt = "Blink rejection comment: " }, function(comment)
-        if not comment or vim.trim(comment) == "" then return end
-        self.send({ type = "slow_comment_reject", payload = { transactionId = current_item().transactionId, comment = comment } })
-      end)
-    end, vim.tbl_extend("force", map_options, { desc = "Blink reject with comment" }))
-  else
-    vim.keymap.set("n", "<leader>bq", function() self:request_close("checkpoint") end, vim.tbl_extend("force", map_options, { desc = "Blink checkpoint and close" }))
-    vim.keymap.set("n", "<leader>bQ", function() self:request_close("retain") end, vim.tbl_extend("force", map_options, { desc = "Blink close and retain history" }))
-    vim.keymap.set("n", "<leader>bp", function() self.send({ type = "toggle_pin", payload = {} }) end, vim.tbl_extend("force", map_options, { desc = "Blink toggle pin" }))
-    vim.keymap.set("n", "<leader>bx", function()
-      vim.ui.select({ "No", "Yes" }, { prompt = "Abort the running Pi agent?" }, function(choice)
-        if choice == "Yes" then self.send({ type = "abort_agent", payload = {} }) end
-      end)
-    end, vim.tbl_extend("force", map_options, { desc = "Blink abort agent" }))
-  end
-  vim.keymap.set("n", "<leader>bl", function() self.send({ type = "list_changes", payload = {} }) end, vim.tbl_extend("force", map_options, { desc = "Blink list changes" }))
-  vim.keymap.set("n", "<leader>bh", function() self:toggle_change_list() end, vim.tbl_extend("force", map_options, { desc = "Blink toggle change panel" }))
-  vim.keymap.set("n", "?", function() self:help(current_item()) end, vim.tbl_extend("force", map_options, { desc = "Blink help" }))
 
   pcall(function() require("gitsigns").detach(buf) end)
   return buf
@@ -448,6 +471,7 @@ function UI:show_version(item)
     has_eol = has_eol,
   } }
   self.review_state = self.buffer_state[buf]
+  self:_install_keymaps(buf)
   self:render(buf)
   vim.api.nvim_set_current_buf(buf)
   self:_close_other_buffers_for_file(buf, item)
