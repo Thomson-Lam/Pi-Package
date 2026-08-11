@@ -15,18 +15,38 @@ local function sort_versions(model)
   table.sort(model.versions, function(a, b) return a.versionId < b.versionId end)
 end
 
+local function same_file(a, b)
+  if not a or not b then return false end
+  if a.fileId and b.fileId and a.fileId == b.fileId then return true end
+  if a.canonicalPath and b.canonicalPath and a.canonicalPath == b.canonicalPath then return true end
+  if a.absolutePath and b.absolutePath and a.absolutePath == b.absolutePath then return true end
+  if a.filesystemKey and b.filesystemKey and a.filesystemKey == b.filesystemKey then return true end
+  return false
+end
+
+M.same_file = same_file
+
 function M.replace(model, snapshot)
   model.mode = snapshot.mode or model.mode
   model.versions = {}
   model.by_id = {}
-  for _, version in ipairs(snapshot.versions or {}) do
+  local incoming = vim.deepcopy(snapshot.versions or {})
+  table.sort(incoming, function(a, b) return a.versionId < b.versionId end)
+  for _, version in ipairs(incoming) do
     local copy = vim.deepcopy(version)
+    for index = #model.versions, 1, -1 do
+      local old = model.versions[index]
+      if same_file(old, copy) then
+        model.by_id[old.versionId] = nil
+        table.remove(model.versions, index)
+      end
+    end
     model.by_id[copy.versionId] = copy
     table.insert(model.versions, copy)
   end
   sort_versions(model)
-  if model.activeVersionId and not model.by_id[model.activeVersionId] then model.activeVersionId = nil end
-  if not model.activeVersionId and #model.versions > 0 then model.activeVersionId = model.versions[#model.versions].versionId end
+  model.activeVersionId = #model.versions > 0 and model.versions[#model.versions].versionId or nil
+  if model.activeVersionId then model.by_id[model.activeVersionId].unread = false end
 end
 
 function M.set_active(model, version_id)
@@ -41,18 +61,31 @@ function M.toggle_pin(model)
   return model.pinned
 end
 
-function M.add(model, version, _pane_active)
+function M.upsert(model, version, replaced_version_id)
   if model.by_id[version.versionId] then return model.by_id[version.versionId] end
   local copy = vim.deepcopy(version)
+  local replaced_active = replaced_version_id ~= nil and model.activeVersionId == replaced_version_id
+  for index = #model.versions, 1, -1 do
+    local old = model.versions[index]
+    if old.versionId == replaced_version_id or same_file(old, copy) then
+      if model.activeVersionId == old.versionId then replaced_active = true end
+      model.by_id[old.versionId] = nil
+      table.remove(model.versions, index)
+    end
+  end
   model.by_id[copy.versionId] = copy
   table.insert(model.versions, copy)
   sort_versions(model)
-  if not model.activeVersionId then
+  if replaced_active or not model.activeVersionId or not model.by_id[model.activeVersionId] then
     M.set_active(model, copy.versionId)
   else
     copy.unread = true
   end
   return copy
+end
+
+function M.add(model, version, _pane_active)
+  return M.upsert(model, version, nil)
 end
 
 function M.evict(model, version_id)

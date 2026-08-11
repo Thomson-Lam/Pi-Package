@@ -39,7 +39,10 @@ function UI.new(options)
   local self = setmetatable({}, UI)
   self.runtime_dir = assert(options.runtime_dir)
   self.send = assert(options.send)
+  self.exit = options.exit or function() vim.cmd("qa!") end
   self.namespace = vim.api.nvim_create_namespace("blink-review")
+  self.review_buf = nil
+  self.review_state = nil
   self.buffers = {}
   self.buffer_state = {}
   self.sinks = {}
@@ -49,6 +52,9 @@ function UI.new(options)
   self.list_visible = false
   self.list_versions = {}
   self.list_active_id = nil
+  self.close_pending = false
+  self.close_action = nil
+  self.close_timer = nil
   return self
 end
 
@@ -57,17 +63,72 @@ function UI:set_sinks(sinks)
 end
 
 function UI:_set_lines(buf, lines, has_eol)
+  vim.bo[buf].readonly = false
   vim.bo[buf].modifiable = true
   local ok, err = pcall(vim.api.nvim_buf_set_lines, buf, 0, -1, false, lines)
   vim.bo[buf].endofline = has_eol
   vim.bo[buf].fixendofline = false
   vim.bo[buf].modifiable = false
+  vim.bo[buf].readonly = true
   if not ok then error(err) end
+end
+
+function UI:_clear_close_timer()
+  if not self.close_timer then return end
+  if not self.close_timer:is_closing() then
+    self.close_timer:stop()
+    self.close_timer:close()
+  end
+  self.close_timer = nil
+end
+
+function UI:request_close(action)
+  if self.close_pending then return end
+  self.close_pending = true
+  self.close_action = action
+  local message_type = action == "checkpoint" and "client_checkpoint_close"
+    or action == "retain" and "client_retain_close"
+    or "client_closing"
+  self.send({ type = message_type, payload = {} })
+  self.close_timer = vim.uv.new_timer()
+  self.close_timer:start(2500, 0, vim.schedule_wrap(function()
+    self:_clear_close_timer()
+    local message = self.close_action == "checkpoint"
+      and "Blink close acknowledgement timed out; checkpoint status is unknown."
+      or "Blink close acknowledgement timed out."
+    vim.notify(message, vim.log.levels.ERROR)
+    self.close_pending = false
+    self.close_action = nil
+    self.exit()
+  end))
+end
+
+function UI:complete_close(payload)
+  if not self.close_pending then return end
+  self:_clear_close_timer()
+  self.close_pending = false
+  self.close_action = nil
+  if payload and payload.error then vim.notify(payload.error, vim.log.levels.ERROR) end
+  self.exit()
+end
+
+function UI:_set_review_name(buf, name)
+  local ok, err = pcall(vim.api.nvim_buf_set_name, buf, name)
+  if ok then return end
+  local fallback = string.format("%s~%d", name, buf)
+  local fallback_ok, fallback_err = pcall(vim.api.nvim_buf_set_name, buf, fallback)
+  vim.schedule(function()
+    vim.notify("Blink could not claim its preferred review buffer name: " .. tostring(err), vim.log.levels.ERROR)
+  end)
+  if not fallback_ok then error(fallback_err) end
 end
 
 function UI:_make_buffer(name, item, lines, has_eol)
   local buf = vim.api.nvim_create_buf(true, true)
-  vim.api.nvim_buf_set_name(buf, name)
+  self.review_buf = buf
+  vim.b[buf].blink_owned = true
+  vim.b[buf].blink_role = "review"
+  self:_set_review_name(buf, name)
   vim.bo[buf].buftype = "nofile"
   vim.bo[buf].bufhidden = "hide"
   vim.bo[buf].swapfile = false
@@ -82,32 +143,48 @@ function UI:_make_buffer(name, item, lines, has_eol)
     buffer = buf,
     callback = function() error("Blink review buffers are read-only") end,
   })
+  vim.api.nvim_create_autocmd("BufWipeout", {
+    buffer = buf,
+    callback = function()
+      if self.review_buf == buf then
+        self.review_buf = nil
+        self.review_state = nil
+      end
+      self.buffer_state[buf] = nil
+    end,
+  })
 
   local map_options = { buffer = buf, silent = true }
-  vim.keymap.set("n", "]c", function() self:navigate_hunk(buf, 1) end, vim.tbl_extend("force", map_options, { desc = "Blink next change" }))
-  vim.keymap.set("n", "[c", function() self:navigate_hunk(buf, -1) end, vim.tbl_extend("force", map_options, { desc = "Blink previous change" }))
+  vim.keymap.set("n", "]c", function() self:navigate_hunk(1, vim.v.count1) end, vim.tbl_extend("force", map_options, { desc = "Blink next change" }))
+  vim.keymap.set("n", "[c", function() self:navigate_hunk(-1, vim.v.count1) end, vim.tbl_extend("force", map_options, { desc = "Blink previous change" }))
   vim.keymap.set("n", "]f", function() self.send({ type = "navigate_file", payload = { delta = 1 } }) end, vim.tbl_extend("force", map_options, { desc = "Blink next version for file" }))
   vim.keymap.set("n", "[f", function() self.send({ type = "navigate_file", payload = { delta = -1 } }) end, vim.tbl_extend("force", map_options, { desc = "Blink previous version for file" }))
   vim.keymap.set("n", "]n", function() self.send({ type = "navigate_global", payload = { delta = vim.v.count1 } }) end, vim.tbl_extend("force", map_options, { desc = "Blink next version globally" }))
   vim.keymap.set("n", "[n", function() self.send({ type = "navigate_global", payload = { delta = -vim.v.count1 } }) end, vim.tbl_extend("force", map_options, { desc = "Blink previous version globally" }))
   vim.keymap.set("n", "]N", function() self.send({ type = "navigate_edge", payload = { edge = "last" } }) end, vim.tbl_extend("force", map_options, { desc = "Blink latest version" }))
   vim.keymap.set("n", "[N", function() self.send({ type = "navigate_edge", payload = { edge = "first" } }) end, vim.tbl_extend("force", map_options, { desc = "Blink first version" }))
-  vim.keymap.set("n", "<leader>bc", function() self:comment(item, nil) end, vim.tbl_extend("force", map_options, { desc = "Blink comment" }))
+  local function current_item()
+    return self.review_state and self.review_state.item or item
+  end
+  vim.keymap.set("n", "<leader>bc", function() self:comment(current_item(), nil) end, vim.tbl_extend("force", map_options, { desc = "Blink comment" }))
   vim.keymap.set("x", "<leader>bc", function()
     local first, last = vim.fn.line("'<"), vim.fn.line("'>")
-    self:comment(item, { startLine = math.min(first, last), endLine = math.max(first, last) })
+    self:comment(current_item(), { startLine = math.min(first, last), endLine = math.max(first, last) })
   end, vim.tbl_extend("force", map_options, { desc = "Blink comment on selection" }))
-  vim.keymap.set("n", "<leader>bt", function() self:todo(item) end, vim.tbl_extend("force", map_options, { desc = "Blink submit TODO" }))
+  vim.keymap.set("n", "<leader>bt", function() self:todo(current_item()) end, vim.tbl_extend("force", map_options, { desc = "Blink submit TODO" }))
   if item.transactionId then
-    vim.keymap.set("n", "<leader>ba", function() self.send({ type = "slow_accept", payload = { transactionId = item.transactionId } }) end, vim.tbl_extend("force", map_options, { desc = "Blink accept" }))
-    vim.keymap.set("n", "<leader>br", function() self.send({ type = "slow_reject", payload = { transactionId = item.transactionId } }) end, vim.tbl_extend("force", map_options, { desc = "Blink reject" }))
+    vim.keymap.set("n", "<leader>bq", function() self:request_close("slow") end, vim.tbl_extend("force", map_options, { desc = "Blink dismiss and close" }))
+    vim.keymap.set("n", "<leader>ba", function() self.send({ type = "slow_accept", payload = { transactionId = current_item().transactionId } }) end, vim.tbl_extend("force", map_options, { desc = "Blink accept" }))
+    vim.keymap.set("n", "<leader>br", function() self.send({ type = "slow_reject", payload = { transactionId = current_item().transactionId } }) end, vim.tbl_extend("force", map_options, { desc = "Blink reject" }))
     vim.keymap.set("n", "<leader>bR", function()
       vim.ui.input({ prompt = "Blink rejection comment: " }, function(comment)
         if not comment or vim.trim(comment) == "" then return end
-        self.send({ type = "slow_comment_reject", payload = { transactionId = item.transactionId, comment = comment } })
+        self.send({ type = "slow_comment_reject", payload = { transactionId = current_item().transactionId, comment = comment } })
       end)
     end, vim.tbl_extend("force", map_options, { desc = "Blink reject with comment" }))
   else
+    vim.keymap.set("n", "<leader>bq", function() self:request_close("checkpoint") end, vim.tbl_extend("force", map_options, { desc = "Blink checkpoint and close" }))
+    vim.keymap.set("n", "<leader>bQ", function() self:request_close("retain") end, vim.tbl_extend("force", map_options, { desc = "Blink close and retain history" }))
     vim.keymap.set("n", "<leader>bp", function() self.send({ type = "toggle_pin", payload = {} }) end, vim.tbl_extend("force", map_options, { desc = "Blink toggle pin" }))
     vim.keymap.set("n", "<leader>bx", function()
       vim.ui.select({ "No", "Yes" }, { prompt = "Abort the running Pi agent?" }, function(choice)
@@ -117,8 +194,7 @@ function UI:_make_buffer(name, item, lines, has_eol)
   end
   vim.keymap.set("n", "<leader>bl", function() self.send({ type = "list_changes", payload = {} }) end, vim.tbl_extend("force", map_options, { desc = "Blink list changes" }))
   vim.keymap.set("n", "<leader>bh", function() self:toggle_change_list() end, vim.tbl_extend("force", map_options, { desc = "Blink toggle change panel" }))
-  vim.keymap.set("n", "<leader>bq", function() self.send({ type = "client_closing", payload = {} }); vim.cmd("qa!") end, vim.tbl_extend("force", map_options, { desc = "Blink dismiss review (keep change)" }))
-  vim.keymap.set("n", "?", function() self:help(item) end, vim.tbl_extend("force", map_options, { desc = "Blink help" }))
+  vim.keymap.set("n", "?", function() self:help(current_item()) end, vim.tbl_extend("force", map_options, { desc = "Blink help" }))
 
   pcall(function() require("gitsigns").detach(buf) end)
   return buf
@@ -135,21 +211,42 @@ function UI:_calculate(origin_kind, origin_text, version_text)
   return vim.diff(origin_text, version_text, { result_type = "indices", algorithm = "histogram" })
 end
 
-function UI:_close_other_buffers_for_file(active_buf, item)
-  local key = item.fileId or item.displayPath
-  if not key then return end
-  for version_id, buf in pairs(vim.deepcopy(self.buffers)) do
-    if buf ~= active_buf and vim.api.nvim_buf_is_valid(buf) then
-      local state = self.buffer_state[buf]
-      local other = state and state.item
-      local other_key = other and (other.fileId or other.displayPath)
-      if other_key == key then
-        self.buffers[version_id] = nil
+local function blink_review_buffer(buf)
+  if not vim.api.nvim_buf_is_valid(buf) then return false end
+  if vim.b[buf].blink_owned and vim.b[buf].blink_role == "review" then return true end
+  return vim.api.nvim_buf_get_name(buf):match("^blink://") ~= nil
+    and vim.api.nvim_buf_get_name(buf) ~= "blink://changes"
+    and vim.api.nvim_buf_get_name(buf) ~= "blink://waiting"
+end
+
+function UI:_set_buffer_identity(buf, item)
+  vim.b[buf].blink_owned = true
+  vim.b[buf].blink_role = "review"
+  vim.b[buf].blink_file_id = item.fileId
+  vim.b[buf].blink_absolute_path = item.absolutePath
+  vim.b[buf].blink_canonical_path = item.canonicalPath
+  vim.b[buf].blink_filesystem_key = item.filesystemKey
+  vim.b[buf].blink_version_id = item.versionId
+end
+
+function UI:_sweep_review_buffers(keep_buf)
+  for _, buf in ipairs(vim.api.nvim_list_bufs()) do
+    if buf ~= keep_buf and blink_review_buffer(buf) then
+      local ok, err = pcall(vim.api.nvim_buf_delete, buf, { force = true })
+      if ok then
         self.buffer_state[buf] = nil
-        pcall(vim.api.nvim_buf_delete, buf, { force = true })
+        for version_id, tracked in pairs(vim.deepcopy(self.buffers)) do
+          if tracked == buf then self.buffers[version_id] = nil end
+        end
+      else
+        vim.schedule(function() vim.notify("Blink could not remove stale review buffer: " .. tostring(err), vim.log.levels.ERROR) end)
       end
     end
   end
+end
+
+function UI:_close_other_buffers_for_file(active_buf, _item)
+  self:_sweep_review_buffers(active_buf)
 end
 
 local function change_label(item)
@@ -317,13 +414,23 @@ function UI:show_version(item)
   else
     name = string.format("blink://%s@%s", item.displayPath, item.versionId)
   end
-  local buf = self.buffers[key]
-  if not buf or not vim.api.nvim_buf_is_valid(buf) then
+  local buf = self.review_buf
+  if buf and not vim.api.nvim_buf_is_valid(buf) then
+    self.review_buf = nil
+    self.review_state = nil
+    buf = nil
+  end
+  self:_sweep_review_buffers(buf)
+  if not buf then
     buf = self:_make_buffer(name, item, lines, has_eol)
-    self.buffers[key] = buf
   else
+    local old_name = vim.api.nvim_buf_get_name(buf)
+    if old_name ~= name then self:_set_review_name(buf, name) end
+    vim.bo[buf].filetype = vim.filetype.match({ filename = item.displayPath }) or ""
     self:_set_lines(buf, lines, has_eol)
   end
+  self.buffers = { [key] = buf }
+  self:_set_buffer_identity(buf, item)
   local hunks = self:_calculate(item.originKind, origin_text, version_text)
   local requested = tonumber(item.firstChangedLine) or 0
   local first_hunk = hunks[1]
@@ -335,13 +442,14 @@ function UI:show_version(item)
     local distance = math.abs(anchor - location)
     if not nearest_distance or distance < nearest_distance then active_hunk, nearest_distance = index, distance end
   end
-  self.buffer_state[buf] = {
+  self.buffer_state = { [buf] = {
     item = item,
     origin_lines = split_lines(origin_text),
     hunks = hunks,
     active_hunk = active_hunk,
     has_eol = has_eol,
-  }
+  } }
+  self.review_state = self.buffer_state[buf]
   self:render(buf)
   vim.api.nvim_set_current_buf(buf)
   self:_close_other_buffers_for_file(buf, item)
@@ -417,22 +525,32 @@ function UI:render(buf)
   end
 end
 
-function UI:navigate_hunk(buf, delta)
-  local data = self.buffer_state[buf]
+function UI:navigate_hunk(delta, count)
+  local buf = self.review_buf
+  local data = buf and self.buffer_state[buf] or nil
   local hunks = data and data.hunks or {}
   if #hunks == 0 then vim.notify("No Blink changes."); return end
+
+  local line_count = vim.api.nvim_buf_line_count(buf)
+  local function anchor(index)
+    return math.max(1, math.min(math.max(1, hunks[index][3]), line_count))
+  end
+
   local current = vim.api.nvim_win_get_cursor(0)[1]
+  local direction = delta > 0 and 1 or -1
   local target_index
-  if delta > 0 then
-    for index, hunk in ipairs(hunks) do if math.max(1, hunk[3]) > current then target_index = index; break end end
+  if direction > 0 then
+    for index = 1, #hunks do if anchor(index) > current then target_index = index; break end end
     target_index = target_index or 1
   else
-    for index = #hunks, 1, -1 do if math.max(1, hunks[index][3]) < current then target_index = index; break end end
+    for index = #hunks, 1, -1 do if anchor(index) < current then target_index = index; break end end
     target_index = target_index or #hunks
   end
+
+  target_index = ((target_index - 1 + direction * (math.max(1, count or 1) - 1)) % #hunks) + 1
   data.active_hunk = target_index
   self:render(buf)
-  vim.api.nvim_win_set_cursor(0, { math.max(1, hunks[target_index][3]), 0 })
+  vim.api.nvim_win_set_cursor(0, { anchor(target_index), 0 })
 end
 
 function UI:comment(item, range)
@@ -468,17 +586,26 @@ function UI:todo(item)
 end
 
 function UI:help(item)
+  local close_help = item.transactionId
+    and "<leader>bq dismiss/close"
+    or "<leader>bq checkpoint/close, <leader>bQ close/retain"
   local mode = item.transactionId and "Slow" or "Blitz"
-  vim.notify("Blink " .. mode .. ": [c/]c hunks, [f/]f file versions, [n/]n all versions (count supported), [N/]N first/latest, <leader>bl list, <leader>bh panel, <leader>bq close")
+  vim.notify("Blink " .. mode .. ": [c/]c hunks, [f/]f file versions, [n/]n all versions (count supported), [N/]N first/latest, <leader>bl list, <leader>bh panel, " .. close_help)
 end
 
 function UI:evict(version_id)
-  local buf = self.buffers[version_id]
-  self.buffers[version_id] = nil
-  if buf and vim.api.nvim_buf_is_valid(buf) then
-    self.buffer_state[buf] = nil
-    vim.api.nvim_buf_delete(buf, { force = true })
+  local buf = self.review_buf
+  local item = self.review_state and self.review_state.item
+  if not buf or not item or item.versionId ~= version_id then return end
+  local ok, err = pcall(vim.api.nvim_buf_delete, buf, { force = true })
+  if not ok then
+    vim.notify("Blink could not remove evicted review buffer: " .. tostring(err), vim.log.levels.ERROR)
+    return
   end
+  self.review_buf = nil
+  self.review_state = nil
+  self.buffers = {}
+  self.buffer_state = {}
 end
 
 return UI

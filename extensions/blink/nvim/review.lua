@@ -8,7 +8,7 @@ local review_id = required("BLINK_REVIEW_ID")
 local socket_path = required("BLINK_SOCKET_PATH")
 local mode = required("BLINK_MODE")
 local cwd = required("BLINK_CWD")
-if required("BLINK_PROTOCOL_VERSION") ~= "1" then error("Unsupported Blink protocol") end
+if required("BLINK_PROTOCOL_VERSION") ~= "2" then error("Unsupported Blink protocol") end
 if mode ~= "slow" and mode ~= "blitz" then error("Invalid Blink mode") end
 
 local script = vim.fn.fnamemodify(debug.getinfo(1, "S").source:sub(2), ":p:h")
@@ -20,13 +20,6 @@ local Client = require("blink.protocol")
 local model = State.new(review_id, mode)
 local client
 local ui
-
-local function pane_active()
-  local pane = vim.env.TMUX_PANE
-  if not pane or pane == "" then return true end
-  local result = vim.system({ "tmux", "display-message", "-p", "-t", pane, "#{pane_active}" }, { text = true }):wait()
-  return result.code == 0 and vim.trim(result.stdout or "") == "1"
-end
 
 local function refresh_change_list()
   if ui then ui:update_change_list(model.versions, model.activeVersionId) end
@@ -99,7 +92,7 @@ local function send(action)
     notify("Blink " .. (pinned and "pinned" or "auto-following"))
     return
   end
-  client:send(action.type, action.payload)
+  return client:send(action.type, action.payload)
 end
 
 ui = UI.new({ runtime_dir = vim.fs.dirname(socket_path), send = send })
@@ -116,8 +109,8 @@ local function on_message(message)
       State.replace(model, payload)
       show_active()
     end
-  elseif message.type == "version_added" then
-    local item = State.add(model, payload.version, pane_active())
+  elseif message.type == "file_version_upserted" then
+    local item = State.upsert(model, payload.version, payload.replacedVersionId)
     if model.activeVersionId == item.versionId then
       ui:show_version(item)
       refresh_change_list()
@@ -125,16 +118,22 @@ local function on_message(message)
       refresh_change_list()
       notify(string.format('Edited "%s"', vim.fs.basename(item.displayPath or "file")))
     end
-  elseif message.type == "version_evicted" then
+  elseif message.type == "file_evicted" then
     local replacement = State.evict(model, payload.versionId)
-    if replacement then ui:show_version(replacement) else ui:show_waiting() end
     ui:evict(payload.versionId)
+    if replacement then ui:show_version(replacement) else ui:show_waiting() end
     refresh_change_list()
   elseif message.type == "shutdown" then
     client:close()
     vim.cmd("qa!")
   elseif message.type == "slow_action_result" then
-    if payload.settled then vim.cmd("qa!") elseif payload.error then notify(payload.error, vim.log.levels.ERROR) end
+    if payload.settled then
+      if ui.close_pending then ui:complete_close(payload) else vim.cmd("qa!") end
+    elseif payload.error then notify(payload.error, vim.log.levels.ERROR) end
+  elseif message.type == "client_close_result" then
+    ui:complete_close(payload)
+  elseif message.type == "client_close_pending" then
+    notify("Blink close is already pending")
   elseif message.type == "sink_list_changed" then
     ui:set_sinks(payload.sinks)
   elseif message.type == "feedback_result" then

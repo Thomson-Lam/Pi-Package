@@ -27,7 +27,7 @@ const socket = connect(process.env.BLINK_SOCKET_PATH);
 let buffer = "";
 let counter = 0;
 function send(type, payload = {}) {
-  socket.write(JSON.stringify({ protocolVersion: 1, type, reviewId: process.env.BLINK_REVIEW_ID, requestId: type + "-" + (++counter), payload }) + "\\n");
+  socket.write(JSON.stringify({ protocolVersion: 2, type, reviewId: process.env.BLINK_REVIEW_ID, requestId: type + "-" + (++counter), payload }) + "\\n");
 }
 socket.on("connect", () => { if (action !== "no-ready") send("client_ready", { nvimVersion: "fake" }); });
 socket.on("data", (chunk) => {
@@ -158,11 +158,12 @@ test("Slow dispositions and Blitz delivery coordinate through isolated tmux and 
   const blitz = new BlinkRuntime({ mode: "blitz", cwd: dir, ownerPane: owner, reviewScript: blitzScript, pi, queueMutation: queue, sinks });
   runtimes.push(blitz);
   blitz.setContext(ctx);
-  await blitz.captureOrigin(file, async () => Buffer.from("unused"));
+  const firstPreparation = await blitz.prepareMutation(file);
   await writeFile(file, "version-one");
   blitz.enqueueVersion({
     toolName: "write",
     toolCallId: "blitz-1",
+    preparation: firstPreparation,
     absolutePath: file,
     bytes: Buffer.from("version-one"),
     firstChangedLine: 1,
@@ -177,10 +178,15 @@ test("Slow dispositions and Blitz delivery coordinate through isolated tmux and 
   const retained = (blitz as any).versions[0];
   assert.equal(await readFile(retained.snapshot.path, "utf8"), "version-one", "retained exact queued bytes");
   assert.equal(await readFile(file, "utf8"), "later-working-state", "Blitz never restores working files");
+  await (blitz as any).checkpointBlitzState();
+  assert.equal(blitz.retainedCount, 0, "checkpoint removes the reviewed generation");
   for (let id = 2; id <= 101; id++) {
+    const preparation = await blitz.prepareMutation(file);
+    await writeFile(file, `version-${id}`);
     blitz.enqueueVersion({
       toolName: "write",
       toolCallId: `blitz-${id}`,
+      preparation,
       absolutePath: file,
       bytes: Buffer.from(`version-${id}`),
       firstChangedLine: 1,
@@ -192,9 +198,13 @@ test("Slow dispositions and Blitz delivery coordinate through isolated tmux and 
   while (((blitz as any).versions.at(-1)?.versionId ?? 0) < 101 && Date.now() < evictionDeadline) {
     await new Promise((resolve) => setTimeout(resolve, 20));
   }
-  assert.equal(blitz.retainedCount, 100);
-  assert.equal((blitz as any).versions[0].versionId, 2, "101st rolling diff evicts oldest globally");
-  assert.equal(await readFile((blitz as any).versions.at(-1).originSnapshotPath, "utf8"), "version-100", "latest version diffs against the previous observed state");
+  assert.equal(blitz.retainedCount, 1, "same-file delivery upserts one retained version");
+  assert.equal((blitz as any).versions[0].versionId, 101);
+  assert.equal(await readFile((blitz as any).versions[0].originSnapshotPath, "utf8"), "later-working-state", "first post-checkpoint mutation establishes a fresh baseline");
+  assert.equal((blitz as any).files.size, 1, "one logical file record survives repeated same-path edits");
+  assert.equal((blitz as any).preparations.size, 0, "committed pre-state byte buffers are released");
+  const retainedFile = [...(blitz as any).files.values()][0] as any;
+  assert.equal("revision" in retainedFile, false, "file records retain snapshots and hashes, not complete origin buffers");
   await blitz.cleanup();
 
   assert.equal(aborts, 1, "Slow restoration conflict aborts the active agent once");

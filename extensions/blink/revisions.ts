@@ -6,6 +6,7 @@ import {
   mkdir,
   open,
   readFile,
+  realpath,
   rename,
   rm,
   unlink,
@@ -14,11 +15,21 @@ import { dirname, isAbsolute, join, resolve } from "node:path";
 
 export const MAX_FILE_BYTES = 15 * 1024 * 1024;
 
+export interface FileIdentity {
+  absolutePath: string;
+  canonicalPath?: string;
+  device?: number;
+  inode?: number;
+}
+
 export interface FileRevision {
   kind: "file";
   bytes: Buffer;
   hash: string;
   mode: number;
+  canonicalPath?: string;
+  device?: number;
+  inode?: number;
 }
 
 export interface AbsentRevision {
@@ -60,6 +71,23 @@ export function hashBytes(bytes: Uint8Array): string {
   return createHash("sha256").update(bytes).digest("hex");
 }
 
+export function filesystemKey(identity: Pick<FileIdentity, "device" | "inode">): string | undefined {
+  return identity.device !== undefined && identity.inode !== undefined
+    ? `${identity.device}:${identity.inode}`
+    : undefined;
+}
+
+export function revisionIdentity(absolutePath: string, revision: PathRevision): FileIdentity {
+  return revision.kind === "file"
+    ? {
+        absolutePath,
+        canonicalPath: revision.canonicalPath,
+        device: revision.device,
+        inode: revision.inode,
+      }
+    : { absolutePath };
+}
+
 export function validateTextBytes(bytes: Uint8Array): void {
   if (bytes.byteLength > MAX_FILE_BYTES) {
     throw new UnsupportedRevisionError(`Blink supports text files up to 15 MiB; received ${bytes.byteLength} bytes.`);
@@ -94,7 +122,16 @@ export async function capturePathState(
 
   const bytes = await readFile(absolutePath);
   validateTextBytes(bytes);
-  return { kind: "file", bytes, hash: hashBytes(bytes), mode: info.mode & 0o7777 };
+  const canonicalPath = await realpath(absolutePath).catch(() => undefined);
+  return {
+    kind: "file",
+    bytes,
+    hash: hashBytes(bytes),
+    mode: info.mode & 0o7777,
+    canonicalPath,
+    device: info.dev,
+    inode: info.ino,
+  };
 }
 
 export async function createSnapshotDirectory(runtimeDir: string): Promise<string> {

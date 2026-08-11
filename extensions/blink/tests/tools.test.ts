@@ -23,6 +23,7 @@ function fakeDefinition(name: "edit" | "write", calls: Array<{ cwd: string; para
     renderResult: renderer,
     async execute(_id: string, params: any): Promise<Result> {
       calls.push({ cwd: options?.cwd ?? "", params });
+      if (params.fail) throw new Error("built-in failed");
       if (name === "edit" && options?.operations) {
         const absolute = join(options.cwd, params.path);
         const current = await options.operations.readFile(absolute);
@@ -34,7 +35,8 @@ function fakeDefinition(name: "edit" | "write", calls: Array<{ cwd: string; para
 }
 
 function harness(mode: "off" | "slow" | "blitz", calls: Array<any>) {
-  const origins = new Map<string, Promise<Buffer | "absent">>();
+  const preparations: Array<{ preparationId: string; absolutePath: string }> = [];
+  const discarded: string[] = [];
   const versions: Array<{ path: string; bytes: Buffer }> = [];
   const slowEntries: string[] = [];
   const defs = createBlinkToolDefinitions({
@@ -53,19 +55,19 @@ function harness(mode: "off" | "slow" | "blitz", calls: Array<any>) {
       slowEntries.push(`end:${input.toolName}`);
       return result;
     },
-    captureBlitzOrigin(path, readOrigin) {
-      let promise = origins.get(path);
-      if (!promise) {
-        promise = readOrigin();
-        origins.set(path, promise);
-      }
-      return promise;
+    async prepareBlitzMutation(absolutePath) {
+      const preparation = { preparationId: `p${preparations.length + 1}`, absolutePath };
+      preparations.push(preparation);
+      return preparation;
+    },
+    discardBlitzMutation(preparation) {
+      discarded.push(preparation.preparationId);
     },
     enqueueBlitzVersion(input) {
       versions.push({ path: input.absolutePath, bytes: Buffer.from(input.bytes) });
     },
   });
-  return { defs, origins, versions, slowEntries };
+  return { defs, preparations, discarded, versions, slowEntries };
 }
 
 const ctx = (cwd: string) => ({ cwd });
@@ -122,6 +124,18 @@ test("Blitz edit captures bytes passed to writeFile, not a later reread", async 
   await writeFile(file, "later");
   assert.equal(versions[0].bytes.toString("utf8"), "one!");
   assert.equal(await readFile(file, "utf8"), "later");
+});
+
+test("Blitz discards prepared state when the built-in mutation fails", async () => {
+  const calls: any[] = [];
+  const { defs, preparations, discarded, versions } = harness("blitz", calls);
+  await assert.rejects(
+    defs.write.execute("w", { path: "new.txt", content: "x", fail: true }, undefined, undefined, ctx("/cwd") as any),
+    /built-in failed/,
+  );
+  assert.equal(preparations.length, 1);
+  assert.deepEqual(discarded, [preparations[0].preparationId]);
+  assert.equal(versions.length, 0);
 });
 
 test("AsyncMutex releases after failures", async () => {

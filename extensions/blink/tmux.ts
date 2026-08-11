@@ -46,7 +46,7 @@ export class TmuxAdapter {
       BLINK_SOCKET_PATH: socketPath,
       BLINK_MODE: mode,
       BLINK_CWD: this.cwd,
-      BLINK_PROTOCOL_VERSION: "1",
+      BLINK_PROTOCOL_VERSION: "2",
     };
     const assignments = Object.entries(environment).map(([key, value]) => `${key}=${shellQuote(value)}`).join(" ");
     // The pane marks itself before Neovim starts. If marking fails, the shell

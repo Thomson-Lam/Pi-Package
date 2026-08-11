@@ -29,9 +29,15 @@ interface SlowToolInput {
   executeBuiltin: () => Promise<ToolResult>;
 }
 
+export interface PreparedBlitzMutation {
+  preparationId: string;
+  absolutePath: string;
+}
+
 interface BlitzVersionInput {
   toolName: "edit" | "write";
   toolCallId: string;
+  preparation: PreparedBlitzMutation;
   absolutePath: string;
   bytes: Buffer;
   firstChangedLine: number;
@@ -45,7 +51,8 @@ export interface BlinkToolDependencies {
   createEditDefinition(cwd: string, options?: { operations?: any }): ToolDefinition;
   createWriteDefinition(cwd: string, options?: { operations?: any }): ToolDefinition;
   runSlow(input: SlowToolInput): Promise<ToolResult>;
-  captureBlitzOrigin(absolutePath: string, readOrigin: () => Promise<Buffer | "absent">, ctx: { cwd: string }): Promise<Buffer | "absent">;
+  prepareBlitzMutation(absolutePath: string, ctx: { cwd: string }): Promise<PreparedBlitzMutation>;
+  discardBlitzMutation(preparation: PreparedBlitzMutation): void;
   enqueueBlitzVersion(input: BlitzVersionInput): void;
 }
 
@@ -94,19 +101,12 @@ export function createBlinkToolDefinitions(deps: BlinkToolDependencies): { edit:
       }
 
       const absolutePath = absoluteToolPath(params.path, ctx.cwd);
-      const originPromise = deps.captureBlitzOrigin(absolutePath, async () => {
-        try {
-          return Buffer.from(await readFile(absolutePath));
-        } catch (error) {
-          if (typeof error === "object" && error !== null && "code" in error && error.code === "ENOENT") return "absent";
-          throw error;
-        }
-      }, ctx);
+      const preparationPromise = deps.prepareBlitzMutation(absolutePath, ctx);
       let exactOutput: Buffer | undefined;
       const definition = deps.createEditDefinition(ctx.cwd, {
         operations: {
           async readFile(path: string) {
-            await originPromise;
+            await preparationPromise;
             return readFile(path);
           },
           access: (path: string) => access(path, constants.R_OK | constants.W_OK),
@@ -116,18 +116,25 @@ export function createBlinkToolDefinitions(deps: BlinkToolDependencies): { edit:
           },
         },
       });
-      const result = await definition.execute(toolCallId, params, signal, onUpdate, ctx);
-      if (!exactOutput) throw new Error("Blink could not capture the successful edit output.");
-      deps.enqueueBlitzVersion({
-        toolName: "edit",
-        toolCallId,
-        absolutePath,
-        bytes: Buffer.from(exactOutput),
-        firstChangedLine: Number((result.details as any)?.firstChangedLine) || 1,
-        result,
-        ctx,
-      });
-      return result;
+      const preparation = await preparationPromise;
+      try {
+        const result = await definition.execute(toolCallId, params, signal, onUpdate, ctx);
+        if (!exactOutput) throw new Error("Blink could not capture the successful edit output.");
+        deps.enqueueBlitzVersion({
+          toolName: "edit",
+          toolCallId,
+          preparation,
+          absolutePath,
+          bytes: Buffer.from(exactOutput),
+          firstChangedLine: Number((result.details as any)?.firstChangedLine) || 1,
+          result,
+          ctx,
+        });
+        return result;
+      } catch (error) {
+        deps.discardBlitzMutation(preparation);
+        throw error;
+      }
     },
   };
 
@@ -150,26 +157,25 @@ export function createBlinkToolDefinitions(deps: BlinkToolDependencies): { edit:
       }
 
       const absolutePath = absoluteToolPath(params.path, ctx.cwd);
-      await deps.captureBlitzOrigin(absolutePath, async () => {
-        try {
-          return Buffer.from(await readFile(absolutePath));
-        } catch (error) {
-          if (typeof error === "object" && error !== null && "code" in error && error.code === "ENOENT") return "absent";
-          throw error;
-        }
-      }, ctx);
+      const preparation = await deps.prepareBlitzMutation(absolutePath, ctx);
       const exactOutput = Buffer.from(params.content, "utf8");
-      const result = await deps.createWriteDefinition(ctx.cwd).execute(toolCallId, params, signal, onUpdate, ctx);
-      deps.enqueueBlitzVersion({
-        toolName: "write",
-        toolCallId,
-        absolutePath,
-        bytes: exactOutput,
-        firstChangedLine: 0,
-        result,
-        ctx,
-      });
-      return result;
+      try {
+        const result = await deps.createWriteDefinition(ctx.cwd).execute(toolCallId, params, signal, onUpdate, ctx);
+        deps.enqueueBlitzVersion({
+          toolName: "write",
+          toolCallId,
+          preparation,
+          absolutePath,
+          bytes: exactOutput,
+          firstChangedLine: 0,
+          result,
+          ctx,
+        });
+        return result;
+      } catch (error) {
+        deps.discardBlitzMutation(preparation);
+        throw error;
+      }
     },
   };
 

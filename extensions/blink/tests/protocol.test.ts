@@ -27,7 +27,7 @@ async function setup(t: test.TestContext) {
 }
 
 function frame(type: string, payload: unknown = {}, extra: Record<string, unknown> = {}) {
-  return JSON.stringify({ protocolVersion: 1, type, reviewId: "review-1", payload, ...extra }) + "\n";
+  return JSON.stringify({ protocolVersion: 2, type, reviewId: "review-1", payload, ...extra }) + "\n";
 }
 
 async function client(path: string) {
@@ -65,8 +65,8 @@ test("rejects malformed, wrong-version, wrong-review, and oversized frames befor
   const { resources, messages } = await setup(t);
   for (const bad of [
     "not-json\n",
-    JSON.stringify({ protocolVersion: 2, type: "client_ready", reviewId: "review-1", payload: {} }) + "\n",
-    JSON.stringify({ protocolVersion: 1, type: "client_ready", reviewId: "other", payload: {} }) + "\n",
+    JSON.stringify({ protocolVersion: 1, type: "client_ready", reviewId: "review-1", payload: {} }) + "\n",
+    JSON.stringify({ protocolVersion: 2, type: "client_ready", reviewId: "other", payload: {} }) + "\n",
     `${"x".repeat(256 * 1024 + 1)}\n`,
   ]) {
     const socket = await client(resources.socketPath);
@@ -97,7 +97,7 @@ test("server sends validated envelopes and close is idempotent", async (t) => {
   server.send("hello", { mode: "blitz" });
   const [data] = await once(socket, "data") as [Buffer];
   const sent = JSON.parse(data.toString());
-  assert.equal(sent.protocolVersion, 1);
+  assert.equal(sent.protocolVersion, 2);
   assert.equal(sent.reviewId, "review-1");
   assert.equal(sent.type, "hello");
   await Promise.all([server.close(), server.close()]);

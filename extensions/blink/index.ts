@@ -157,7 +157,8 @@ export default function blinkExtension(pi: ExtensionAPI): void {
     createEditDefinition: (cwd, options) => createEditToolDefinition(cwd, options) as any,
     createWriteDefinition: (cwd, options) => createWriteToolDefinition(cwd, options) as any,
     runSlow: (input) => requireRuntime(input.ctx as ExtensionContext, "slow").runSlow(input as any),
-    captureBlitzOrigin: (path, readOrigin, ctx) => requireRuntime(ctx as ExtensionContext, "blitz").captureOrigin(path, readOrigin),
+    prepareBlitzMutation: (path, ctx) => requireRuntime(ctx as ExtensionContext, "blitz").prepareMutation(path),
+    discardBlitzMutation: (preparation) => runtime?.discardMutation(preparation),
     enqueueBlitzVersion: (input) => requireRuntime(input.ctx as ExtensionContext, "blitz").enqueueVersion(input as any),
   });
   pi.registerTool(tools.edit as any);

@@ -1,6 +1,6 @@
 import test from "node:test";
 import assert from "node:assert/strict";
-import { chmod, lstat, mkdir, readFile, stat, symlink, writeFile } from "node:fs/promises";
+import { chmod, link, lstat, mkdir, readFile, stat, symlink, writeFile } from "node:fs/promises";
 import { join } from "node:path";
 import { tmpdir } from "node:os";
 import { mkdtemp } from "node:fs/promises";
@@ -9,8 +9,10 @@ import {
   MAX_FILE_BYTES,
   RevisionConflictError,
   capturePathState,
+  filesystemKey,
   hashBytes,
   normalizeToolPath,
+  revisionIdentity,
   restorePathState,
   validateTextBytes,
 } from "../revisions.ts";
@@ -41,6 +43,23 @@ test("captures absent and existing regular text origins including mode", async (
     assert.deepEqual(state.bytes, bytes);
     assert.equal(state.hash, hashBytes(bytes));
     assert.equal(state.mode & 0o777, 0o640);
+  }
+});
+
+test("captures canonical path and stable filesystem identity across hard links", async (t) => {
+  const dir = await fixture(t);
+  const file = join(dir, "a.txt");
+  const alias = join(dir, "alias.txt");
+  await writeFile(file, "same inode");
+  await link(file, alias);
+  const original = await capturePathState(file);
+  const linked = await capturePathState(alias);
+  assert.equal(original.kind, "file");
+  assert.equal(linked.kind, "file");
+  if (original.kind === "file" && linked.kind === "file") {
+    assert.equal(filesystemKey(revisionIdentity(file, original)), filesystemKey(revisionIdentity(alias, linked)));
+    assert.equal(original.canonicalPath, file);
+    assert.equal(linked.canonicalPath, alias);
   }
 });
 

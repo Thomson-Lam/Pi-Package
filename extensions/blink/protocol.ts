@@ -3,11 +3,11 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { createServer, type Server, type Socket } from "node:net";
 
-export const BLINK_PROTOCOL_VERSION = 1;
+export const BLINK_PROTOCOL_VERSION = 2;
 export const MAX_FRAME_BYTES = 256 * 1024;
 
 export interface Envelope<T = unknown> {
-  protocolVersion: 1;
+  protocolVersion: 2;
   type: string;
   reviewId: string;
   requestId?: string;
@@ -154,7 +154,7 @@ export class BlinkJsonlServer {
   }
 
   private makeEnvelope<T>(type: string, payload: T, requestId?: string): Envelope<T> {
-    return { protocolVersion: 1, type, reviewId: this.options.reviewId, ...(requestId ? { requestId } : {}), payload };
+    return { protocolVersion: 2, type, reviewId: this.options.reviewId, ...(requestId ? { requestId } : {}), payload };
   }
 
   send<T>(type: string, payload: T, requestId?: string): boolean {

@@ -32,7 +32,7 @@ function Client:connect(callback)
         if #line > MAX_FRAME then self:close(); return end
         if line ~= "" then
           local ok, message = pcall(vim.json.decode, line)
-          if not ok or type(message) ~= "table" or message.protocolVersion ~= 1 or message.reviewId ~= self.review_id or type(message.type) ~= "string" then
+          if not ok or type(message) ~= "table" or message.protocolVersion ~= 2 or message.reviewId ~= self.review_id or type(message.type) ~= "string" then
             self:close(); return
           end
           vim.schedule(function() self.on_message(message) end)
@@ -48,7 +48,7 @@ function Client:send(kind, payload, request_id)
   self.counter = self.counter + 1
   local id = request_id or string.format("nvim-%d-%d", vim.uv.hrtime(), self.counter)
   local message = {
-    protocolVersion = 1,
+    protocolVersion = 2,
     type = kind,
     reviewId = self.review_id,
     requestId = id,

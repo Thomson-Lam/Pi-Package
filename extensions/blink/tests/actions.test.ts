@@ -4,8 +4,60 @@ import assert from "node:assert/strict";
 import { BlinkRuntime } from "../runtime.ts";
 
 function envelope(type: string, payload: any, requestId = `${type}-1`) {
-  return { protocolVersion: 1 as const, type, reviewId: "ignored", requestId, payload };
+  return { protocolVersion: 2 as const, type, reviewId: "ignored", requestId, payload };
 }
+
+function closeRuntime() {
+  const replies: Array<{ type: string; payload: any; requestId?: string }> = [];
+  const runtime = new BlinkRuntime({
+    mode: "blitz",
+    cwd: "/tmp",
+    ownerPane: "%1",
+    reviewScript: "/tmp/review.lua",
+    pi: {} as any,
+    queueMutation: async (_path, operation) => operation(),
+    sinks: new Map(),
+  });
+  (runtime as any).clientReady = true;
+  (runtime as any).server = { send: (type: string, payload: any, requestId?: string) => { replies.push({ type, payload, requestId }); return true; } };
+  return { runtime, replies };
+}
+
+test("Blitz close actions distinguish retained history from an idempotent checkpoint", async () => {
+  const retained = closeRuntime();
+  (retained.runtime as any).versions = [{ versionId: 1, fileId: "f" }];
+  await (retained.runtime as any).handleMessage(envelope("client_retain_close", {}, "retain"));
+  assert.equal(retained.runtime.retainedCount, 1);
+  assert.deepEqual(retained.replies.at(-1)?.payload, { action: "retain", reset: false, retainedCount: 1 });
+  await (retained.runtime as any).completeClientClose();
+
+  const checkpoint = closeRuntime();
+  let resets = 0;
+  let release!: () => void;
+  const wait = new Promise<void>((resolve) => { release = resolve; });
+  (checkpoint.runtime as any).checkpointBlitzState = async () => {
+    resets++;
+    await wait;
+    (checkpoint.runtime as any).versions = [];
+    return { removedFiles: 1, removedVersions: 1 };
+  };
+  const request = envelope("client_checkpoint_close", {}, "checkpoint");
+  const first = (checkpoint.runtime as any).handleMessage(request);
+  const duplicate = (checkpoint.runtime as any).handleMessage(request);
+  await duplicate;
+  assert.equal(resets, 1, "duplicate in-flight checkpoint requests reset once");
+  assert.equal(checkpoint.replies.at(-1)?.type, "client_close_pending");
+  release();
+  await first;
+  assert.deepEqual(checkpoint.replies.at(-1)?.payload, {
+    action: "checkpoint",
+    reset: true,
+    retainedCount: 0,
+    removedFiles: 1,
+    removedVersions: 1,
+  });
+  await (checkpoint.runtime as any).completeClientClose();
+});
 
 test("Blitz feedback routing, TODO isolation/idempotency, and abort are mode-correct", async () => {
   const sent: Array<{ text: string; options?: any }> = [];

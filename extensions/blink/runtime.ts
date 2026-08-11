@@ -7,11 +7,15 @@ import {
   RevisionConflictError,
   UnsupportedRevisionError,
   capturePathState,
+  createSnapshotDirectory,
+  filesystemKey,
   hashBytes,
   normalizeToolPath,
   persistSnapshot,
   restorePathState,
+  revisionIdentity,
   validateTextBytes,
+  type FileIdentity,
   type PathRevision,
   type Snapshot,
 } from "./revisions.ts";
@@ -47,9 +51,15 @@ interface SlowInput {
   executeBuiltin(): Promise<ToolResult>;
 }
 
+export interface PreparedMutation {
+  preparationId: string;
+  absolutePath: string;
+}
+
 interface VersionInput {
   toolName: "edit" | "write";
   toolCallId: string;
+  preparation: PreparedMutation;
   absolutePath: string;
   bytes: Buffer;
   firstChangedLine: number;
@@ -57,17 +67,14 @@ interface VersionInput {
   ctx: ExtensionContext;
 }
 
-interface OriginRecord {
-  path: string;
-  revision?: PathRevision;
-  unsupported?: string;
-  fileId: string;
-  snapshot?: Snapshot;
+interface PendingPreparation extends PreparedMutation {
+  pre: PathRevision;
 }
 
 interface RetainedVersion {
   versionId: number;
   fileId: string;
+  generation: number;
   snapshot: Snapshot;
   byteLength: number;
   toolCallId: string;
@@ -75,13 +82,23 @@ interface RetainedVersion {
   createdAt: number;
   unread: boolean;
   displayPath: string;
+  absolutePath: string;
+  canonicalPath?: string;
+  filesystemKey?: string;
   originKind: "file" | "absent";
   originSnapshotPath?: string;
 }
 
-interface FileHistory {
-  origin: OriginRecord;
-  versions: RetainedVersion[];
+interface FileRecord {
+  fileId: string;
+  generation: number;
+  absolutePaths: Set<string>;
+  canonicalPaths: Set<string>;
+  filesystemKeys: Set<string>;
+  baselineKind: "file" | "absent";
+  baselineSnapshot?: Snapshot;
+  latest?: RetainedVersion;
+  lastTouchedAt: number;
 }
 
 interface PendingSlow {
@@ -111,7 +128,7 @@ export interface RuntimeOptions {
   startupTimeoutMs?: number;
 }
 
-const MAX_VERSIONS = 100;
+const MAX_RETAINED_FILES = 100;
 const MAX_RUNTIME_BYTES = 100 * 1024 * 1024;
 
 function errorMessage(error: unknown): string {
@@ -138,8 +155,11 @@ export class BlinkRuntime {
   private context?: ExtensionContext;
   private closing = false;
   private cleanupPromise?: Promise<void>;
-  private origins = new Map<string, Promise<OriginRecord>>();
-  private histories = new Map<string, FileHistory>();
+  private preparations = new Map<string, PendingPreparation>();
+  private files = new Map<string, FileRecord>();
+  private fileIdByAbsolutePath = new Map<string, string>();
+  private fileIdByCanonicalPath = new Map<string, string>();
+  private fileIdByFilesystemKey = new Map<string, string>();
   private versions: RetainedVersion[] = [];
   private nextVersionId = 1;
   private snapshotByteLengths = new Map<string, number>();
@@ -149,6 +169,11 @@ export class BlinkRuntime {
   private clientReady = false;
   private recentRequests = new Map<string, { type: string; payload: any }>();
   private abortRequested = false;
+  private clientClosePromise?: Promise<void>;
+  private resolveClientClose?: () => void;
+  private clientCloseTimer?: NodeJS.Timeout;
+  private clientCloseCompleting?: Promise<void>;
+  private clientCloseEpoch = 0;
 
   constructor(options: RuntimeOptions) {
     this.mode = options.mode;
@@ -178,66 +203,195 @@ export class BlinkRuntime {
     this.server?.send("sink_list_changed", { sinks: [...this.sinks.values()].map(({ id, label }) => ({ id, label })) });
   }
 
-  captureOrigin(absolutePath: string, _readOrigin: () => Promise<Buffer | "absent">): Promise<Buffer | "absent"> {
-    let promise = this.origins.get(absolutePath);
-    if (!promise) {
-      const created = this.captureOriginRecord(absolutePath);
-      let tracked: Promise<OriginRecord>;
-      tracked = created.catch((error) => {
-        if (this.origins.get(absolutePath) === tracked) this.origins.delete(absolutePath);
-        throw error;
-      });
-      promise = tracked;
-      this.origins.set(absolutePath, tracked);
-    }
-    return promise.then((record) => record.revision?.kind === "file" ? Buffer.from(record.revision.bytes) : "absent");
+  private beginClientClose(): void {
+    if (this.clientClosePromise) return;
+    this.clientCloseEpoch++;
+    this.clientClosePromise = new Promise<void>((resolve) => { this.resolveClientClose = resolve; });
   }
 
-  private async captureOriginRecord(absolutePath: string): Promise<OriginRecord> {
-    const record: OriginRecord = { path: absolutePath, fileId: randomUUID() };
-    try {
-      record.revision = await capturePathState(absolutePath, { allowAbsent: true });
-    } catch (error) {
-      if (error instanceof UnsupportedRevisionError) record.unsupported = error.message;
-      else throw error;
-    }
-    return record;
+  private armClientCloseTimeout(): void {
+    if (!this.clientClosePromise || this.clientCloseTimer) return;
+    this.clientCloseTimer = setTimeout(() => { void this.completeClientClose(); }, 2000);
+    this.clientCloseTimer.unref?.();
+  }
+
+  private completeClientClose(): Promise<void> {
+    if (!this.clientClosePromise) return Promise.resolve();
+    if (this.clientCloseCompleting) return this.clientCloseCompleting;
+    this.clientCloseCompleting = (async () => {
+      if (this.clientCloseTimer) clearTimeout(this.clientCloseTimer);
+      this.clientCloseTimer = undefined;
+      await this.tmux?.close().catch(() => undefined);
+      const resolve = this.resolveClientClose;
+      this.resolveClientClose = undefined;
+      this.clientClosePromise = undefined;
+      resolve?.();
+    })().finally(() => { this.clientCloseCompleting = undefined; });
+    return this.clientCloseCompleting;
+  }
+
+  private async waitForClientClose(): Promise<void> {
+    await this.clientClosePromise;
+  }
+
+  private checkpointBlitzState(): Promise<{ removedFiles: number; removedVersions: number }> {
+    const operation = this.deliveryTail.then(async () => {
+      const removedFiles = this.files.size;
+      const removedVersions = this.versions.length;
+      let resetError: unknown;
+      try {
+        if (this.resources) {
+          await rm(this.resources.snapshotsDir, { recursive: true, force: true });
+          await createSnapshotDirectory(this.resources.runtimeDir);
+        }
+      } catch (error) {
+        resetError = error;
+      }
+      this.files.clear();
+      this.fileIdByAbsolutePath.clear();
+      this.fileIdByCanonicalPath.clear();
+      this.fileIdByFilesystemKey.clear();
+      this.versions = [];
+      this.snapshotByteLengths.clear();
+      this.updateStatus();
+      if (resetError) throw resetError;
+      return { removedFiles, removedVersions };
+    });
+    this.deliveryTail = operation.then(
+      () => undefined,
+      (error) => this.notify(`Blink checkpoint failed: ${errorMessage(error)}`, "error"),
+    );
+    return operation;
+  }
+
+  async prepareMutation(absolutePath: string): Promise<PreparedMutation> {
+    if (this.closing) throw new Error("Blink runtime is closing.");
+    const preparationId = randomUUID();
+    const pre = await capturePathState(absolutePath, { allowAbsent: true });
+    const preparation: PendingPreparation = { preparationId, absolutePath, pre };
+    this.preparations.set(preparationId, preparation);
+    return { preparationId, absolutePath };
+  }
+
+  discardMutation(preparation: PreparedMutation): void {
+    this.preparations.delete(preparation.preparationId);
   }
 
   enqueueVersion(input: VersionInput): void {
-    if (this.closing) return;
+    if (this.closing) {
+      this.discardMutation(input.preparation);
+      return;
+    }
     const versionId = this.nextVersionId++;
     this.context = input.ctx;
-    const immutable = { ...input, bytes: Buffer.from(input.bytes), versionId };
+    const immutable = { ...input, bytes: Buffer.from(input.bytes), versionId, closeEpoch: this.clientCloseEpoch };
     this.deliveryTail = this.deliveryTail
       .then(() => this.deliverVersion(immutable))
-      .catch((error) => this.notify(`Blink skipped review version ${versionId}: ${errorMessage(error)}`, "error"));
+      .catch((error) => {
+        this.discardMutation(input.preparation);
+        this.notify(`Blink skipped review version ${versionId}: ${errorMessage(error)}`, "error");
+      });
   }
 
-  private async deliverVersion(input: VersionInput & { versionId: number }): Promise<void> {
+  private async liveFilesystemAlias(record: FileRecord, key: string): Promise<boolean> {
+    for (const path of record.absolutePaths) {
+      try {
+        const info = await lstat(path);
+        if (info.isFile() && !info.isSymbolicLink() && `${info.dev}:${info.ino}` === key) return true;
+      } catch { /* A stale alias is not evidence that an inode still belongs to this record. */ }
+    }
+    return false;
+  }
+
+  private async resolveFile(identity: FileIdentity, pre: PathRevision): Promise<FileRecord> {
+    const fsKey = filesystemKey(identity);
+    const pathId = this.fileIdByAbsolutePath.get(identity.absolutePath)
+      ?? (identity.canonicalPath ? this.fileIdByCanonicalPath.get(identity.canonicalPath) : undefined);
+    const candidateFsId = fsKey ? this.fileIdByFilesystemKey.get(fsKey) : undefined;
+    const candidateFsRecord = candidateFsId ? this.files.get(candidateFsId) : undefined;
+    const fsId = !pathId && fsKey && candidateFsRecord && await this.liveFilesystemAlias(candidateFsRecord, fsKey)
+      ? candidateFsId
+      : undefined;
+    const fileId = pathId ?? fsId;
+    let record = fileId ? this.files.get(fileId) : undefined;
+    if (!record) {
+      record = {
+        fileId: randomUUID(),
+        generation: 1,
+        absolutePaths: new Set(),
+        canonicalPaths: new Set(),
+        filesystemKeys: new Set(),
+        baselineKind: pre.kind,
+        lastTouchedAt: Date.now(),
+      };
+      this.files.set(record.fileId, record);
+    }
+    this.registerIdentity(record, identity);
+    return record;
+  }
+
+  private registerIdentity(record: FileRecord, identity: FileIdentity): void {
+    record.absolutePaths.add(identity.absolutePath);
+    this.fileIdByAbsolutePath.set(identity.absolutePath, record.fileId);
+    if (identity.canonicalPath) {
+      record.canonicalPaths.add(identity.canonicalPath);
+      this.fileIdByCanonicalPath.set(identity.canonicalPath, record.fileId);
+    }
+    const fsKey = filesystemKey(identity);
+    if (fsKey) {
+      record.filesystemKeys.add(fsKey);
+      this.fileIdByFilesystemKey.set(fsKey, record.fileId);
+    }
+  }
+
+  private preparationMatchesLatest(pre: PathRevision, latest: RetainedVersion): boolean {
+    return pre.kind === "file" && pre.hash === latest.snapshot.hash;
+  }
+
+  private async deliverVersion(input: VersionInput & { versionId: number; closeEpoch: number }): Promise<void> {
     if (this.closing) return;
     validateTextBytes(input.bytes);
-    const origin = await this.origins.get(input.absolutePath);
-    if (!origin) throw new Error("Blink origin was not captured.");
-    if (origin.unsupported || !origin.revision) {
-      throw new UnsupportedRevisionError(origin.unsupported || "Unsupported Blink origin.");
+    const preparation = this.preparations.get(input.preparation.preparationId);
+    this.preparations.delete(input.preparation.preparationId);
+    if (!preparation || preparation.absolutePath !== input.absolutePath) {
+      throw new Error("Blink mutation preparation is missing or does not match the committed path.");
     }
     const resources = await this.ensureInfrastructure();
     if (this.closing) return;
-    let history = this.histories.get(origin.fileId);
-    if (!history) {
-      history = { origin, versions: [] };
-      this.histories.set(origin.fileId, history);
+    await createSnapshotDirectory(resources.runtimeDir);
+
+    const identity = revisionIdentity(input.absolutePath, preparation.pre);
+    const record = await this.resolveFile(identity, preparation.pre);
+    const previous = record.latest;
+    const replacedVersionId = previous?.versionId;
+    const discontinuity = Boolean(previous && !this.preparationMatchesLatest(preparation.pre, previous));
+    const nextGeneration = discontinuity ? record.generation + 1 : record.generation;
+    const nextBaselineKind = discontinuity ? preparation.pre.kind : record.baselineKind;
+    const oldBaselineSnapshot = record.baselineSnapshot;
+    let nextBaselineSnapshot = discontinuity ? undefined : oldBaselineSnapshot;
+    let snapshot!: Snapshot;
+    try {
+      if (nextBaselineKind === "file" && !nextBaselineSnapshot) {
+        if (preparation.pre.kind !== "file") throw new Error("Blink file baseline is unavailable.");
+        nextBaselineSnapshot = this.rememberSnapshot(await persistSnapshot(resources.snapshotsDir, preparation.pre.bytes));
+      }
+      snapshot = this.rememberSnapshot(await persistSnapshot(resources.snapshotsDir, input.bytes));
+    } catch (error) {
+      if (nextBaselineSnapshot && nextBaselineSnapshot.path !== oldBaselineSnapshot?.path) {
+        await this.removeSnapshot(nextBaselineSnapshot.path);
+      }
+      if (!record.latest && !record.baselineSnapshot) {
+        this.removeIdentityIndexes(record);
+        this.files.delete(record.fileId);
+      }
+      throw error;
     }
-    const previous = history.versions[history.versions.length - 1];
-    if (!previous && origin.revision.kind === "file" && !origin.snapshot) {
-      origin.snapshot = this.rememberSnapshot(await persistSnapshot(resources.snapshotsDir, origin.revision.bytes));
-    }
-    const snapshot = this.rememberSnapshot(await persistSnapshot(resources.snapshotsDir, input.bytes));
+
     const displayPath = relative(input.ctx.cwd, input.absolutePath) || input.absolutePath;
     const version: RetainedVersion = {
       versionId: input.versionId,
-      fileId: origin.fileId,
+      fileId: record.fileId,
+      generation: nextGeneration,
       snapshot,
       byteLength: input.bytes.byteLength,
       toolCallId: input.toolCallId,
@@ -245,13 +399,28 @@ export class BlinkRuntime {
       createdAt: Date.now(),
       unread: true,
       displayPath,
-      originKind: previous ? "file" : origin.revision.kind,
-      originSnapshotPath: previous ? previous.snapshot.path : origin.snapshot?.path,
+      absolutePath: identity.absolutePath,
+      canonicalPath: identity.canonicalPath,
+      filesystemKey: filesystemKey(identity),
+      originKind: nextBaselineKind,
+      originSnapshotPath: nextBaselineSnapshot?.path,
     };
-    history.versions.push(version);
+    if (previous) this.versions = this.versions.filter((item) => item.versionId !== previous.versionId);
+    record.generation = nextGeneration;
+    record.baselineKind = nextBaselineKind;
+    record.baselineSnapshot = nextBaselineSnapshot;
+    record.latest = version;
+    record.lastTouchedAt = version.createdAt;
     this.versions.push(version);
+    if (previous) await this.removeSnapshot(previous.snapshot.path);
+    if (oldBaselineSnapshot && oldBaselineSnapshot.path !== nextBaselineSnapshot?.path) {
+      await this.removeSnapshot(oldBaselineSnapshot.path);
+    }
+
     const evicted = await this.evictToLimits();
     this.updateStatus();
+    if (this.closing) return;
+    if (input.closeEpoch === this.clientCloseEpoch) await this.waitForClientClose();
     if (this.closing) return;
     try {
       await this.tmux!.ensure(this.reviewId, "blitz", resources.socketPath);
@@ -265,10 +434,15 @@ export class BlinkRuntime {
       return;
     }
     if (evicted.length) {
-      for (const id of evicted) this.server?.send("version_evicted", { versionId: id });
-      this.notify(`Blink evicted ${evicted.length} old review version(s) to enforce history limits.`, "warning");
+      for (const item of evicted) this.server?.send("file_evicted", item);
+      this.notify(`Blink evicted ${evicted.length} old reviewed file(s) to enforce history limits.`, "warning");
     }
-    this.server?.send("version_added", { version: this.versionPayload(version) });
+    if (this.files.has(record.fileId)) {
+      this.server?.send("file_version_upserted", {
+        replacedVersionId,
+        version: this.versionPayload(version),
+      });
+    }
     this.updateStatus();
   }
 
@@ -278,49 +452,50 @@ export class BlinkRuntime {
   }
 
   private runtimeBytes(): number {
-    const counted = new Set<string>();
     let total = 0;
-    for (const version of this.versions) {
-      for (const path of [version.snapshot.path, version.originSnapshotPath]) {
-        if (path && !counted.has(path)) {
-          counted.add(path);
-          total += this.snapshotByteLengths.get(path) ?? version.snapshot.byteLength;
-        }
-      }
-    }
-    for (const history of this.histories.values()) {
-      const snapshot = history.origin.snapshot;
-      if (snapshot && !counted.has(snapshot.path)) {
-        counted.add(snapshot.path);
-        total += this.snapshotByteLengths.get(snapshot.path) ?? snapshot.byteLength;
-      }
-    }
+    for (const byteLength of this.snapshotByteLengths.values()) total += byteLength;
     return total;
   }
 
-  private isSnapshotReferenced(path: string): boolean {
-    return this.versions.some((version) => version.snapshot.path === path || version.originSnapshotPath === path);
-  }
-
-  private async forgetSnapshot(path: string | undefined, history?: FileHistory): Promise<void> {
-    if (!path || this.isSnapshotReferenced(path)) return;
+  private async removeSnapshot(path: string | undefined): Promise<void> {
+    if (!path) return;
     await rm(path, { force: true }).catch(() => undefined);
     this.snapshotByteLengths.delete(path);
-    if (history?.origin.snapshot?.path === path) history.origin.snapshot = undefined;
   }
 
-  private async evictToLimits(): Promise<number[]> {
-    const evicted: number[] = [];
-    while (this.versions.length > MAX_VERSIONS || this.runtimeBytes() > MAX_RUNTIME_BYTES) {
-      const version = this.versions.shift();
-      if (!version) break;
-      evicted.push(version.versionId);
-      const history = this.histories.get(version.fileId);
-      if (!history) continue;
-      history.versions = history.versions.filter((item) => item.versionId !== version.versionId);
-      await this.forgetSnapshot(version.snapshot.path, history);
-      await this.forgetSnapshot(version.originSnapshotPath, history);
-      if (history.versions.length === 0) this.histories.delete(version.fileId);
+  private removeIdentityIndexes(record: FileRecord): void {
+    for (const path of record.absolutePaths) {
+      if (this.fileIdByAbsolutePath.get(path) === record.fileId) this.fileIdByAbsolutePath.delete(path);
+    }
+    for (const path of record.canonicalPaths) {
+      if (this.fileIdByCanonicalPath.get(path) === record.fileId) this.fileIdByCanonicalPath.delete(path);
+    }
+    for (const key of record.filesystemKeys) {
+      if (this.fileIdByFilesystemKey.get(key) === record.fileId) this.fileIdByFilesystemKey.delete(key);
+    }
+  }
+
+  private async evictFile(record: FileRecord): Promise<{ fileId: string; versionId?: number }> {
+    const versionId = record.latest?.versionId;
+    if (versionId !== undefined) this.versions = this.versions.filter((item) => item.versionId !== versionId);
+    await this.removeSnapshot(record.latest?.snapshot.path);
+    await this.removeSnapshot(record.baselineSnapshot?.path);
+    this.removeIdentityIndexes(record);
+    this.files.delete(record.fileId);
+    return { fileId: record.fileId, versionId };
+  }
+
+  private async evictToLimits(): Promise<Array<{ fileId: string; versionId?: number }>> {
+    const evicted: Array<{ fileId: string; versionId?: number }> = [];
+    while (this.versions.length > MAX_RETAINED_FILES || this.runtimeBytes() > MAX_RUNTIME_BYTES) {
+      const oldest = this.versions[0];
+      if (!oldest) break;
+      const record = this.files.get(oldest.fileId);
+      if (!record) {
+        this.versions.shift();
+        continue;
+      }
+      evicted.push(await this.evictFile(record));
     }
     return evicted;
   }
@@ -329,7 +504,11 @@ export class BlinkRuntime {
     return {
       versionId: version.versionId,
       fileId: version.fileId,
+      generation: version.generation,
       displayPath: version.displayPath,
+      absolutePath: version.absolutePath,
+      canonicalPath: version.canonicalPath,
+      filesystemKey: version.filesystemKey,
       snapshotPath: version.snapshot.path,
       byteLength: version.byteLength,
       toolCallId: version.toolCallId,
@@ -503,7 +682,7 @@ export class BlinkRuntime {
       onDisconnect: () => {
         const wasReady = this.clientReady;
         this.clientReady = false;
-        if (this.mode !== "slow") return undefined;
+        if (this.mode !== "slow") return this.completeClientClose();
         if (wasReady) {
           this.acceptPendingSlowOnDisconnect();
           return undefined;
@@ -562,6 +741,38 @@ export class BlinkRuntime {
       } else {
         this.server?.send("state_snapshot", { mode: "blitz", versions: this.versions.map((version) => this.versionPayload(version)) });
       }
+      return;
+    }
+    if (this.mode === "blitz" && ["client_checkpoint_close", "client_retain_close", "client_closing"].includes(message.type)) {
+      const action = message.type === "client_checkpoint_close" ? "checkpoint" : "retain";
+      this.beginClientClose();
+      this.recentRequests.set(message.requestId, { type: "client_close_pending", payload: { action } });
+      if (action === "retain") {
+        this.reply(message, "client_close_result", {
+          action,
+          reset: false,
+          retainedCount: this.retainedCount,
+        });
+        this.armClientCloseTimeout();
+        return;
+      }
+      try {
+        const reset = await this.checkpointBlitzState();
+        this.reply(message, "client_close_result", {
+          action,
+          reset: true,
+          retainedCount: this.retainedCount,
+          ...reset,
+        });
+      } catch (error) {
+        this.reply(message, "client_close_result", {
+          action,
+          reset: false,
+          retainedCount: this.retainedCount,
+          error: `Blink checkpoint failed: ${errorMessage(error)}`,
+        });
+      }
+      this.armClientCloseTimeout();
       return;
     }
     if (this.mode === "slow" && message.type === "client_closing") {
@@ -625,7 +836,6 @@ export class BlinkRuntime {
       if (!this.abortRequested) { this.abortRequested = true; ctx.abort(); }
       return this.reply(message, "agent_abort_requested", { message: "Pi agent abort requested." });
     }
-    if (this.mode === "blitz" && message.type === "client_closing") return;
     this.reply(message, "error", { code: "unknown_action", message: `Unsupported Blink action: ${message.type}` });
   }
 
@@ -701,6 +911,7 @@ export class BlinkRuntime {
       this.closing = true;
       await this.cancelPendingSlow("Blink review was cancelled during cleanup.");
       await this.slowTerminal?.catch(() => undefined);
+      await this.completeClientClose();
       this.server?.send("shutdown", {});
       await this.server?.close().catch(() => undefined);
       await this.tmux?.close().catch(() => undefined);
@@ -708,8 +919,11 @@ export class BlinkRuntime {
       this.server = undefined;
       this.tmux = undefined;
       this.resources = undefined;
-      this.origins.clear();
-      this.histories.clear();
+      this.preparations.clear();
+      this.files.clear();
+      this.fileIdByAbsolutePath.clear();
+      this.fileIdByCanonicalPath.clear();
+      this.fileIdByFilesystemKey.clear();
       this.versions = [];
       this.pendingSlow = undefined;
       this.recentRequests.clear();

@@ -9,7 +9,7 @@ import { once } from "node:events";
 
 const reviewScript = resolve("extensions/blink/nvim/review.lua");
 
-test("real headless Neovim performs Blink handshake, state replay, and shutdown", async (t) => {
+test("real headless Neovim performs Blink handshake, atomic upsert, and shutdown", async (t) => {
   const dir = await mkdtemp(join(tmpdir(), "blink-nvim-protocol-"));
   t.after(() => rm(dir, { recursive: true, force: true }));
   const socketPath = join(dir, "blink.sock");
@@ -32,12 +32,16 @@ test("real headless Neovim performs Blink handshake, state replay, and shutdown"
         const message = JSON.parse(buffer.slice(0, at));
         buffer = buffer.slice(at + 1);
         seen.push(message.type);
-        const send = (type: string, payload: any) => socket.write(`${JSON.stringify({ protocolVersion: 1, type, reviewId, payload })}\n`);
-        if (message.type === "client_ready") send("hello", { mode: "slow", cwd: dir, sinks: [] });
+        const send = (type: string, payload: any) => socket.write(`${JSON.stringify({ protocolVersion: 2, type, reviewId, payload })}\n`);
+        if (message.type === "client_ready") send("hello", { mode: "blitz", cwd: dir, sinks: [] });
         if (message.type === "request_state") {
-          send("state_snapshot", { mode: "slow", transaction: {
-            transactionId: "tx",
+          send("state_snapshot", { mode: "blitz", versions: [] });
+          send("file_version_upserted", { version: {
+            versionId: 1,
+            fileId: "f",
+            generation: 1,
             displayPath: "a.txt",
+            absolutePath: join(dir, "a.txt"),
             snapshotPath: version,
             originKind: "file",
             originSnapshotPath: origin,
@@ -57,9 +61,9 @@ test("real headless Neovim performs Blink handshake, state replay, and shutdown"
       ...process.env,
       BLINK_REVIEW_ID: reviewId,
       BLINK_SOCKET_PATH: socketPath,
-      BLINK_MODE: "slow",
+      BLINK_MODE: "blitz",
       BLINK_CWD: dir,
-      BLINK_PROTOCOL_VERSION: "1",
+      BLINK_PROTOCOL_VERSION: "2",
     },
     stdio: ["ignore", "pipe", "pipe"],
   });

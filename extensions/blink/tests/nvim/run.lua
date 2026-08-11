@@ -10,6 +10,10 @@ local function eq(actual, expected, message)
   end
 end
 
+local function press(keys)
+  vim.api.nvim_feedkeys(vim.api.nvim_replace_termcodes(keys, true, false, true), "x", false)
+end
+
 local model = state.new("review", "blitz")
 state.replace(model, {
   mode = "blitz",
@@ -18,23 +22,21 @@ state.replace(model, {
     { versionId = 1, fileId = "f", displayPath = "a.txt", snapshotPath = "/tmp/1", originKind = "file", originSnapshotPath = "/tmp/o" },
   },
 })
-eq(vim.tbl_map(function(v) return v.versionId end, model.versions), { 1, 2 }, "snapshot sorts versions")
-state.set_active(model, 1)
+eq(vim.tbl_map(function(v) return v.versionId end, model.versions), { 2 }, "snapshot keeps only the latest version per file")
+eq(model.activeVersionId, 2, "latest replayed version is active")
 state.toggle_pin(model)
-local added = state.add(model, { versionId = 3, fileId = "f", displayPath = "a.txt", snapshotPath = "/tmp/3", originKind = "file", originSnapshotPath = "/tmp/2" }, true)
-eq(added.versionId, 3, "same-file rolling diff is retained")
-eq(model.activeVersionId, 1, "newer diff does not auto-replace the current view")
-eq(model.by_id[3].unread, true, "newer diff is marked unread")
-state.evict(model, 1)
-eq(model.activeVersionId, 2, "eviction selects nearest")
-eq(vim.tbl_map(function(v) return v.versionId end, model.versions), { 2, 3 })
-eq(state.navigate_file(model, 2, -1).versionId, 3, "same-file navigation wraps")
-state.add(model, { versionId = 4, fileId = "g", displayPath = "b.txt", snapshotPath = "/tmp/4", originKind = "absent" }, true)
-eq(state.navigate_file(model, 3, 1).versionId, 2, "file navigation stays within current file")
+local added = state.upsert(model, { versionId = 3, fileId = "f", displayPath = "a.txt", snapshotPath = "/tmp/3", originKind = "file", originSnapshotPath = "/tmp/o" }, 2)
+eq(added.versionId, 3, "same-file upsert replaces retained metadata")
+eq(model.activeVersionId, 3, "replacement of active file follows the new version")
+eq(vim.tbl_map(function(v) return v.versionId end, model.versions), { 3 })
+state.upsert(model, { versionId = 4, fileId = "g", displayPath = "b.txt", snapshotPath = "/tmp/4", originKind = "absent" }, nil)
+eq(model.activeVersionId, 3, "another file does not replace the active view")
+eq(model.by_id[4].unread, true, "inactive incoming file is unread")
+eq(state.navigate_file(model, 3, 1).versionId, 3, "one-version file navigation wraps to itself")
 eq(state.navigate_global(model, 3, 1).versionId, 4, "global navigation crosses files")
-eq(state.navigate_global(model, 2, 2).versionId, 4, "global navigation supports counted deltas")
-eq(state.navigate_edge(model, "first").versionId, 2, "first edge selects oldest retained change")
-eq(state.navigate_edge(model, "last").versionId, 4, "last edge selects latest retained change")
+eq(state.navigate_global(model, 3, 2).versionId, 3, "global navigation supports counted deltas")
+eq(state.navigate_edge(model, "first").versionId, 3, "first edge selects oldest retained file")
+eq(state.navigate_edge(model, "last").versionId, 4, "last edge selects latest retained file")
 
 local tmp = vim.fn.tempname()
 vim.fn.mkdir(tmp, "p")
@@ -73,9 +75,16 @@ end, vim.api.nvim_buf_get_extmarks(buf, review.namespace, 0, -1, { details = tru
 eq(#counter_marks, 2, "one right-aligned counter per hunk")
 eq(counter_marks[1][4].virt_text[1][1], "[1/2]")
 eq(counter_marks[2][4].virt_text[1][1], "[2/2]")
-review:navigate_hunk(buf, 1)
-eq(vim.api.nvim_win_get_cursor(0)[1], hunks[2][3], "]c moves to the next counted hunk")
-eq(review.buffer_state[buf].active_hunk, 2, "hunk counter tracks navigation")
+press("]c")
+eq(vim.api.nvim_win_get_cursor(0)[1], hunks[2][3], "]c mapping moves to the next counted hunk")
+eq(review.buffer_state[buf].active_hunk, 2, "hunk counter tracks forward navigation")
+press("[c")
+eq(vim.api.nvim_win_get_cursor(0)[1], hunks[1][3], "[c mapping moves to the previous hunk")
+eq(review.buffer_state[buf].active_hunk, 1, "hunk counter tracks reverse navigation")
+press("[c")
+eq(vim.api.nvim_win_get_cursor(0)[1], hunks[2][3], "[c wraps from the first hunk to the last")
+press("2]c")
+eq(vim.api.nvim_win_get_cursor(0)[1], hunks[2][3], "counted ]c applies repeated wrapped navigation")
 
 local marks_before = #vim.api.nvim_buf_get_extmarks(buf, review.namespace, 0, -1, {})
 review:render(buf)
@@ -88,20 +97,30 @@ vim.fn.writefile({ "one", "two" }, absent, "b")
 local newbuf = review:show_version({
   versionId = 8,
   fileId = "new",
+  absolutePath = tmp .. "/new.txt",
   displayPath = "new.txt",
   snapshotPath = absent,
   originKind = "absent",
   firstChangedLine = 1,
 })
+eq(newbuf, buf, "all review versions reuse one primary buffer")
+eq(vim.b[newbuf].blink_file_id, "new", "reused buffer identity is refreshed")
+eq(vim.b[newbuf].blink_absolute_path, tmp .. "/new.txt", "reused buffer path identity is refreshed")
 eq(#review:get_hunks(newbuf), 1)
 local h = review:get_hunks(newbuf)[1]
 eq({ h[1], h[2], h[3], h[4] }, { 1, 0, 1, 2 }, "absent origin is additions-only")
+
+local reused = review:show_version(item)
+eq(reused, buf, "returning to a reviewed file keeps the primary buffer")
+press("]c")
+eq(vim.api.nvim_win_get_cursor(0)[1], review:get_hunks(buf)[2][3], "]c resolves refreshed state after primary-buffer reuse")
 
 local eof_origin = tmp .. "/eof-origin"
 local eof_version = tmp .. "/eof-version"
 vim.fn.writefile({ "keep", "delete" }, eof_origin)
 vim.fn.writefile({ "keep" }, eof_version)
-local eof_buf = review:show_version({ versionId = 9, fileId = "eof", displayPath = "eof.txt", snapshotPath = eof_version, originKind = "file", originSnapshotPath = eof_origin })
+local eof_buf = review:show_version({ versionId = 9, fileId = "eof", absolutePath = tmp .. "/eof.txt", displayPath = "eof.txt", snapshotPath = eof_version, originKind = "file", originSnapshotPath = eof_origin })
+eq(eof_buf, buf, "different files also reuse the primary review buffer")
 local eof_marks = vim.api.nvim_buf_get_extmarks(eof_buf, review.namespace, 0, -1, { details = true })
 local found_eof_deletion = false
 for _, mark in ipairs(eof_marks) do
@@ -109,12 +128,49 @@ for _, mark in ipairs(eof_marks) do
 end
 assert(found_eof_deletion, "EOF deletion must render after the final surviving line: hunks=" .. vim.inspect(review:get_hunks(eof_buf)) .. " marks=" .. vim.inspect(eof_marks))
 
+local rogue = vim.api.nvim_create_buf(true, true)
+vim.api.nvim_buf_set_name(rogue, "blink://eof.txt@stale")
+vim.b[rogue].blink_owned = true
+vim.b[rogue].blink_role = "review"
+local original_delete = vim.api.nvim_buf_delete
+vim.api.nvim_buf_delete = function(candidate, options)
+  if candidate == rogue then error("injected delete failure") end
+  return original_delete(candidate, options)
+end
+review:_sweep_review_buffers(buf)
+eq(vim.api.nvim_buf_is_valid(rogue), true, "failed deletion leaves the stale buffer valid")
+eq(vim.b[rogue].blink_role, "review", "failed deletion keeps ownership metadata for retry")
+vim.api.nvim_buf_delete = original_delete
+review:show_version({ versionId = 9, fileId = "eof", absolutePath = tmp .. "/eof.txt", displayPath = "eof.txt", snapshotPath = eof_version, originKind = "file", originSnapshotPath = eof_origin })
+eq(vim.api.nvim_buf_is_valid(rogue), false, "untracked stale Blink review buffers are swept on retry")
+local live_review_buffers = vim.tbl_filter(function(candidate)
+  return vim.api.nvim_buf_is_valid(candidate) and vim.b[candidate].blink_role == "review"
+end, vim.api.nvim_list_bufs())
+eq(#live_review_buffers, 1, "exactly one primary review buffer remains live")
+for version_id = 10, 159 do
+  local reused = review:show_version({
+    versionId = version_id,
+    fileId = "stress-" .. version_id,
+    absolutePath = tmp .. "/stress-" .. version_id .. ".txt",
+    displayPath = "stress-" .. version_id .. ".txt",
+    snapshotPath = eof_version,
+    originKind = "file",
+    originSnapshotPath = eof_origin,
+  })
+  eq(reused, buf, "stress navigation reuses the primary buffer")
+end
+live_review_buffers = vim.tbl_filter(function(candidate)
+  return vim.api.nvim_buf_is_valid(candidate) and vim.b[candidate].blink_role == "review"
+end, vim.api.nvim_list_bufs())
+eq(#live_review_buffers, 1, "150 navigations still leave one live primary review buffer")
+
 local maps = vim.api.nvim_buf_get_keymap(buf, "n")
 local descs = {}
 for _, map in ipairs(maps) do descs[map.lhs] = map.desc end
 local found = {}
 for _, desc in pairs(descs) do found[desc] = true end
 assert(found["Blink next change"] and found["Blink previous change"] and found["Blink next version for file"] and found["Blink next version globally"] and found["Blink first version"] and found["Blink latest version"] and found["Blink list changes"] and found["Blink toggle change panel"] and found["Blink comment"], "required described mappings missing: " .. vim.inspect(descs))
+assert(found["Blink checkpoint and close"] and found["Blink close and retain history"], "Blitz close mappings missing: " .. vim.inspect(descs))
 vim.api.nvim_buf_call(buf, function()
   vim.cmd("normal ]N")
   vim.cmd("normal [N")
@@ -142,6 +198,7 @@ review:toggle_change_list()
 eq(review.list_visible, true, "change panel can be reopened")
 eq(vim.api.nvim_buf_line_count(review.list_buf), 8, "reopened panel restores seven items plus its older indicator")
 
+vim.bo[buf].readonly = false
 vim.bo[buf].modifiable = true
 vim.api.nvim_buf_set_lines(buf, 0, 1, false, { "tamper" })
 vim.bo[buf].modifiable = false
@@ -149,8 +206,42 @@ local ok = pcall(vim.api.nvim_buf_call, buf, function() vim.cmd("write") end)
 eq(ok, false, "write blocker")
 
 review:evict(7)
-eq(vim.api.nvim_buf_is_valid(buf), false, "eviction closes only matching buffer")
-assert(vim.api.nvim_buf_is_valid(newbuf), "other version remains")
+assert(vim.api.nvim_buf_is_valid(buf), "evicting stale metadata does not close the reused current buffer")
+review:evict(159)
+eq(vim.api.nvim_buf_is_valid(buf), false, "evicting the displayed version closes the primary buffer")
+
+local close_messages = {}
+local close_exits = 0
+local close_ui = ui.new({
+  runtime_dir = tmp,
+  send = function(message) table.insert(close_messages, message) end,
+  exit = function() close_exits = close_exits + 1 end,
+})
+close_ui:request_close("checkpoint")
+close_ui:request_close("retain")
+eq(#close_messages, 1, "duplicate close requests are suppressed")
+eq(close_messages[1].type, "client_checkpoint_close")
+close_ui:complete_close({ action = "checkpoint", reset = true })
+eq(close_exits, 1, "acknowledged close uses the injected exit callback")
+
+local retain_messages = {}
+local retain_ui = ui.new({
+  runtime_dir = tmp,
+  send = function(message) table.insert(retain_messages, message) end,
+  exit = function() end,
+})
+retain_ui:request_close("retain")
+eq(retain_messages[1].type, "client_retain_close")
+retain_ui:complete_close({ action = "retain", reset = false })
+
+local slow_ui = ui.new({ runtime_dir = tmp, send = function() end, exit = function() end })
+local slow_buf = slow_ui:show_version({ transactionId = "slow", displayPath = "slow.txt", snapshotPath = eof_version, originKind = "file", originSnapshotPath = eof_origin })
+local slow_descs = {}
+for _, map in ipairs(vim.api.nvim_buf_get_keymap(slow_buf, "n")) do slow_descs[map.desc] = true end
+assert(slow_descs["Blink dismiss and close"], "Slow close mapping missing")
+assert(not slow_descs["Blink close and retain history"], "Slow mode must not offer retained history")
+vim.api.nvim_buf_delete(slow_buf, { force = true })
 
 vim.fn.delete(tmp, "rf")
 print("blink nvim tests passed")
+vim.cmd("qa!")
