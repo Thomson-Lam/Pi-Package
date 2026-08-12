@@ -136,6 +136,8 @@ function UI:_install_keymaps(buf)
   local map_options = { buffer = buf, silent = true }
   vim.keymap.set("n", "]c", function() self:navigate_hunk(1, vim.v.count1) end, vim.tbl_extend("force", map_options, { desc = "Blink next change" }))
   vim.keymap.set("n", "[c", function() self:navigate_hunk(-1, vim.v.count1) end, vim.tbl_extend("force", map_options, { desc = "Blink previous change" }))
+  vim.keymap.set("n", "]C", function() self:navigate_hunk_edge("last") end, vim.tbl_extend("force", map_options, { desc = "Blink last change" }))
+  vim.keymap.set("n", "[C", function() self:navigate_hunk_edge("first") end, vim.tbl_extend("force", map_options, { desc = "Blink first change" }))
   vim.keymap.set("n", "]n", function() self.send({ type = "navigate_global", payload = { delta = vim.v.count1 } }) end, vim.tbl_extend("force", map_options, { desc = "Blink next changed file" }))
   vim.keymap.set("n", "[n", function() self.send({ type = "navigate_global", payload = { delta = -vim.v.count1 } }) end, vim.tbl_extend("force", map_options, { desc = "Blink previous changed file" }))
   vim.keymap.set("n", "]N", function() self.send({ type = "navigate_edge", payload = { edge = "last" } }) end, vim.tbl_extend("force", map_options, { desc = "Blink latest changed file" }))
@@ -167,7 +169,7 @@ function UI:_install_keymaps(buf)
     end, vim.tbl_extend("force", map_options, { desc = "Blink abort agent" }))
   end
   vim.keymap.set("n", "<leader>bl", function() self.send({ type = "list_changes", payload = {} }) end, vim.tbl_extend("force", map_options, { desc = "Blink list changes" }))
-  vim.keymap.set("n", "<leader>bh", function() self:toggle_change_list() end, vim.tbl_extend("force", map_options, { desc = "Blink toggle change panel" }))
+  vim.keymap.set("n", "<leader>h", function() self:toggle_change_list() end, vim.tbl_extend("force", map_options, { desc = "Blink toggle change panel" }))
   vim.keymap.set("n", "?", function() self:help(current_item()) end, vim.tbl_extend("force", map_options, { desc = "Blink help" }))
 end
 
@@ -342,7 +344,7 @@ function UI:update_change_list(versions, active_id)
   local active_line
   local top_offset = 0
   if first > 1 then
-    table.insert(lines, string.format("↑ %d older", first - 1))
+    table.insert(lines, string.format("↑ %d more", first - 1))
     top_offset = 1
   end
   for index = first, last do
@@ -352,7 +354,7 @@ function UI:update_change_list(versions, active_id)
     width = math.max(width, vim.fn.strdisplaywidth(line))
     table.insert(lines, line)
   end
-  if last < #versions then table.insert(lines, string.format("↓ %d newer", #versions - last)) end
+  if last < #versions then table.insert(lines, string.format("↓ %d more", #versions - last)) end
   for _, line in ipairs(lines) do width = math.max(width, vim.fn.strdisplaywidth(line)) end
   width = math.min(math.max(width, 16), math.max(16, vim.o.columns - 4))
   vim.bo[self.list_buf].modifiable = true
@@ -547,6 +549,13 @@ function UI:render(buf)
   end
 end
 
+function UI:_jump_to_hunk(buf, data, index)
+  data.active_hunk = index
+  self:render(buf)
+  local line = math.max(1, math.min(math.max(1, data.hunks[index][3]), vim.api.nvim_buf_line_count(buf)))
+  vim.api.nvim_win_set_cursor(0, { line, 0 })
+end
+
 function UI:navigate_hunk(delta, count)
   local buf = self.review_buf
   local data = buf and self.buffer_state[buf] or nil
@@ -570,9 +579,15 @@ function UI:navigate_hunk(delta, count)
   end
 
   target_index = ((target_index - 1 + direction * (math.max(1, count or 1) - 1)) % #hunks) + 1
-  data.active_hunk = target_index
-  self:render(buf)
-  vim.api.nvim_win_set_cursor(0, { anchor(target_index), 0 })
+  self:_jump_to_hunk(buf, data, target_index)
+end
+
+function UI:navigate_hunk_edge(edge)
+  local buf = self.review_buf
+  local data = buf and self.buffer_state[buf] or nil
+  local hunks = data and data.hunks or {}
+  if #hunks == 0 then vim.notify("No Blink changes."); return end
+  self:_jump_to_hunk(buf, data, edge == "first" and 1 or #hunks)
 end
 
 function UI:comment(item, range)
@@ -612,7 +627,7 @@ function UI:help(item)
     and "<leader>bq dismiss/close"
     or "<leader>bq checkpoint/close, <leader>bQ close/retain"
   local mode = item.transactionId and "Slow" or "Blitz"
-  vim.notify("Blink " .. mode .. ": [c/]c hunks, [n/]n changed files (count supported), [N/]N first/latest changed file, <leader>bl list, <leader>bh panel, " .. close_help)
+  vim.notify("Blink " .. mode .. ": [c/]c hunks, [C/]C first/last hunk, [n/]n changed files (count supported), [N/]N first/latest changed file, <leader>bl list, <leader>h panel, " .. close_help)
 end
 
 function UI:evict(version_id)

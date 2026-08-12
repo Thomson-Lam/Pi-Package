@@ -84,6 +84,12 @@ press("[c")
 eq(vim.api.nvim_win_get_cursor(0)[1], hunks[2][3], "[c wraps from the first hunk to the last")
 press("2]c")
 eq(vim.api.nvim_win_get_cursor(0)[1], hunks[2][3], "counted ]c applies repeated wrapped navigation")
+press("[C")
+eq(vim.api.nvim_win_get_cursor(0)[1], hunks[1][3], "[C moves to the first hunk")
+eq(review.buffer_state[buf].active_hunk, 1, "first-hunk navigation updates the counter")
+press("]C")
+eq(vim.api.nvim_win_get_cursor(0)[1], hunks[2][3], "]C moves to the last hunk")
+eq(review.buffer_state[buf].active_hunk, 2, "last-hunk navigation updates the counter")
 
 local marks_before = #vim.api.nvim_buf_get_extmarks(buf, review.namespace, 0, -1, {})
 review:render(buf)
@@ -185,14 +191,14 @@ local descs = {}
 for _, map in ipairs(maps) do descs[map.lhs] = map.desc end
 local found = {}
 for _, desc in pairs(descs) do found[desc] = true end
-assert(found["Blink next change"] and found["Blink previous change"] and found["Blink next changed file"] and found["Blink previous changed file"] and found["Blink first changed file"] and found["Blink latest changed file"] and found["Blink list changes"] and found["Blink toggle change panel"] and found["Blink comment"] and found["Blink help"], "required described mappings missing: " .. vim.inspect(descs))
+assert(found["Blink next change"] and found["Blink previous change"] and found["Blink first change"] and found["Blink last change"] and found["Blink next changed file"] and found["Blink previous changed file"] and found["Blink first changed file"] and found["Blink latest changed file"] and found["Blink list changes"] and found["Blink toggle change panel"] and found["Blink comment"] and found["Blink help"], "required described mappings missing: " .. vim.inspect(descs))
 assert(found["Blink checkpoint and close"] and found["Blink close and retain history"], "Blitz close mappings missing: " .. vim.inspect(descs))
 local help_message
 local original_notify = vim.notify
 vim.notify = function(message) help_message = message end
 press("?")
 vim.notify = original_notify
-assert(help_message and help_message:match("%[c/%]c hunks") and help_message:match("%[n/%]n changed files"), "Blink help omits current navigation: " .. tostring(help_message))
+assert(help_message and help_message:match("%[c/%]c hunks") and help_message:match("%[C/%]C first/last hunk") and help_message:match("%[n/%]n changed files"), "Blink help omits current navigation: " .. tostring(help_message))
 vim.api.nvim_buf_call(buf, function()
   vim.cmd("normal ]N")
   vim.cmd("normal [N")
@@ -209,16 +215,16 @@ eq(review.list_visible, false, "change panel is hidden by default")
 eq(review.list_buf, nil, "hidden panel does not create a buffer")
 review:toggle_change_list()
 eq(review.list_visible, true, "change panel can be shown")
-eq(vim.api.nvim_buf_line_count(review.list_buf), 9, "change panel shows seven items plus older/newer indicators")
-eq(vim.api.nvim_buf_get_lines(review.list_buf, 0, 1, false)[1], "↑ 4 older", "panel reports omitted older changes")
-eq(vim.api.nvim_buf_get_lines(review.list_buf, -2, -1, false)[1], "↓ 1 newer", "panel reports omitted newer changes")
+eq(vim.api.nvim_buf_line_count(review.list_buf), 9, "change panel shows seven items plus more indicators")
+eq(vim.api.nvim_buf_get_lines(review.list_buf, 0, 1, false)[1], "↑ 4 more", "panel reports more omitted changes above")
+eq(vim.api.nvim_buf_get_lines(review.list_buf, -2, -1, false)[1], "↓ 1 more", "panel reports more omitted changes below")
 review:toggle_change_list()
 eq(review.list_visible, false, "change panel can be hidden")
 review:update_change_list(panel_versions, 9)
 eq(review.list_visible, false, "incoming changes do not reopen a hidden panel")
 review:toggle_change_list()
 eq(review.list_visible, true, "change panel can be reopened")
-eq(vim.api.nvim_buf_line_count(review.list_buf), 8, "reopened panel restores seven items plus its older indicator")
+eq(vim.api.nvim_buf_line_count(review.list_buf), 8, "reopened panel restores seven items plus its more indicator")
 
 vim.bo[buf].readonly = false
 vim.bo[buf].modifiable = true
