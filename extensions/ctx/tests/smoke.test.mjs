@@ -17,6 +17,7 @@ test("extension registers /cnew without adding /ctx fresh", async () => {
   };
   register(pi);
   assert.equal(commands.has("cnew"), true);
+  assert.equal(commands.has("cb"), true);
   assert.equal(commands.has("can"), true);
   assert.equal(commands.has("cana"), true);
   assert.equal(commands.has("canu"), true);

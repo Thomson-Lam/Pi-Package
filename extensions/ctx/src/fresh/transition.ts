@@ -6,11 +6,22 @@ import { limitsForContextWindow } from "./limits.js";
 import { selectRelevantPaths } from "./selection.js";
 import type { FreshOutcome, PreparedContext } from "./types.js";
 import { reviewFreshTransition, runSelectionLoader } from "../ui/fresh-review.js";
+import {
+  orderModels,
+  selectModelAndThinking,
+  type ModelThinkingSelection,
+} from "../ui/model-thinking-selector.js";
+
+export interface FreshSessionOptions {
+  /** Extra entries to append during new-session setup, after the fresh-context message. */
+  appendSetupEntries?: (sessionManager: { appendCustomEntry(type: string, data?: unknown): void }) => void;
+}
 
 export async function runFreshContextSession(
   pi: ExtensionAPI,
   ctx: ExtensionCommandContext,
   initialObjective = "",
+  options: FreshSessionOptions = {},
 ): Promise<FreshOutcome> {
   if (ctx.mode !== "tui") return fail(ctx, "preflight", "/cnew requires interactive TUI mode");
   if (!ctx.model) return fail(ctx, "preflight", "Select a model before running /cnew");
@@ -41,7 +52,10 @@ export async function runFreshContextSession(
 
   let prepared: PreparedContext;
   try {
-    prepared = await prepareSelectedFiles(selection.selectedPaths, selection.ledger, limits);
+    prepared = await prepareSelectedFiles(selection.selectedPaths, selection.ledger, {
+      ...limits,
+      maxTransferTokens: Number.MAX_SAFE_INTEGER,
+    });
   } catch (error) {
     return fail(ctx, "preparation", messageOf(error));
   }
@@ -51,27 +65,67 @@ export async function runFreshContextSession(
     ctx.ui.notify(`Agent added ${selection.suggestedPaths.length} suggested file(s) outside the read ledger for review`, "info");
   }
 
-  const review = await reviewFreshTransition(ctx, prepared, initialObjective);
-  if (review.action === "cancel") {
-    restoreObjectiveDraft(ctx, review.objective);
-    ctx.ui.notify("Fresh session cancelled; objective kept in the editor", "info");
-    return { status: "cancelled", objective: review.objective };
+  const models = orderModels(ctx.modelRegistry.getAvailable());
+  if (models.length === 0) return fail(ctx, "model", "No models are available");
+
+  let objective = initialObjective;
+  let modelSelection: ModelThinkingSelection | undefined;
+  while (true) {
+    const review = await reviewFreshTransition(ctx, prepared, objective, modelSelection);
+    objective = review.objective;
+    if (review.action === "cancel") {
+      restoreObjectiveDraft(ctx, objective);
+      ctx.ui.notify("Fresh session cancelled; objective kept in the editor", "info");
+      return { status: "cancelled", objective };
+    }
+    if (review.action === "select-model") {
+      const nextSelection = await selectModelAndThinking(ctx, models, prepared.estimatedTokens, modelSelection);
+      if (nextSelection) modelSelection = nextSelection;
+      continue;
+    }
+    if (modelSelection) break;
+  }
+
+  if (!modelSelection) return fail(ctx, "model", "No model was selected");
+  const targetLimits = limitsForContextWindow(modelSelection.model.contextWindow);
+  if (prepared.estimatedTokens > targetLimits.maxTransferTokens) {
+    restoreObjectiveDraft(ctx, objective);
+    return fail(ctx, "model", `Estimated file context (${prepared.estimatedTokens} tokens) exceeds the selected model's ${targetLimits.maxTransferTokens}-token limit`);
   }
 
   try {
     await verifyPreparedFilesUnchanged(prepared.included, selection.ledger.projectRoot);
   } catch (error) {
-    restoreObjectiveDraft(ctx, review.objective);
+    restoreObjectiveDraft(ctx, objective);
     return fail(ctx, "verification", `${messageOf(error)}. Review the file set again before transitioning.`);
   }
 
-  return createPreparedSession(ctx, prepared, review.objective);
+  const originalModel = ctx.model;
+  const originalThinkingLevel = pi.getThinkingLevel();
+  const modelChanged = await pi.setModel(modelSelection.model);
+  if (!modelChanged) {
+    restoreObjectiveDraft(ctx, objective);
+    return fail(ctx, "model", `No API key for ${modelSelection.model.provider}/${modelSelection.model.id}`);
+  }
+  pi.setThinkingLevel(modelSelection.thinkingLevel);
+
+  const outcome = await createPreparedSession(ctx, prepared, objective, options);
+  if (outcome.status === "cancelled" || (outcome.status === "failed" && outcome.stage === "transition")) {
+    try {
+      await pi.setModel(originalModel);
+      pi.setThinkingLevel(originalThinkingLevel);
+    } catch {
+      // Session replacement may already have made the original extension runtime stale.
+    }
+  }
+  return outcome;
 }
 
 export async function createPreparedSession(
   ctx: ExtensionCommandContext,
   prepared: PreparedContext,
   objective: string,
+  options: FreshSessionOptions = {},
 ): Promise<FreshOutcome> {
   const sourceSessionFile = ctx.sessionManager.getSessionFile();
   const contextMessage = buildFreshContextMessage(prepared);
@@ -87,6 +141,7 @@ export async function createPreparedSession(
           true,
           contextMessage.details,
         );
+        options.appendSetupEntries?.(sessionManager);
       },
       withSession: async (replacementCtx) => {
         try {

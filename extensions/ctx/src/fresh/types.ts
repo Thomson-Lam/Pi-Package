@@ -49,7 +49,7 @@ export interface FreshLimits {
 }
 
 export interface FreshReviewResult {
-  action: "confirm" | "cancel";
+  action: "select-model" | "confirm" | "cancel";
   objective: string;
 }
 

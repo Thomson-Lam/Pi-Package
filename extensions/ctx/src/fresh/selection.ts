@@ -109,16 +109,25 @@ export function validateSelection(
   const candidatePaths = new Set(ledger.candidates.map((candidate) => candidate.path));
   const selectedPaths: string[] = [];
   const seen = new Set<string>();
+  const suggestedCandidates: ReadCandidate[] = [];
 
   for (const selectedPath of value.paths) {
     if (typeof selectedPath !== "string" || !selectedPath) throw new SelectionValidationError("Agent selection contained an invalid path");
     if (seen.has(selectedPath)) throw new SelectionValidationError(`Agent selected a duplicate path: ${selectedPath}`);
-    if (!candidatePaths.has(selectedPath)) throw new SelectionValidationError(`Agent selected a path outside the ledger: ${selectedPath}`);
-    seen.add(selectedPath);
-    selectedPaths.push(selectedPath);
+    if (candidatePaths.has(selectedPath)) {
+      seen.add(selectedPath);
+      selectedPaths.push(selectedPath);
+      continue;
+    }
+    // Not in the read ledger: downgrade to a fresh-read suggestion when it
+    // resolves inside the project, instead of failing the whole selection.
+    const candidate = normalizeReadPath(selectedPath, ledger.projectRoot);
+    if (!candidate) throw new SelectionValidationError(`Agent selected a path outside the project: ${selectedPath}`);
+    if (seen.has(candidate.path)) throw new SelectionValidationError(`Agent selected a duplicate path: ${candidate.path}`);
+    seen.add(candidate.path);
+    selectedPaths.push(candidate.path);
+    suggestedCandidates.push(candidate);
   }
-
-  const suggestedCandidates: ReadCandidate[] = [];
   for (const suggestedPath of value.suggestedPaths ?? []) {
     if (typeof suggestedPath !== "string" || !suggestedPath.trim()) throw new SelectionValidationError("Agent suggested an invalid path");
     const candidate = normalizeReadPath(suggestedPath, ledger.projectRoot);

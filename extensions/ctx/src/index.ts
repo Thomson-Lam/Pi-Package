@@ -6,6 +6,7 @@ import { openContextPanel } from "./ui/panel.js";
 import { openContextUsagePanel } from "./ui/context-usage-panel.js";
 import { FRESH_CONTEXT_MESSAGE_TYPE } from "./fresh/context-message.js";
 import { runFreshContextSession } from "./fresh/transition.js";
+import { resolveMuonBuildSetupEntry } from "./fresh/muon-build.js";
 import { observeFreshSelectionMessage } from "./fresh/selection.js";
 import { renderFreshContextMessage } from "./ui/fresh-message.js";
 import { jumpToAnchor, labelLatestMessage } from "./anchors.js";
@@ -25,7 +26,8 @@ Open the UI-only /ctx context viewer. This help is rendered in a modal and is no
 
 ## Fresh sessions
 
-- /cnew — select relevant files read on the active branch, review their current contents and size, then start a fresh session with a user-authored objective.
+- /cnew — select relevant files read on the active branch, review their current contents and size, choose the fresh session model and thinking level, then start with a user-authored objective.
+- /cb — the same fresh-session flow as /cnew, but the new session starts in Muon build mode (requires the Muon extension).
 
 ## Related commands
 
@@ -144,6 +146,18 @@ export default function (pi: ExtensionAPI) {
     description: "Start a fresh session with relevant files already in context",
     handler: async (args, ctx) => {
       await runFreshContextSession(pi, ctx, args || "");
+    },
+  });
+
+  pi.registerCommand("cb", {
+    description: "Start a fresh-context session in Muon build mode",
+    handler: async (args, ctx) => {
+      const appendMuonState = await resolveMuonBuildSetupEntry(ctx);
+      if (!appendMuonState) {
+        ctx.ui.notify("Muon build mode is not available; use /cnew to start a fresh session without the build prompt", "warning");
+        return;
+      }
+      await runFreshContextSession(pi, ctx, args || "", { appendSetupEntries: appendMuonState });
     },
   });
 

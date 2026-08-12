@@ -28,10 +28,21 @@ test("strict selection accepts ledger paths and project-local suggestions", () =
   });
 });
 
+test("paths entries outside the ledger are downgraded to fresh-read suggestions", () => {
+  assert.deepEqual(validateSelection({ paths: ["src/c.ts"] }, ledger, 3), {
+    selectedPaths: ["src/c.ts"],
+    ledger: {
+      ...ledger,
+      candidates: [...ledger.candidates, { path: "src/c.ts", absolutePath: "/project/src/c.ts" }],
+    },
+    suggestedPaths: ["src/c.ts"],
+  });
+});
+
 for (const [name, value] of [
   ["non-object arguments", "invalid"],
   ["empty selection", { paths: [] }],
-  ["unknown ledger path", { paths: ["src/c.ts"] }],
+  ["outside project path", { paths: ["../outside.ts"] }],
   ["duplicate path", { paths: ["src/a.ts"], suggestedPaths: ["src/a.ts"] }],
   ["extra property", { paths: ["src/a.ts"], why: "x" }],
   ["outside project suggestion", { paths: ["src/a.ts"], suggestedPaths: ["../outside.ts"] }],

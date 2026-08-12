@@ -11,6 +11,6 @@ export function limitsForContextWindow(contextWindow?: number): FreshLimits {
   if (!contextWindow || contextWindow <= 0) return { ...DEFAULT_FRESH_LIMITS };
   return {
     ...DEFAULT_FRESH_LIMITS,
-    maxTransferTokens: Math.min(DEFAULT_FRESH_LIMITS.maxTransferTokens, Math.floor(contextWindow * 0.5)),
+    maxTransferTokens: Math.floor(contextWindow * 0.8),
   };
 }

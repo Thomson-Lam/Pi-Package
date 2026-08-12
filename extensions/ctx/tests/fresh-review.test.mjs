@@ -17,20 +17,28 @@ const theme = {
   bold: (text) => text,
 };
 
-test("confirming preserves the objective submitted by the review editor", async () => {
-  const ctx = {
+function contextForInput(input) {
+  return {
     ui: {
       custom(factory) {
         return new Promise((resolve) => {
           const component = factory({ requestRender() {} }, theme, {}, resolve);
-          for (const character of "Implement the validated fix") component.handleInput(character);
-          component.handleInput("\r");
-          component.handleInput("\r");
+          for (const character of input) component.handleInput(character);
         });
       },
     },
   };
+}
 
-  const result = await reviewFreshTransition(ctx, prepared);
-  assert.deepEqual(result, { action: "confirm", objective: "Implement the validated fix" });
+test("objective submission requests a model before final confirmation", async () => {
+  const objective = "Implement the validated fix";
+  const first = await reviewFreshTransition(contextForInput(`${objective}\r`), prepared);
+  assert.deepEqual(first, { action: "select-model", objective });
+
+  const selection = {
+    model: { provider: "openai-codex", id: "gpt-5.6-sol" },
+    thinkingLevel: "medium",
+  };
+  const final = await reviewFreshTransition(contextForInput("\r"), prepared, objective, selection);
+  assert.deepEqual(final, { action: "confirm", objective });
 });

@@ -35,6 +35,27 @@ test("prepared session appends context before submitting the exact objective", a
   assert.equal(events[1][1], "  exact objective\n");
 });
 
+test("prepared session appends extra setup entries after the context message", async () => {
+  const events = [];
+  const ctx = {
+    sessionManager: { getSessionFile: () => "/sessions/source.jsonl" },
+    ui: { notify() {}, setEditorText() {} },
+    async newSession(options) {
+      await options.setup({
+        appendCustomMessageEntry(type, content, display, details) { events.push(["context", type, content, display, details]); },
+        appendCustomEntry(type, data) { events.push(["extra", type, data]); },
+      });
+      await options.withSession({ ui: { notify() {}, setEditorText() {} }, async sendUserMessage() {} });
+      return { cancelled: false };
+    },
+  };
+  const appendSetupEntries = (sm) => sm.appendCustomEntry("muon-state", { config: { mode: "build" } });
+  const outcome = await createPreparedSession(ctx, prepared, "objective", { appendSetupEntries });
+  assert.equal(outcome.status, "completed");
+  assert.deepEqual(events.map((event) => event[0]), ["context", "extra"]);
+  assert.deepEqual(events[1].slice(1), ["muon-state", { config: { mode: "build" } }]);
+});
+
 test("empty active-branch ledger never creates a session", async () => {
   let created = false;
   const notifications = [];

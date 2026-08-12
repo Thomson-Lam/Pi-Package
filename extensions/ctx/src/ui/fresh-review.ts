@@ -2,6 +2,7 @@ import type { ExtensionCommandContext } from "@earendil-works/pi-coding-agent";
 import { BorderedLoader } from "@earendil-works/pi-coding-agent";
 import { Editor, Key, matchesKey, truncateToWidth, wrapTextWithAnsi, type EditorTheme, type Focusable } from "@earendil-works/pi-tui";
 import type { FreshReviewResult, PreparedContext } from "../fresh/types.js";
+import type { ModelThinkingSelection } from "./model-thinking-selector.js";
 
 export async function runSelectionLoader<T>(
   ctx: ExtensionCommandContext,
@@ -29,6 +30,7 @@ export async function reviewFreshTransition(
   ctx: ExtensionCommandContext,
   prepared: PreparedContext,
   initialObjective = "",
+  selection?: ModelThinkingSelection,
 ): Promise<FreshReviewResult> {
   return ctx.ui.custom<FreshReviewResult>((tui, theme, _keybindings, done) => {
     const editorTheme: EditorTheme = {
@@ -44,7 +46,7 @@ export async function reviewFreshTransition(
     const editor = new Editor(tui, editorTheme);
     editor.setText(initialObjective);
     let objective = initialObjective;
-    let editing = true;
+    let editing = !selection;
     let validationMessage = "";
     editor.onChange = (text) => { objective = text; };
     editor.onSubmit = (text) => {
@@ -53,6 +55,10 @@ export async function reviewFreshTransition(
         validationMessage = "A non-empty kickoff objective is required.";
       } else {
         validationMessage = "";
+        if (!selection) {
+          done({ action: "select-model", objective });
+          return;
+        }
         editing = false;
       }
       tui.requestRender();
@@ -78,10 +84,18 @@ export async function reviewFreshTransition(
         if (editing) {
           lines.push(...editor.render(inner));
           if (validationMessage) lines.push(theme.fg("error", validationMessage));
-          lines.push(theme.fg("dim", "Enter review • Esc cancel and keep draft"));
+          lines.push(theme.fg("dim", selection ? "Enter review • Esc cancel and keep draft" : "Enter choose model • Esc cancel and keep draft"));
         } else {
           for (const line of wrapTextWithAnsi(objective, Math.max(1, inner - 2))) lines.push(`  ${line}`);
-          lines.push("", theme.fg("dim", "Enter confirm and start • e edit objective • Esc cancel and keep draft"));
+          if (selection) {
+            lines.push(
+              "",
+              theme.fg("accent", theme.bold("Fresh session configuration")),
+              `  Model: ${selection.model.provider}/${selection.model.id}`,
+              `  Thinking: ${selection.thinkingLevel}`,
+            );
+          }
+          lines.push("", theme.fg("dim", "Enter start fresh session • e edit objective • m change model • Esc cancel and keep draft"));
         }
 
         const top = theme.fg("borderAccent", `┌${"─".repeat(inner)}┐`);
@@ -101,7 +115,8 @@ export async function reviewFreshTransition(
           return;
         }
         if (matchesKey(data, Key.escape) || matchesKey(data, Key.ctrl("c"))) done({ action: "cancel", objective });
-        else if (matchesKey(data, Key.enter)) done({ action: "confirm", objective });
+        else if (matchesKey(data, Key.enter) && selection) done({ action: "confirm", objective });
+        else if (data === "m" || data === "M") done({ action: "select-model", objective });
         else if (data === "e" || data === "E") {
           editing = true;
           editor.setText(objective);
