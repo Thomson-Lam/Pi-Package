@@ -25,6 +25,7 @@ import { type RpcHandle, registerRpcHandlers } from "./cross-extension-rpc.js";
 import { loadCustomAgents } from "./custom-agents.js";
 import { isModelInScope, readEnabledModels, resolveEnabledModels } from "./enabled-models.js";
 import { GroupJoinManager } from "./group-join.js";
+import { NudgeScheduler } from "./nudge.js";
 import { resolveAgentInvocationConfig, resolveJoinMode } from "./invocation-config.js";
 import { type ModelRegistry, resolveModel } from "./model-resolver.js";
 import { applyAndEmitLoaded, type SubagentsSettings, saveAndEmitChanged, type ToolDescriptionMode } from "./settings.js";
@@ -288,29 +289,33 @@ export default function (pi: ExtensionAPI) {
   reloadCustomAgents();
 
   // ---- Cancellable pending notifications ----
-  // Holds notifications briefly so get_subagent_result can cancel them
-  // before they reach pi.sendMessage (fire-and-forget).
-  const pendingNudges = new Map<string, ReturnType<typeof setTimeout>>();
-  const NUDGE_HOLD_MS = 200;
+  // Completion/group notifications are held until the parent agent is IDLE —
+  // delivered immediately when idle, otherwise at the next agent_settled
+  // boundary — so get_subagent_result called any time during a busy turn can
+  // cancel them. The send-time resultConsumed re-check inside each nudge then
+  // guarantees exactly-once delivery with no redundant feedback to the main
+  // agent.
+  const nudges = new NudgeScheduler();
 
-  function scheduleNudge(key: string, send: () => void, delay = NUDGE_HOLD_MS) {
-    cancelNudge(key);
-    pendingNudges.set(key, setTimeout(function deliver() {
-      if (pendingApprovals > 0) {
-        pendingNudges.set(key, setTimeout(deliver, 200));
-        return;
-      }
-      pendingNudges.delete(key);
-      try { send(); } catch { /* ignore stale completion side-effect errors */ }
-    }, delay));
+  pi.on("agent_start", () => { nudges.setBusy(true); });
+  pi.on("agent_settled", () => {
+    nudges.setBusy(false);
+    flushPendingNudges();
+  });
+
+  function scheduleNudge(key: string, send: () => void) {
+    nudges.schedule(key, send);
+    flushPendingNudges();
   }
 
   function cancelNudge(key: string) {
-    const timer = pendingNudges.get(key);
-    if (timer != null) {
-      clearTimeout(timer);
-      pendingNudges.delete(key);
-    }
+    nudges.cancel(key);
+  }
+
+  /** Deliver held nudges once the parent is idle (and no approval dialog is open). */
+  function flushPendingNudges() {
+    if (pendingApprovals > 0) return;
+    nudges.flush();
   }
 
   // ---- Individual nudge helper (async join mode) ----
@@ -566,8 +571,7 @@ export default function (pi: ExtensionAPI) {
       delete (globalThis as any)[MANAGER_KEY];
     }
     manager.abortAll();
-    for (const timer of pendingNudges.values()) clearTimeout(timer);
-    pendingNudges.clear();
+    nudges.clear();
     fleet.dispose();
     manager.dispose();
   });
