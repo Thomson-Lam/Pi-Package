@@ -1,380 +1,201 @@
-/**
- * fleet-list.ts — Claude Code-style "FleetView" list rendered below the editor.
- *
- * Shows `main` + each running/queued subagent as a navigable list. Pressing ↓ (or
- * ←) at an empty prompt activates the list; ↑/↓ move the selection (filled ⏺ marker),
- * Enter opens the selected agent's live conversation overlay, Esc returns to the prompt.
- * A viewer stays open when its agent finishes; finished agents linger briefly in the list.
- *
- * Mechanics (see plan): the list is a `belowEditor` widget (render-only), and ALL key
- * handling goes through `onTerminalInput` — which fires before the focused editor and
- * can `consume` keys — gated on `getEditorText() === ""` so normal typing is untouched.
- */
-
-import { Editor, isKeyRelease, Key, matchesKey, truncateToWidth, visibleWidth } from "@earendil-works/pi-tui";
+/** Passive compact overview of active and terminal-unreviewed agents, plus a
+ *  selection mode used by the Alt+A agent-session picker. */
+import { truncateToWidth, visibleWidth } from "@earendil-works/pi-tui";
 import type { AgentManager } from "../agent-manager.js";
+import { agentTypeSlug, zellijName } from "../names.js";
 import type { AgentRecord } from "../types.js";
 import { getLifetimeTotal } from "../usage.js";
-import { type AgentActivity, getDisplayName, type Theme } from "./agent-widget.js";
-import { ConversationViewer, VIEWPORT_HEIGHT_PCT } from "./conversation-viewer.js";
+import type { Theme } from "./format.js";
 
-/** Widget key for the below-editor fleet list. */
 const FLEET_KEY = "fleet";
-/** Max agent rows shown at once; extras collapse into a "↓ N more" indicator. */
-const MAX_AGENT_ROWS = 5;
-/** Re-render cadence so elapsed/token stats tick while agents run. */
-const TICK_MS = 200;
-/** How long a finished agent lingers in the list before it drops out. */
-const FINISHED_LINGER_MS = 4000;
+const MAX_LINES = 10;
+const TICK_MS = 1000;
 
-/** Minimal UI surface the FleetView needs from `ctx.ui` (structural subset). */
 export type FleetUICtx = {
   setWidget(
     key: string,
-    content: undefined | ((tui: any, theme: Theme) => { render(width: number): string[]; invalidate(): void; dispose?(): void }),
+    content: undefined | ((tui: any, theme: Theme) => { render(width: number): string[]; invalidate(): void }),
     options?: { placement?: "aboveEditor" | "belowEditor" },
   ): void;
-  onTerminalInput(handler: (data: string) => { consume?: boolean; data?: string } | undefined): () => void;
-  getEditorText(): string;
-  notify(message: string, type?: "info" | "warning" | "error"): void;
-  custom<T>(
-    factory: (tui: any, theme: Theme, keybindings: any, done: (result: T) => void) => { render(width: number): string[]; invalidate(): void; dispose?(): void },
-    options?: { overlay?: boolean; overlayOptions?: unknown; onHandle?: (handle: unknown) => void },
-  ): Promise<T>;
 };
 
-type MainEntry = { kind: "main" };
-type AgentEntry = { kind: "agent"; record: AgentRecord };
-type FleetEntry = MainEntry | AgentEntry;
-
-/** `11s` — integer seconds, no decimal/suffix (matches Claude Code, unlike formatMs). */
 export function formatFleetElapsed(ms: number): string {
   return `${Math.max(0, Math.round(ms / 1000))}s`;
 }
 
-/** `↓ 13.1k tokens` — down-arrow prefix, compact magnitude, plural "tokens". */
 export function formatFleetTokens(count: number): string {
-  let compact: string;
-  if (count >= 1_000_000) compact = `${(count / 1_000_000).toFixed(1)}M`;
-  else if (count >= 1_000) compact = `${(count / 1_000).toFixed(1)}k`;
-  else compact = `${count}`;
-  return `↓ ${compact} tokens`;
+  if (count >= 1_000_000) return `${(count / 1_000_000).toFixed(1)}M`;
+  if (count >= 1_000) return `${(count / 1_000).toFixed(1)}k`;
+  return String(count);
 }
 
-/**
- * Place `right` flush to `width`, truncating `left` first so the stats survive.
- * The final clamp guarantees the line never exceeds `width` (which would wrap and
- * desync pi's line-diff → flicker) even on a terminal too narrow for the stats.
- */
-function rightAlign(left: string, right: string, width: number): string {
-  const rightW = visibleWidth(right);
-  const maxLeft = Math.max(0, width - rightW - 1);
-  const leftClamped = truncateToWidth(left, maxLeft);
-  const gap = Math.max(1, width - visibleWidth(leftClamped) - rightW);
-  return truncateToWidth(leftClamped + " ".repeat(gap) + right, width);
+function terminal(record: AgentRecord): boolean {
+  return record.status !== "running" && record.status !== "queued";
+}
+
+function icon(record: AgentRecord): string {
+  if (record.status === "running") return "●";
+  if (record.status === "queued") return "◌";
+  if (record.status === "completed" || record.status === "steered") return "✓";
+  if (record.status === "stopped") return "■";
+  return "!";
+}
+
+function align(left: string, right: string, width: number): string {
+  const room = Math.max(0, width - visibleWidth(right) - 1);
+  const l = truncateToWidth(left, room);
+  return truncateToWidth(`${l}${" ".repeat(Math.max(1, width - visibleWidth(l) - visibleWidth(right)))}${right}`, width);
 }
 
 export class FleetList {
-  private ui: FleetUICtx | undefined;
-  private tui: any | undefined;
-  private inputUnsub: (() => void) | undefined;
-  private widgetRegistered = false;
-  private timer: ReturnType<typeof setInterval> | undefined;
+  private ui?: FleetUICtx;
+  private tui?: any;
+  private registered = false;
+  private timer?: ReturnType<typeof setInterval>;
+  private unsubscribe: () => void;
+  /** Selected record id while in selection mode (or when a picker is open). */
+  selectedId?: string;
+  /** True while the Alt+A picker is open (selection is visible). */
+  selecting = false;
 
-  private enabled = true;
-  /** Whether arrow keys currently navigate the list (vs. flow to the editor). */
-  private active = false;
-  /** 0 = `main`, 1..N = subagents. */
-  private selectedIndex = 0;
-  /** Set while a conversation overlay is open; calling it closes the overlay. */
-  private viewerClose: (() => void) | undefined;
-  private viewingAgentId: string | undefined;
-
-  constructor(
-    private manager: AgentManager,
-    private agentActivity: Map<string, AgentActivity>,
-  ) {}
-
-  // ---- Lifecycle ----
-
-  setEnabled(enabled: boolean): void {
-    if (enabled === this.enabled) return;
-    this.enabled = enabled;
-    if (!enabled) this.active = false;
-    this.update();
+  constructor(private manager: AgentManager) {
+    this.unsubscribe = manager.subscribe(() => this.update());
   }
 
-  /** Capture the UI context and (re)register the global input handler. */
   setUICtx(ui: FleetUICtx): void {
-    if (ui === this.ui) return;
-    this.inputUnsub?.();
+    if (this.ui === ui) return;
+    if (this.ui && this.registered) this.ui.setWidget(FLEET_KEY, undefined);
     this.ui = ui;
-    this.widgetRegistered = false;
+    this.registered = false;
     this.tui = undefined;
-    this.inputUnsub = ui.onTerminalInput(data => this.handleKey(data));
-  }
-
-  /** Ensure the re-render timer is running (called when an agent spawns). */
-  ensureTimer(): void {
-    if (!this.timer) this.timer = setInterval(() => this.update(), TICK_MS);
-  }
-
-  /**
-   * Called when an agent finishes. The viewer (if open on it) stays open so the
-   * final output remains readable, and the row lingers in the list — just refresh.
-   */
-  onAgentFinished(_id: string): void {
     this.update();
   }
 
-  dispose(): void {
-    if (this.timer) { clearInterval(this.timer); this.timer = undefined; }
-    this.inputUnsub?.();
-    this.inputUnsub = undefined;
-    if (this.viewerClose) { this.viewerClose(); this.viewerClose = undefined; }
-    this.viewingAgentId = undefined;
-    if (this.ui && this.widgetRegistered) this.ui.setWidget(FLEET_KEY, undefined);
-    this.widgetRegistered = false;
-    this.tui = undefined;
-    this.active = false;
-    // Null last so a `viewerClose()` microtask above can't re-register the widget.
-    this.ui = undefined;
+  /** Records eligible for the fleet: running/queued or terminal-unreviewed. */
+  records(): AgentRecord[] {
+    return this.manager.listAgents()
+      .filter(r => !terminal(r) || r.reviewedAt == null)
+      .sort((a, b) => {
+        const aa = terminal(a) ? 1 : 0;
+        const bb = terminal(b) ? 1 : 0;
+        return aa - bb || b.updatedAt - a.updatedAt;
+      });
   }
 
-  /** Re-register/refresh the below-editor widget; clears it when no agents remain. */
   update(): void {
     if (!this.ui) return;
-    const hasAgents = this.enabled && this.agentRecords().length > 0;
-
-    if (!hasAgents) {
-      if (this.widgetRegistered) {
-        this.ui.setWidget(FLEET_KEY, undefined);
-        this.widgetRegistered = false;
-        this.tui = undefined;
-      }
-      if (this.timer) { clearInterval(this.timer); this.timer = undefined; }
-      this.active = false;
-      this.selectedIndex = 0;
+    const records = this.records();
+    if (records.length === 0) {
+      if (this.registered) this.ui.setWidget(FLEET_KEY, undefined);
+      this.registered = false;
+      this.tui = undefined;
+      this.stopTimer();
       return;
     }
-
-    this.clampSelection();
-    this.ensureTimer(); // keep stats ticking whenever the list is shown (e.g. after a re-enable)
-
-    if (!this.widgetRegistered) {
+    if (records.some(r => r.status === "running" || r.status === "queued")) this.startTimer();
+    else this.stopTimer();
+    if (!this.registered) {
       this.ui.setWidget(FLEET_KEY, (tui, theme) => {
         this.tui = tui;
-        return {
-          render: (w: number) => this.renderBar(w, theme),
-          invalidate: () => { this.widgetRegistered = false; this.tui = undefined; },
-        };
+        return { render: (width) => this.render(width, theme), invalidate: () => {} };
       }, { placement: "belowEditor" });
-      this.widgetRegistered = true;
-    } else {
-      this.tui?.requestRender();
+      this.registered = true;
+    } else this.tui?.requestRender();
+  }
+
+  private startTimer(): void {
+    if (!this.timer) {
+      this.timer = setInterval(() => this.tui?.requestRender(), TICK_MS);
+      this.timer.unref?.();
     }
   }
 
-  // ---- Roster ----
-
-  /**
-   * Agents shown in the list, ordered earliest-launched first so the ones you
-   * started sooner sit at the top. Every row is openable (has a session), so Enter
-   * never dead-ends. Included: running/queued, plus the agent currently being
-   * viewed, plus recently-finished ones (they linger briefly before dropping out).
-   * Pending agents with no session yet are hidden until they start.
-   * (`listAgents()` is newest-first, so we re-sort.)
-   */
-  private agentRecords(): AgentRecord[] {
-    const now = Date.now();
-    return this.manager.listAgents()
-      .filter(a => a.session && (
-        a.status === "running" || a.status === "queued"
-        || a.id === this.viewingAgentId
-        || (a.completedAt != null && now - a.completedAt < FINISHED_LINGER_MS)
-      ))
-      .sort((a, b) => a.startedAt - b.startedAt);
+  private stopTimer(): void {
+    if (this.timer) clearInterval(this.timer);
+    this.timer = undefined;
   }
 
-  private roster(): FleetEntry[] {
-    return [{ kind: "main" }, ...this.agentRecords().map(record => ({ kind: "agent" as const, record }))];
-  }
-
-  private clampSelection(): void {
-    const max = this.roster().length - 1;
-    if (this.selectedIndex > max) this.selectedIndex = Math.max(0, max);
-    if (this.selectedIndex < 0) this.selectedIndex = 0;
-  }
-
-  // ---- Key handling ----
-
-  /** Returns `{consume:true}` to swallow a key, or undefined to let it through. */
-  handleKey(data: string): { consume?: boolean; data?: string } | undefined {
-    if (!this.enabled || !this.ui) return undefined;
-    // Input listeners receive BOTH key-press and key-release (the kitty protocol
-    // emits both, and matchesKey matches either) — act on press only, or every
-    // tap would move/fire twice. Repeats still pass through for held-key nav.
-    if (isKeyRelease(data)) return undefined;
-    // While an overlay is open, let it own all input.
-    if (this.viewerClose) return undefined;
-    // Input listeners fire BEFORE the focused component, and dialogs
-    // (ctx.ui.select/confirm/input, pi's own menus) swap the prompt editor out
-    // while getEditorText() still reads the detached — empty — editor. So when
-    // anything but the editor owns the keyboard, stay out of its keys (#123).
-    if (!this.editorHasFocus()) {
-      if (this.active) this.deactivate();
-      return undefined;
-    }
-
-    if (!this.active) {
-      // Activate: ↓ or ← at an empty prompt moves focus into the list.
-      const isActivator = matchesKey(data, "down") || matchesKey(data, "left");
-      if (isActivator && this.agentRecords().length > 0 && this.ui.getEditorText() === "") {
-        this.active = true;
-        this.selectedIndex = 0;
-        this.update();
-        return { consume: true };
-      }
-      return undefined;
-    }
-
-    // Active — arrows navigate, Enter opens, Esc / Up-past-top exits.
-    if (matchesKey(data, "down")) {
-      const max = this.roster().length - 1;
-      this.selectedIndex = Math.min(max, this.selectedIndex + 1);
-      this.update();
-      return { consume: true };
-    }
-    if (matchesKey(data, "up")) {
-      if (this.selectedIndex === 0) { this.deactivate(); return { consume: true }; }
-      this.selectedIndex -= 1;
-      this.update();
-      return { consume: true };
-    }
-    if (matchesKey(data, "escape")) { this.deactivate(); return { consume: true }; }
-    if (matchesKey(data, Key.enter)) { this.openSelected(); return { consume: true }; }
-
-    // Any other key cancels navigation and flows to the editor.
-    this.deactivate();
-    return undefined;
-  }
-
-  /**
-   * True when pi's prompt editor owns the keyboard. pi's editor is an `Editor`
-   * subclass (CustomEditor) while every dialog/selector is not, and the loader
-   * aliases pi-tui to pi's own copy, so `instanceof` is a reliable identity
-   * check. `focusedComponent` is TUI-private (no public accessor), hence the
-   * best-effort peek: unknowable focus (no tui seen yet, nothing focused)
-   * counts as the editor so activation keeps working.
-   */
-  private editorHasFocus(): boolean {
-    const focused = (this.tui as { focusedComponent?: unknown } | undefined)?.focusedComponent;
-    return focused == null || focused instanceof Editor;
-  }
-
-  private deactivate(): void {
-    this.active = false;
-    this.selectedIndex = 0;
-    this.update();
-  }
-
-  private openSelected(): void {
-    const entry = this.roster()[this.selectedIndex];
-    if (!entry || entry.kind === "main") {
-      // `main` = return to the prompt; the native transcript is already shown.
-      this.deactivate();
-      return;
-    }
-    const record = entry.record;
-    if (!this.ui) return;
-    if (!record.session) {
-      this.ui.notify(`Agent is ${record.status} — no session available.`, "info");
-      return;
-    }
-    const session = record.session;
-    const activity = this.agentActivity.get(record.id);
-    this.viewingAgentId = record.id;
-
-    void this.ui.custom<undefined>(
-      (tui, theme, keybindings, done) => {
-        this.viewerClose = () => done(undefined);
-        return new ConversationViewer(
-          tui,
-          session,
-          record,
-          activity,
-          theme,
-          done,
-          () => {
-            if (this.manager.abort(record.id)) this.ui?.notify(`Stopped "${record.description}".`, "info");
-          },
-          keybindings,
-          (message: string) => this.manager.steer(record.id, message),
-        );
-      },
-      {
-        overlay: true,
-        overlayOptions: { anchor: "center", width: "90%", maxHeight: `${VIEWPORT_HEIGHT_PCT}%` },
-      },
-    ).then(() => this.clearViewer(), () => this.clearViewer());
-  }
-
-  /** Reset overlay state and return to the list (on close, auto-close, or error). */
-  private clearViewer(): void {
-    // Keep the cursor on the agent we were viewing — re-resolve by id so it
-    // still feels natural if the list reordered (an earlier agent finished)
-    // while the overlay was open. If that agent is gone, leave the index for
-    // update()'s clamp to settle.
-    if (this.viewingAgentId) {
-      const idx = this.roster().findIndex(e => e.kind === "agent" && e.record.id === this.viewingAgentId);
-      if (idx >= 0) this.selectedIndex = idx;
-    }
-    this.viewerClose = undefined;
-    this.viewingAgentId = undefined;
-    this.update();
-  }
-
-  // ---- Rendering ----
-
-  private renderBar(width: number, theme: Theme): string[] {
-    const agents = this.roster().slice(1) as AgentEntry[];
-    if (agents.length === 0) return [];
-    // Clamp locally so a render between a roster shrink and the next update()
-    // (e.g. on terminal resize) never loses the selection marker.
-    const sel = Math.min(this.selectedIndex, agents.length);
-
-    const hint = this.active
-      ? "↑↓ select · enter view · esc back"
-      : "esc to interrupt · ← for agents · ↓ to manage";
+  /** Render the fleet rows (shared by the widget and the selection picker). */
+  renderRows(theme: Theme, selectedId?: string, width = 120): string[] {
+    const all = this.records();
     const lines: string[] = [];
-    lines.push(truncateToWidth("  " + theme.fg("dim", hint), width));
-    lines.push("");
-    lines.push(truncateToWidth(`  ${this.bullet(0, sel, theme)} main`, width));
-
-    // Window the agent rows so the selected one stays visible.
-    const visible = Math.min(MAX_AGENT_ROWS, agents.length);
-    const selAgent = Math.max(0, sel - 1);
-    const start = selAgent < visible ? 0 : selAgent - visible + 1;
-    const hiddenBelow = agents.length - (start + visible);
-
-    if (start > 0) lines.push(rightAlign("", theme.fg("dim", `↑ ${start} more`), width));
-    for (let a = start; a < start + visible; a++) {
-      lines.push(this.renderAgentRow(a + 1, sel, agents[a].record, width, theme));
+    let shown = 0;
+    for (const record of all) {
+      if (lines.length + 2 > MAX_LINES) break;
+      const elapsed = formatFleetElapsed((record.completedAt ?? Date.now()) - record.startedAt);
+      const total = formatFleetTokens(getLifetimeTotal(record.lifetimeUsage));
+      const windowPart = record.window
+        ? `tmux ${record.window.state === "closed" ? `${record.window.index} (closed)` : record.window.index}`
+        : record.status === "queued" ? "queued" : undefined;
+      const metrics = [windowPart, elapsed, total !== "0" ? `${total} tok` : undefined,
+        record.maxTurns ? `${record.turnCount}/${record.maxTurns} turns` : record.turnCount ? `${record.turnCount} turns` : undefined,
+      ].filter(Boolean).join(" · ");
+      const color = record.status === "running" ? "accent" : terminal(record) && record.status !== "completed" ? "warning" : "dim";
+      const isSelected = record.id === selectedId;
+      const cursor = isSelected ? theme.fg("accent", "› ") : "  ";
+      const name = zellijName(record.id);
+      const nameStyled = isSelected ? theme.fg("accent", name) : theme.fg("muted", name);
+      const typeTag = theme.fg("dim", `(${agentTypeSlug(record.type)})`);
+      const left = `${cursor}${theme.fg(color, icon(record))} ${nameStyled} ${typeTag}  ${record.description}`;
+      lines.push(align(left, theme.fg("dim", metrics), width));
+      const activity = record.status === "queued" ? "queued"
+        : record.latestActivity ? `${record.latestActivity.action}${record.latestActivity.target ? ` ${record.latestActivity.target}` : ""}`
+        : terminal(record) ? record.error ?? record.stopReason ?? "review required"
+        : record.window?.state === "starting" ? "starting…" : "thinking";
+      lines.push(truncateToWidth(`  ${theme.fg("dim", `↳ ${activity}`)}`, width));
+      shown++;
     }
-    if (hiddenBelow > 0) lines.push(rightAlign("", theme.fg("dim", `↓ ${hiddenBelow} more`), width));
-
+    if (shown < all.length) lines.push(truncateToWidth(theme.fg("dim", `+${all.length - shown} more`), width));
     return lines;
   }
 
-  private bullet(rosterIndex: number, sel: number, theme: Theme): string {
-    return rosterIndex === sel ? theme.fg("accent", "⏺") : theme.fg("dim", "◯");
+  private render(width: number, theme: Theme): string[] {
+    return this.renderRows(theme, this.selecting ? this.selectedId : undefined, width);
   }
 
-  private renderAgentRow(rosterIndex: number, sel: number, record: AgentRecord, width: number, theme: Theme): string {
-    const left = `  ${this.bullet(rosterIndex, sel, theme)} ${theme.fg("muted", getDisplayName(record.type))}  ${record.description}`;
-    const tokens = getLifetimeTotal(this.agentActivity.get(record.id)?.lifetimeUsage ?? record.lifetimeUsage);
-    const elapsedMs = (record.completedAt ?? Date.now()) - record.startedAt; // freezes once finished
-    const right = theme.fg("dim", `${formatFleetElapsed(elapsedMs)} · ${formatFleetTokens(tokens)}`);
-    return rightAlign(left, right, width);
+  // ---- Selection mode ----
+
+  /** Selectable records for the picker (all records, running first). */
+  selectableRecords(): AgentRecord[] {
+    return this.manager.listAgents().sort((a, b) => {
+      const aa = terminal(a) ? 1 : 0;
+      const bb = terminal(b) ? 1 : 0;
+      return aa - bb || b.updatedAt - a.updatedAt;
+    });
+  }
+
+  beginSelection(): void {
+    const records = this.selectableRecords();
+    this.selecting = true;
+    if (!this.selectedId || !records.some((r) => r.id === this.selectedId)) {
+      this.selectedId = records[0]?.id;
+    }
+    this.update();
+  }
+
+  moveSelection(delta: number): void {
+    const records = this.selectableRecords();
+    if (records.length === 0) return;
+    const current = Math.max(0, records.findIndex((r) => r.id === this.selectedId));
+    this.selectedId = records[(current + delta + records.length) % records.length]?.id;
+    this.update();
+  }
+
+  endSelection(): void {
+    this.selecting = false;
+    this.update();
+  }
+
+  selectedRecord(): AgentRecord | undefined {
+    return this.selectedId ? this.manager.getRecord(this.selectedId) : undefined;
+  }
+
+  dispose(): void {
+    this.stopTimer();
+    this.unsubscribe();
+    if (this.ui && this.registered) this.ui.setWidget(FLEET_KEY, undefined);
+    this.registered = false;
+    this.ui = undefined;
+    this.tui = undefined;
   }
 }

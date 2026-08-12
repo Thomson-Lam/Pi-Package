@@ -42,11 +42,12 @@ describe("agent type registry", () => {
   describe("default agents", () => {
     it("recognizes all default agent types", () => {
       expect(isValidType("general-purpose")).toBe(true);
-      expect(isValidType("Explore")).toBe(true);
-      expect(isValidType("Plan")).toBe(true);
+      expect(isValidType("Review")).toBe(true);
     });
 
     it("does not include removed agents", () => {
+      expect(isValidType("Explore")).toBe(false);
+      expect(isValidType("Plan")).toBe(false);
       expect(isValidType("statusline-setup")).toBe(false);
       expect(isValidType("claude-code-guide")).toBe(false);
     });
@@ -57,21 +58,20 @@ describe("agent type registry", () => {
     });
 
     it("case-insensitive lookup works for isValidType", () => {
-      expect(isValidType("explore")).toBe(true);
-      expect(isValidType("EXPLORE")).toBe(true);
+      expect(isValidType("review")).toBe(true);
+      expect(isValidType("REVIEW")).toBe(true);
       expect(isValidType("General-Purpose")).toBe(true);
-      expect(isValidType("plan")).toBe(true);
     });
 
     it("case-insensitive lookup works for getAgentConfig", () => {
-      const config = getAgentConfig("explore");
-      expect(config?.name).toBe("Explore");
-      expect(config?.model).toBe("anthropic/claude-haiku-4-5");
+      const config = getAgentConfig("review");
+      expect(config?.name).toBe("Review");
+      expect(config?.model).toBe("opencode-go/deepseek-v4-flash");
     });
 
     it("resolveType returns canonical key or undefined", () => {
-      expect(resolveType("Explore")).toBe("Explore");
-      expect(resolveType("explore")).toBe("Explore");
+      expect(resolveType("Review")).toBe("Review");
+      expect(resolveType("review")).toBe("Review");
       expect(resolveType("GENERAL-PURPOSE")).toBe("general-purpose");
       expect(resolveType("nonexistent")).toBeUndefined();
     });
@@ -84,16 +84,17 @@ describe("agent type registry", () => {
       expect(config.skills).toBe(true);
     });
 
-    it("Explore has read-only tools", () => {
-      const config = getConfig("Explore");
+    it("Review has read-only tools", () => {
+      const config = getConfig("Review");
       expect(config.builtinToolNames).toEqual(["read", "bash", "grep", "find", "ls"]);
       expect(config.builtinToolNames).not.toContain("edit");
       expect(config.builtinToolNames).not.toContain("write");
     });
 
-    it("Explore has haiku model in config", () => {
-      const cfg = getAgentConfig("Explore");
-      expect(cfg?.model).toBe("anthropic/claude-haiku-4-5");
+    it("Review pins DeepSeek V4 Flash with high reasoning", () => {
+      const cfg = getAgentConfig("Review");
+      expect(cfg?.model).toBe("opencode-go/deepseek-v4-flash");
+      expect(cfg?.thinking).toBe("high");
     });
 
     it("default agents are marked isDefault", () => {
@@ -105,7 +106,7 @@ describe("agent type registry", () => {
     // An explicit `false` here would silently win over the caller's `true` via `??` in
     // resolveAgentInvocationConfig, breaking documented Agent tool params.
     it("default agents do not lock strategy fields (run_in_background / inherit_context / isolated)", () => {
-      for (const name of ["general-purpose", "Explore", "Plan"]) {
+      for (const name of ["general-purpose", "Review"]) {
         const cfg = getAgentConfig(name);
         expect(cfg?.runInBackground, `${name}.runInBackground`).toBeUndefined();
         expect(cfg?.inheritContext, `${name}.inheritContext`).toBeUndefined();
@@ -114,10 +115,7 @@ describe("agent type registry", () => {
     });
 
     it("getDefaultAgentNames returns default agent names", () => {
-      const names = getDefaultAgentNames();
-      expect(names).toContain("general-purpose");
-      expect(names).toContain("Explore");
-      expect(names).toContain("Plan");
+      expect(getDefaultAgentNames()).toEqual(["general-purpose", "Review"]);
     });
 
     it("BUILTIN_TOOL_NAMES includes all built-in tools", () => {
@@ -149,8 +147,7 @@ describe("agent type registry", () => {
 
       expect(getAvailableTypes()).toEqual([]);
       expect(isValidType("general-purpose")).toBe(false);
-      expect(isValidType("Explore")).toBe(false);
-      expect(isValidType("Plan")).toBe(false);
+      expect(isValidType("Review")).toBe(false);
     });
 
     it("user agents are unaffected when defaults are disabled", () => {
@@ -170,8 +167,7 @@ describe("agent type registry", () => {
       setDefaultsDisabled(false);
       registerAgents(new Map());
       expect(isValidType("general-purpose")).toBe(true);
-      expect(isValidType("Explore")).toBe(true);
-      expect(isValidType("Plan")).toBe(true);
+      expect(isValidType("Review")).toBe(true);
     });
 
     it("getConfig falls back to the hardcoded config when defaults are disabled and no user agents exist", () => {
@@ -200,7 +196,7 @@ describe("agent type registry", () => {
 
       const types = getAvailableTypes();
       expect(types).toContain("general-purpose");
-      expect(types).toContain("Explore");
+      expect(types).toContain("Review");
       expect(types).toContain("auditor");
     });
 
@@ -286,27 +282,27 @@ describe("agent type registry", () => {
     });
 
     it("user agent overrides default with same name", () => {
-      const agents = new Map([["Explore", makeAgentConfig({
-        name: "Explore",
-        description: "Custom Explore",
+      const agents = new Map([["Review", makeAgentConfig({
+        name: "Review",
+        description: "Custom Review",
         builtinToolNames: BUILTIN_TOOL_NAMES,
       })]]);
       registerAgents(agents);
 
-      const config = getConfig("Explore");
-      expect(config.description).toBe("Custom Explore");
+      const config = getConfig("Review");
+      expect(config.description).toBe("Custom Review");
       expect(config.builtinToolNames).toEqual(BUILTIN_TOOL_NAMES);
     });
 
     it("disabled agent is excluded from available types", () => {
-      const agents = new Map([["Plan", makeAgentConfig({
-        name: "Plan",
+      const agents = new Map([["Review", makeAgentConfig({
+        name: "Review",
         enabled: false,
       })]]);
       registerAgents(agents);
 
-      expect(isValidType("Plan")).toBe(false);
-      expect(getAvailableTypes()).not.toContain("Plan");
+      expect(isValidType("Review")).toBe(false);
+      expect(getAvailableTypes()).not.toContain("Review");
     });
 
     it("general-purpose can be disabled but fallback still works", () => {

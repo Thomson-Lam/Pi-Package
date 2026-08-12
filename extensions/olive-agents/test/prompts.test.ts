@@ -34,24 +34,18 @@ describe("buildAgentPrompt", () => {
   });
 
   it("handles non-git repos", () => {
-    const config = getDefaultConfig("Explore");
+    const config = getDefaultConfig("Review");
     const prompt = buildAgentPrompt(config, "/workspace", envNoGit);
     expect(prompt).toContain("Not a git repository");
     expect(prompt).not.toContain("Branch:");
   });
 
-  it("Explore prompt is read-only", () => {
-    const config = getDefaultConfig("Explore");
+  it("Review prompt is read-only and finding-focused", () => {
+    const config = getDefaultConfig("Review");
     const prompt = buildAgentPrompt(config, "/workspace", env);
     expect(prompt).toContain("READ-ONLY");
-    expect(prompt).toContain("file search specialist");
-  });
-
-  it("Plan prompt is read-only", () => {
-    const config = getDefaultConfig("Plan");
-    const prompt = buildAgentPrompt(config, "/workspace", env);
-    expect(prompt).toContain("READ-ONLY");
-    expect(prompt).toContain("software architect");
+    expect(prompt).toContain("senior code reviewer");
+    expect(prompt).toContain("findings first");
   });
 
   it("general-purpose uses append mode (parent twin)", () => {

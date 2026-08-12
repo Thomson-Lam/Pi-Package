@@ -27,8 +27,9 @@ export const PROTOCOL_VERSION = 2;
 
 /** Minimal AgentManager interface needed by the spawn/stop RPCs. */
 export interface SpawnCapable {
-  spawn(pi: unknown, ctx: unknown, type: string, prompt: string, options: any): string;
+  spawn(pi: unknown, ctx: unknown, type: string, prompt: string, options: any): Promise<string> | string;
   abort(id: string): boolean;
+  getRecord(id: string): { childSession?: { sessionId?: string; sessionFile?: string }; window?: { id?: string; index?: number } } | undefined;
 }
 
 export interface RpcDeps {
@@ -80,14 +81,14 @@ export function registerRpcHandlers(deps: RpcDeps): RpcHandle {
   });
 
   const unsubSpawn = handleRpc<{ requestId: string; type: string; prompt: string; options?: any }>(
-    events, "subagents:rpc:spawn", ({ type, prompt, options }) => {
+    events, "subagents:rpc:spawn", async ({ type, prompt, options }) => {
       const ctx = getCtx();
       if (!ctx) throw new Error("No active session");
 
       // Cross-extension RPC callers (e.g. pi-tasks TaskExecute) naturally
       // forward serializable values, so options.model can be a string like
       // "openai-codex/gpt-5.5". Resolve it to a real Model instance here
-      // — same pattern the scheduler path already uses — so the spawned
+      // — the same pattern as other detached spawns — so the spawned
       // agent's auth lookup doesn't crash with "No API key found for
       // undefined".
       let normalizedOptions = options ?? {};
@@ -108,7 +109,15 @@ export function registerRpcHandlers(deps: RpcDeps): RpcHandle {
         normalizedOptions = { ...normalizedOptions, model: resolved };
       }
 
-      return { id: manager.spawn(pi, ctx, type, prompt, normalizedOptions) };
+      const id = await manager.spawn(pi, ctx, type, prompt, normalizedOptions);
+      const record = manager.getRecord(id);
+      return {
+        id,
+        sessionId: record?.childSession?.sessionId,
+        sessionFile: record?.childSession?.sessionFile,
+        windowId: record?.window?.id,
+        windowIndex: record?.window?.index,
+      };
     },
   );
 

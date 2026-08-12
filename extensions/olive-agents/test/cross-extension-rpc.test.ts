@@ -24,7 +24,11 @@ describe("cross-extension RPC", () => {
 
   beforeEach(() => {
     events = createEventBus();
-    manager = { spawn: vi.fn().mockReturnValue("agent-42"), abort: vi.fn().mockReturnValue(true) };
+    manager = {
+      spawn: vi.fn().mockReturnValue("agent-42"),
+      abort: vi.fn().mockReturnValue(true),
+      getRecord: vi.fn().mockReturnValue(undefined),
+    };
     ctx = { session: true };
     deps = { events, pi: { events }, getCtx: () => ctx, manager };
   });

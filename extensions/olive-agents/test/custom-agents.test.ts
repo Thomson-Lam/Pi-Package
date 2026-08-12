@@ -106,8 +106,6 @@ tools: read, grep, find
 model: anthropic/claude-opus-4-6
 thinking: high
 max_turns: 30
-persist_session: true
-session_dir: .seams/pi-sessions/seam-plan-reviewer
 prompt_mode: replace
 inherit_context: true
 run_in_background: true
@@ -126,8 +124,6 @@ You are a security auditor.`);
     expect(agent.model).toBe("anthropic/claude-opus-4-6");
     expect(agent.thinking).toBe("high");
     expect(agent.maxTurns).toBe(30);
-    expect(agent.persistSession).toBe(true);
-    expect(agent.sessionDir).toBe(".seams/pi-sessions/seam-plan-reviewer");
     expect(agent.promptMode).toBe("replace");
     expect(agent.inheritContext).toBe(true);
     expect(agent.runInBackground).toBe(true);
@@ -152,8 +148,6 @@ Just a prompt.`);
     expect(agent.model).toBeUndefined();
     expect(agent.thinking).toBeUndefined();
     expect(agent.maxTurns).toBeUndefined();
-    expect(agent.persistSession).toBeUndefined();
-    expect(agent.sessionDir).toBeUndefined();
     expect(agent.promptMode).toBe("replace");
     expect(agent.inheritContext).toBeUndefined();
     expect(agent.runInBackground).toBeUndefined();
@@ -439,11 +433,11 @@ Real.`);
   });
 
   it("allows agents with names matching defaults (overrides them)", () => {
-    writeAgent("Explore", `---
-description: Custom Explore
+    writeAgent("Review", `---
+description: Custom Review
 ---
 
-Custom explore agent.`);
+Custom review agent.`);
     writeAgent("custom", `---
 description: Custom Agent
 ---
@@ -451,8 +445,8 @@ description: Custom Agent
 Should be loaded.`);
 
     const result = loadCustomAgents(tmpDir);
-    expect(result.has("Explore")).toBe(true);
-    expect(result.get("Explore")!.description).toBe("Custom Explore");
+    expect(result.has("Review")).toBe(true);
+    expect(result.get("Review")!.description).toBe("Custom Review");
     expect(result.has("custom")).toBe(true);
   });
 

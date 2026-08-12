@@ -3,7 +3,7 @@ import { existsSync, mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
-import { cleanupWorktree, createWorktree, pruneWorktrees } from "../src/worktree.js";
+import { checkpointWorktree, cleanupWorktree, createWorktree, pruneWorktrees, releaseWorktree } from "../src/worktree.js";
 
 /**
  * Helper: create a temporary git repo with an initial commit.
@@ -99,6 +99,22 @@ describe("worktree", () => {
       // Cleanup
       try { execFileSync("git", ["worktree", "remove", "--force", wt1!.path], { cwd: repoDir, stdio: "pipe" }); } catch { /* ignore */ }
       try { execFileSync("git", ["worktree", "remove", "--force", wt2!.path], { cwd: repoDir, stdio: "pipe" }); } catch { /* ignore */ }
+    });
+  });
+
+  describe("retained worktree", () => {
+    it("checkpoints a branch without deleting the worktree, then releases it explicitly", () => {
+      const wt = createWorktree(repoDir, "retained-1")!;
+      writeFileSync(join(wt.path, "follow-up.txt"), "first run");
+      const result = checkpointWorktree(repoDir, wt, "first run");
+      expect(result.hasChanges).toBe(true);
+      expect(result.branch).toBe("pi-agent-retained-1");
+      expect(existsSync(wt.path)).toBe(true);
+      writeFileSync(join(wt.path, "follow-up.txt"), "second run");
+      expect(checkpointWorktree(repoDir, wt, "follow up").hasChanges).toBe(true);
+      expect(existsSync(wt.path)).toBe(true);
+      releaseWorktree(repoDir, wt);
+      expect(existsSync(wt.path)).toBe(false);
     });
   });
 

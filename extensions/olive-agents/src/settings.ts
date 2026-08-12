@@ -1,11 +1,21 @@
-// Persistence for pi-subagents operational settings.
-// - Global:  ~/.pi/agent/subagents.json (via getAgentDir()) — manual defaults, never written here
-// - Project: <cwd>/.pi/subagents.json — written by /agents → Settings; overrides global on load
+// Persistence for olive-agents operational settings.
+//
+// Files are named olive-agents.json so it is clear which extension owns them:
+//   - Global:  ~/.pi/agent/olive-agents.json (via getAgentDir()) — the default
+//     write target; machine-level defaults.
+//   - Project: <cwd>/.pi/olive-agents.json — optional per-project override.
+//
+// Write policy ("write where you already are, else global"): the project file
+// is written only when one already exists (new name, or the legacy
+// subagents.json name); otherwise writes go to the global file, so a settings
+// change never creates a `.pi/` artifact in the cwd. Legacy `subagents.json`
+// files are still READ as a fallback and are removed (migrated) on write.
 
-import { existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { homedir } from "node:os";
 import { dirname, join } from "node:path";
 import { getAgentDir } from "@earendil-works/pi-coding-agent";
-import type { JoinMode, WidgetMode } from "./types.js";
+import type { JoinMode } from "./types.js";
 
 export interface SubagentsSettings {
   maxConcurrent?: number;
@@ -17,15 +27,6 @@ export interface SubagentsSettings {
   defaultMaxTurns?: number;
   graceTurns?: number;
   defaultJoinMode?: JoinMode;
-  /**
-   * Master switch for the schedule subagent feature. Defaults to `true`.
-   * When `false`: the `Agent` tool's `schedule` param + its guideline are
-   * stripped from the tool spec at registration (zero LLM-context cost), the
-   * scheduler doesn't bind to the session, and the `/agents → Scheduled jobs`
-   * menu entry is hidden. Schema-level removal applies at extension load
-   * (next pi session); runtime menu/runtime-fire short-circuit is immediate.
-   */
-  schedulingEnabled?: boolean;
   /**
    * When true, the effective model of each subagent spawn is validated
    * against `enabledModels` from pi's settings — both global
@@ -49,8 +50,8 @@ export interface SubagentsSettings {
    */
   scopeModels?: boolean;
   /**
-   * When true, the three built-in default agents (general-purpose, Explore, Plan)
-   * are not registered at startup. User-defined agents from project/global custom
+   * When true, the built-in default agents (general-purpose and Review) are not
+   * registered at startup. User-defined agents from project/global custom
    * agent dirs are completely unaffected — only the hardcoded DEFAULT_AGENTS are suppressed.
    * Defaults to false.
    */
@@ -67,22 +68,11 @@ export interface SubagentsSettings {
    */
   toolDescriptionMode?: ToolDescriptionMode;
   /**
-   * Whether the Claude Code-style FleetView (the navigable main+subagents list
-   * rendered below the editor) is shown. Defaults to `true`. Pure-UI: when off,
-   * the list never registers and the global key handler never captures input.
+   * When true, an agent's tmux window is closed as soon as its run settles
+   * (unless the user is actively viewing that window). The Pi session file is
+   * unaffected — the window can be reopened on demand. Defaults to true.
    */
-  fleetView?: boolean;
-  /**
-   * Display mode for the persistent above-editor agent widget:
-   *   - `all`: show every agent (foreground + background).
-   *   - `background`: hide foreground agents — they already render inline as the
-   *     Agent tool result, so the widget would otherwise double-render them
-   *     (#118); everything else (background, queued, scheduled, RPC) stays.
-   *   - `off`: hide the widget entirely.
-   * Defaults to `background`. Pure-UI and applied live (toggling refreshes the
-   * widget).
-   */
-  widgetMode?: WidgetMode;
+  closeWindowOnComplete?: boolean;
 }
 
 export type ToolDescriptionMode = "full" | "compact" | "custom";
@@ -93,12 +83,10 @@ export interface SettingsAppliers {
   setDefaultMaxTurns: (n: number) => void;
   setGraceTurns: (n: number) => void;
   setDefaultJoinMode: (mode: JoinMode) => void;
-  setSchedulingEnabled: (b: boolean) => void;
   setScopeModels: (enabled: boolean) => void;
   setDisableDefaultAgents: (b: boolean) => void;
   setToolDescriptionMode: (mode: ToolDescriptionMode) => void;
-  setFleetView: (b: boolean) => void;
-  setWidgetMode: (mode: WidgetMode) => void;
+  setCloseWindowOnComplete: (b: boolean) => void;
 }
 
 /** Emit callback — a subset of `pi.events.emit` to keep helpers testable. */
@@ -106,7 +94,6 @@ export type SettingsEmit = (event: string, payload: unknown) => void;
 
 const VALID_JOIN_MODES: ReadonlySet<string> = new Set<JoinMode>(["async", "group", "smart"]);
 const VALID_TOOL_DESCRIPTION_MODES: ReadonlySet<string> = new Set<ToolDescriptionMode>(["full", "compact", "custom"]);
-const VALID_WIDGET_MODES: ReadonlySet<string> = new Set<WidgetMode>(["all", "background", "off"]);
 
 // Sanity ceilings — prevent hand-edited configs from asking for values that
 // make no operational sense (e.g. 1e6 concurrent subagents). Permissive enough
@@ -144,9 +131,6 @@ function sanitize(raw: unknown): SubagentsSettings {
   if (typeof r.defaultJoinMode === "string" && VALID_JOIN_MODES.has(r.defaultJoinMode)) {
     out.defaultJoinMode = r.defaultJoinMode as JoinMode;
   }
-  if (typeof r.schedulingEnabled === "boolean") {
-    out.schedulingEnabled = r.schedulingEnabled;
-  }
   if (typeof r.scopeModels === "boolean") {
     out.scopeModels = r.scopeModels;
   }
@@ -156,21 +140,52 @@ function sanitize(raw: unknown): SubagentsSettings {
   if (typeof r.toolDescriptionMode === "string" && VALID_TOOL_DESCRIPTION_MODES.has(r.toolDescriptionMode)) {
     out.toolDescriptionMode = r.toolDescriptionMode as ToolDescriptionMode;
   }
-  if (typeof r.fleetView === "boolean") {
-    out.fleetView = r.fleetView;
-  }
-  if (typeof r.widgetMode === "string" && VALID_WIDGET_MODES.has(r.widgetMode)) {
-    out.widgetMode = r.widgetMode as WidgetMode;
+  if (typeof r.closeWindowOnComplete === "boolean") {
+    out.closeWindowOnComplete = r.closeWindowOnComplete;
   }
   return out;
 }
 
+/** Current settings file name. Legacy name is subagents.json (read-only fallback). */
+const SETTINGS_FILE = "olive-agents.json";
+const LEGACY_SETTINGS_FILE = "subagents.json";
+
+export type SettingsScope = "global" | "project";
+
+export interface SaveResult {
+  persisted: boolean;
+  scope: SettingsScope;
+  path: string;
+}
+
 function globalPath(): string {
-  return join(getAgentDir(), "subagents.json");
+  return join(getAgentDir(), SETTINGS_FILE);
+}
+
+function legacyGlobalPath(): string {
+  return join(getAgentDir(), LEGACY_SETTINGS_FILE);
 }
 
 function projectPath(cwd: string): string {
-  return join(cwd, ".pi", "subagents.json");
+  return join(cwd, ".pi", SETTINGS_FILE);
+}
+
+function legacyProjectPath(cwd: string): string {
+  return join(cwd, ".pi", LEGACY_SETTINGS_FILE);
+}
+
+/**
+ * Resolve the write target: the project file when one already exists (new or
+ * legacy name), otherwise the global file. This is the "write where you already
+ * are, else global" policy — a settings change never creates a `.pi/` artifact
+ * in the cwd unless the user already has a project override.
+ */
+export function writeTarget(cwd: string = process.cwd()): { path: string; scope: SettingsScope; legacyPath?: string } {
+  const project = projectPath(cwd);
+  const legacyProject = legacyProjectPath(cwd);
+  if (existsSync(project)) return { path: project, scope: "project" };
+  if (existsSync(legacyProject)) return { path: project, scope: "project", legacyPath: legacyProject };
+  return { path: globalPath(), scope: "global", legacyPath: existsSync(legacyGlobalPath()) ? legacyGlobalPath() : undefined };
 }
 
 /**
@@ -189,24 +204,35 @@ function readSettingsFile(path: string): SubagentsSettings {
   }
 }
 
-/** Load merged settings: global provides defaults, project overrides. */
+/** Load merged settings: global provides defaults, project overrides. New name
+ *  wins over the legacy subagents.json fallback within each scope (later wins). */
 export function loadSettings(cwd: string = process.cwd()): SubagentsSettings {
-  return { ...readSettingsFile(globalPath()), ...readSettingsFile(projectPath(cwd)) };
+  return {
+    ...readSettingsFile(legacyGlobalPath()),
+    ...readSettingsFile(globalPath()),
+    ...readSettingsFile(legacyProjectPath(cwd)),
+    ...readSettingsFile(projectPath(cwd)),
+  };
 }
 
 /**
- * Write project-local settings. Global is never touched from code.
- * Returns `true` on success, `false` if the write (or mkdir) failed so the
- * caller can surface a warning — persistence isn't fatal but isn't silent.
+ * Persist settings to the write target (project when one exists, else global)
+ * under the olive-agents.json name. A legacy subagents.json file in the same
+ * scope is removed after a successful write so reads cannot fall back to
+ * stale values. Returns the outcome plus the resolved scope/path so the UI
+ * can say where it wrote.
  */
-export function saveSettings(s: SubagentsSettings, cwd: string = process.cwd()): boolean {
-  const path = projectPath(cwd);
+export function saveSettings(s: SubagentsSettings, cwd: string = process.cwd()): SaveResult {
+  const { path, scope, legacyPath } = writeTarget(cwd);
   try {
     mkdirSync(dirname(path), { recursive: true });
     writeFileSync(path, JSON.stringify(s, null, 2), "utf-8");
-    return true;
+    if (legacyPath && legacyPath !== path) {
+      try { rmSync(legacyPath, { force: true }); } catch { /* best effort */ }
+    }
+    return { persisted: true, scope, path };
   } catch {
-    return false;
+    return { persisted: false, scope, path };
   }
 }
 
@@ -216,26 +242,27 @@ export function applySettings(s: SubagentsSettings, appliers: SettingsAppliers):
   if (typeof s.defaultMaxTurns === "number") appliers.setDefaultMaxTurns(s.defaultMaxTurns);
   if (typeof s.graceTurns === "number") appliers.setGraceTurns(s.graceTurns);
   if (s.defaultJoinMode) appliers.setDefaultJoinMode(s.defaultJoinMode);
-  if (typeof s.schedulingEnabled === "boolean") appliers.setSchedulingEnabled(s.schedulingEnabled);
   if (typeof s.scopeModels === "boolean") appliers.setScopeModels(s.scopeModels);
   if (typeof s.disableDefaultAgents === "boolean") appliers.setDisableDefaultAgents(s.disableDefaultAgents);
   if (s.toolDescriptionMode) appliers.setToolDescriptionMode(s.toolDescriptionMode);
-  if (typeof s.fleetView === "boolean") appliers.setFleetView(s.fleetView);
-  if (s.widgetMode) appliers.setWidgetMode(s.widgetMode);
+  if (typeof s.closeWindowOnComplete === "boolean") appliers.setCloseWindowOnComplete(s.closeWindowOnComplete);
 }
 
 /**
  * Format the user-facing toast for a settings mutation. Pure function —
  * routes the success/failure of `saveSettings` into the right message + level
  * so the UI layer (index.ts) stays a thin wire between input and notification.
+ * Success messages name the file that was written (global or project scope).
  */
 export function persistToastFor(
   successMsg: string,
-  persisted: boolean,
+  result: SaveResult,
 ): { message: string; level: "info" | "warning" } {
-  return persisted
-    ? { message: successMsg, level: "info" }
-    : { message: `${successMsg} (session only; failed to persist)`, level: "warning" };
+  if (!result.persisted) {
+    return { message: `${successMsg} (session only; failed to persist)`, level: "warning" };
+  }
+  const short = result.path.replace(homedir(), "~");
+  return { message: `${successMsg} (saved to ${short})`, level: "info" };
 }
 
 /**
@@ -266,7 +293,7 @@ export function saveAndEmitChanged(
   emit: SettingsEmit,
   cwd: string = process.cwd(),
 ): { message: string; level: "info" | "warning" } {
-  const persisted = saveSettings(snapshot, cwd);
-  emit("subagents:settings_changed", { settings: snapshot, persisted });
-  return persistToastFor(successMsg, persisted);
+  const result = saveSettings(snapshot, cwd);
+  emit("subagents:settings_changed", { settings: snapshot, persisted: result.persisted, scope: result.scope, path: result.path });
+  return persistToastFor(successMsg, result);
 }

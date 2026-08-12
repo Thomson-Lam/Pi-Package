@@ -80,6 +80,35 @@ export function createWorktree(cwd: string, agentId: string): WorktreeInfo | und
   }
 }
 
+/** Checkpoint a retained worktree without removing it, so the same child
+ * session can be resumed safely. */
+export function checkpointWorktree(
+  cwd: string,
+  worktree: WorktreeInfo,
+  agentDescription: string,
+): WorktreeCleanupResult {
+  if (!existsSync(worktree.path)) return { hasChanges: false };
+  try {
+    const status = execFileSync("git", ["status", "--porcelain"], { cwd: worktree.path, stdio: "pipe", timeout: 10000 }).toString().trim();
+    if (status) {
+      execFileSync("git", ["add", "-A"], { cwd: worktree.path, stdio: "pipe", timeout: 10000 });
+      execFileSync("git", ["commit", "--no-verify", "-m", `pi-agent: ${agentDescription.slice(0, 200)}`], { cwd: worktree.path, stdio: "pipe", timeout: 10000 });
+    }
+    const head = execFileSync("git", ["rev-parse", "HEAD"], { cwd: worktree.path, stdio: "pipe", timeout: 5000 }).toString().trim();
+    if (head === worktree.baseSha) return { hasChanges: false, path: worktree.path };
+    execFileSync("git", ["branch", "-f", worktree.branch, head], { cwd, stdio: "pipe", timeout: 5000 });
+    worktree.baseSha = head;
+    return { hasChanges: true, branch: worktree.branch, path: worktree.path };
+  } catch {
+    return { hasChanges: false, path: worktree.path };
+  }
+}
+
+/** Release a retained worktree when its AgentRecord is removed. */
+export function releaseWorktree(cwd: string, worktree: WorktreeInfo): void {
+  if (existsSync(worktree.path)) removeWorktree(cwd, worktree.path);
+}
+
 /**
  * Clean up a worktree after agent completion.
  * - If no changes: remove worktree entirely.

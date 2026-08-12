@@ -20,7 +20,7 @@ Purpose: Help agents locate extension entry points, supporting modules, skills, 
 - `extensions/muon/skills.ts`, `resources.ts`, and `skill-dump.ts` — skill profile control, resource discovery, and universal skill export.
 - `extensions/muon/skillsets/` — bundled Ponytail and standalone skills; each skill's `SKILL.md` is its source of truth. Retired Engineering and Foundation resources are archived under `extensions/muon/archive/`.
 - `extensions/muon/tests/smoke.mjs` — Muon smoke coverage.
-- `extensions/olive-agents/index.ts` — registers human-approved `Agent`, result, steering, agent-management, and scheduling flows; `src/approval.ts` owns the mandatory per-launch review while the remaining `src/` modules provide the reused subagent runtime, sessions, transcripts, and UI.
+- `extensions/olive-agents/index.ts` — registers human-approved `Agent`, result, steering, and agent-management flows; `src/approval.ts` owns mandatory per-launch review, `src/agent-manager.ts` owns child agent lifecycle state (tmux windows + filesystem mailbox), `src/child-host.mjs` boots each agent as a native Pi session in its own tmux window, and `src/ui/` provides the passive fleet overview and Alt+A session picker.
 - `extensions/pi-telescope/index.ts` — registers Telescope commands, shortcut, providers, and fuzzy `@` file completion.
 - `extensions/pi-telescope/telescope.ts`, `scoring.ts`, and `frecency.ts` — finder UI, query scoring, and ranking history; `providers/` contains files, branches, log, sessions, skills, and commands sources.
 - `extensions/plan-mode/index.ts` — initializes plan storage/state, prompt injection, tool guardrails, attachment freshness notifications, and `plan_diff`.

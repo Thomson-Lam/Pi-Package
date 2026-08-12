@@ -1,9 +1,12 @@
 /**
- * types.ts — Type definitions for the subagent system.
+ * types.ts — Type definitions for the agent-session system.
+ *
+ * Agents now run as native Pi sessions in their own tmux windows (see
+ * REVIEW-UX-SPEC.md and AGENTS.md). The parent coordinates via a filesystem
+ * mailbox; it no longer owns an in-process AgentSession.
  */
 
 import type { ModelThinkingLevel } from "@earendil-works/pi-ai";
-import type { AgentSession } from "@earendil-works/pi-coding-agent";
 import type { LifetimeUsage } from "./usage.js";
 
 export type ThinkingLevel = ModelThinkingLevel;
@@ -11,8 +14,8 @@ export type ThinkingLevel = ModelThinkingLevel;
 /** Agent type: any string name (built-in defaults or user-defined). */
 export type SubagentType = string;
 
-/** Names of the three embedded default agents. */
-export const DEFAULT_AGENT_NAMES = ["general-purpose", "Explore", "Plan"] as const;
+/** Names of the embedded default agents. */
+export const DEFAULT_AGENT_NAMES = ["general-purpose", "Review"] as const;
 
 /** Memory scope for persistent agent memory. */
 export type MemoryScope = "user" | "project" | "local";
@@ -41,10 +44,6 @@ export interface AgentConfig {
   model?: string;
   thinking?: ThinkingLevel;
   maxTurns?: number;
-  /** Persist this subagent as a normal pi session instead of keeping it in memory only. */
-  persistSession?: boolean;
-  /** Optional session directory used when persistSession is true. Omitted = pi's normal session location. */
-  sessionDir?: string;
   systemPrompt: string;
   promptMode: "replace" | "append";
   /** Default for spawn: fork parent conversation. undefined = caller decides. */
@@ -68,13 +67,68 @@ export interface AgentConfig {
 export type JoinMode = 'async' | 'group' | 'smart';
 
 /**
- * Display mode for the persistent above-editor agent widget.
- * - `all`: show every agent (foreground + background).
- * - `background`: hide foreground agents (they already render inline as the
- *   Agent tool result, #118); show background/queued/scheduled/RPC.
- * - `off`: hide the widget entirely.
+ * Fully serializable launch specification handed to child-host.mjs. No
+ * functions, no Model objects, no secrets — the child resolves authentication
+ * through its own credential store.
  */
-export type WidgetMode = 'all' | 'background' | 'off';
+export interface AgentLaunchSpec {
+  version: 1;
+  agent: {
+    id: string;
+    type: string;
+    displayName: string;
+    description: string;
+  };
+  session: {
+    id: string;
+    name: string;
+    parentFile?: string;
+    /** Session directory for the child file; absent = pi's default for the child cwd. */
+    sessionDir?: string;
+    /** When set, the child OPENS this existing session file instead of creating a new one. */
+    openFile?: string;
+  };
+  runtime: {
+    cwd: string;
+    packageDir: string;
+    model: { provider: string; id: string };
+    thinking?: ThinkingLevel;
+    tools: string[];
+    noExtensions: boolean;
+    extensionPaths: string[];
+    noSkills: boolean;
+    systemPrompt: string;
+  };
+  run: {
+    prompt: string;
+    maxTurns?: number;
+    graceTurns: number;
+  };
+  bridge: {
+    mailboxDir: string;
+  };
+}
+
+/** Persistent Pi session identity of a child agent session. */
+export interface AgentSessionIdentity {
+  sessionId: string;
+  /** JSONL session file, once the child reports ready. */
+  sessionFile?: string;
+  /** Display name shown in /resume and the session selector. */
+  sessionName: string;
+  /** Parent session file the child is nested under (may be absent for ephemeral parents). */
+  parentSessionFile?: string;
+}
+
+/** tmux window hosting a child agent session. */
+export interface AgentWindowInfo {
+  /** Stable tmux window id (e.g. "@2") — never the mutable numeric index. */
+  id: string;
+  /** Numeric window index at creation time (display only). */
+  index: number;
+  name: string;
+  state: "starting" | "alive" | "closed";
+}
 
 export interface AgentRecord {
   id: string;
@@ -86,46 +140,79 @@ export interface AgentRecord {
   toolUses: number;
   startedAt: number;
   completedAt?: number;
-  session?: AgentSession;
-  abortController?: AbortController;
-  promise?: Promise<string>;
-  groupId?: string;
-  joinMode?: JoinMode;
   /** Set when result was already consumed via get_subagent_result — suppresses completion notification. */
   resultConsumed?: boolean;
-  /** Steering messages queued before the session was ready. */
+  /** Batch grouping (smart join mode) — write-only bookkeeping. */
+  joinMode?: JoinMode;
+  /** Group id when the agent was part of a parallel batch. */
+  groupId?: string;
+  /** Steering messages queued before the child session was ready. */
   pendingSteers?: string[];
+  /** Original task submitted when this child was created. */
+  originalPrompt: string;
+  /** Most recently approved task/follow-up. */
+  effectivePrompt: string;
+  /** Last meaningful lifecycle or activity update. */
+  updatedAt: number;
+  /** Human review timestamp. Terminal records without this need review. */
+  reviewedAt?: number;
+  /** Number of runs in this retained child session, including the initial run. */
+  runNumber: number;
+  /** Current run turn count. */
+  turnCount: number;
+  /** Effective current run turn limit. */
+  maxTurns?: number;
+  /** Latest meaningful tool activity for the compact overview. */
+  latestActivity?: {
+    toolName: string;
+    action: string;
+    target?: string;
+    startedAt: number;
+    completedAt?: number;
+  };
+  /** Human-readable terminal reason, separate from provider errors. */
+  stopReason?: string;
+  /** Acknowledgement state for steering or follow-up commands. */
+  feedback?: {
+    kind: "steer" | "follow-up";
+    text: string;
+    state: "queued" | "delivered" | "awaiting-run" | "failed";
+    updatedAt: number;
+    error?: string;
+  };
   /** Worktree info if the agent is running in an isolated worktree. */
-  worktree?: { path: string; branch: string; baseSha: string; workPath: string };
+  worktree?: { path: string; branch: string; baseSha: string; workPath: string; repoCwd?: string };
   /** Worktree cleanup result after agent completion. */
   worktreeResult?: { hasChanges: boolean; branch?: string };
   /** The tool_use_id from the original Agent tool call. */
   toolCallId?: string;
-  /** Path to the streaming output transcript file. */
-  outputFile?: string;
-  /** Cleanup function for the output file stream subscription. */
-  outputCleanup?: () => void;
   /**
-   * Lifetime usage breakdown, accumulated via `message_end` events. Survives
-   * compaction. Total = input + output + cacheWrite (cacheRead deliberately
-   * excluded — see issue #38). Initialized to zeros at spawn.
+   * Lifetime usage breakdown, accumulated via run_settled usage reports.
+   * Total = input + output + cacheWrite. Initialized to zeros at spawn.
    */
   lifetimeUsage: LifetimeUsage;
-  /** Number of times this agent's session has compacted. Initialized to 0 at spawn. */
+  /** Number of times this agent's session has compacted. */
   compactionCount: number;
   /**
    * Whether this agent was spawned to run in the background. Tri-state, set at
    * spawn from `SpawnOptions.isBackground`: `true` = background, `false` =
    * foreground (has an inline Agent tool-result surface), `undefined` = the
    * caller never declared it (e.g. a cross-extension RPC spawn, which is detached
-   * and has no inline surface). The widget's background-only filter keys off this
-   * — and excludes only explicit `false`, so `undefined` agents stay visible.
-   * Reliable across ALL spawn paths, unlike the UI-only `invocation` snapshot,
-   * which only the Agent-tool path populates.
+   * and has no inline surface).
    */
   isBackground?: boolean;
   /** Resolved spawn params, captured for UI display. Fixed at spawn time. */
   invocation?: AgentInvocation;
+  /** Persistent child Pi session identity (set once the child reports ready). */
+  childSession?: AgentSessionIdentity;
+  /** tmux window hosting the child (absent while concurrency-queued). */
+  window?: AgentWindowInfo;
+  /** Filesystem mailbox dir shared with the child process. */
+  mailboxDir?: string;
+  /** Path of the launch spec handed to the child (deleted by the child after reading). */
+  launchSpecPath?: string;
+  /** Retained launch spec — reused to reopen the session in a new window. */
+  launchSpec?: AgentLaunchSpec;
 }
 
 export interface AgentInvocation {
@@ -149,9 +236,11 @@ export interface NotificationDetails {
   maxTurns?: number;
   totalTokens: number;
   durationMs: number;
-  outputFile?: string;
+  sessionFile?: string;
   error?: string;
   resultPreview: string;
+  /** Notification kind — steering notifications are not completions. */
+  kind?: "completion" | "human-steer";
   /** Additional agents in a group notification. */
   others?: NotificationDetails[];
 }
@@ -160,47 +249,4 @@ export interface EnvInfo {
   isGitRepo: boolean;
   branch: string;
   platform: string;
-}
-
-/**
- * A subagent spawn registered to fire on a schedule.
- *
- * Stored at `<cwd>/.pi/subagent-schedules/<sessionId>.json`. Session-scoped:
- * survives `/resume` but resets on `/new`, mirroring pi-chonky-tasks.
- */
-export interface ScheduledSubagent {
-  id: string;
-  /** Unique within store. Defaults to `description`. */
-  name: string;
-  description: string;
-  /** Raw user input — cron expr | "+10m" | ISO | "5m". */
-  schedule: string;
-  scheduleType: "cron" | "once" | "interval";
-  /** Computed at create time for interval/once. */
-  intervalMs?: number;
-
-  // spawn params (subset of Agent tool params; no inherit_context, no resume)
-  subagent_type: SubagentType;
-  prompt: string;
-  model?: string;
-  thinking?: ThinkingLevel;
-  max_turns?: number;
-  isolated?: boolean;
-  isolation?: IsolationMode;
-
-  // state
-  enabled: boolean;
-  /** ISO timestamp. */
-  createdAt: string;
-  lastRun?: string;
-  lastStatus?: "success" | "error" | "running";
-  /** Refreshed on every fire and on store load. */
-  nextRun?: string;
-  runCount: number;
-}
-
-export interface ScheduleStoreData {
-  /** For future migrations. */
-  version: 1;
-  jobs: ScheduledSubagent[];
 }

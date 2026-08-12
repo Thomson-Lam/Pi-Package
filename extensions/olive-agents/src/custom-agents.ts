@@ -18,7 +18,7 @@ import type { AgentConfig, MemoryScope, ThinkingLevel } from "./types.js";
  * Project-level agents override global ones with the same name. On a name clash
  * between the two project locations, .pi/agents wins — .pi stays the project
  * authority; .agents/agents is an additional read location.
- * Any name is allowed — names matching defaults (e.g. "Explore") override them.
+ * Any name is allowed — names matching defaults (e.g. "Review") override them.
  */
 export function loadCustomAgents(cwd: string): Map<string, AgentConfig> {
   const globalDir = join(getAgentDir(), "agents");
@@ -70,8 +70,6 @@ function loadFromDir(dir: string, agents: Map<string, AgentConfig>, source: "pro
       model: str(fm.model),
       thinking: str(fm.thinking) as ThinkingLevel | undefined,
       maxTurns: nonNegativeInt(fm.max_turns),
-      persistSession: fm.persist_session != null ? fm.persist_session === true : undefined,
-      sessionDir: str(fm.session_dir),
       systemPrompt: body.trim(),
       promptMode: fm.prompt_mode === "append" ? "append" : "replace",
       inheritContext: fm.inherit_context != null ? fm.inherit_context === true : undefined,

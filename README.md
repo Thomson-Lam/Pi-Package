@@ -28,7 +28,7 @@ pi install git:git@github.com:Thomson-Lam/Pi-Package.git@v0.1.0
 
 For local repo clone, clone the repo, point Pi to this local path using
 `pi install`, then run `npm install` in the cloned repo path. This project uses
-croner and zod under `olive-agents`.
+zod under `olive-agents`.
 
 Then restart Pi or run `/reload`.
 

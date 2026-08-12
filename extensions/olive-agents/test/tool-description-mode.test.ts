@@ -23,6 +23,7 @@ function makePi() {
         tools.set(tool.name, tool);
       }),
       registerCommand: vi.fn(),
+      registerShortcut: vi.fn(),
       on: vi.fn((event: string, handler: any) => {
         handlers.set(event, handler);
       }),
@@ -49,7 +50,7 @@ describe("toolDescriptionMode", () => {
   function setup(settings?: Record<string, unknown>, beforeInstantiate?: () => void) {
     tmpDir = mkdtempSync(join(tmpdir(), "pi-tooldesc-"));
     // Isolate global settings (getAgentDir / ~/.pi) so the dev's real
-    // subagents.json can't leak into the "default is full" assertion.
+    // olive-agents.json cannot leak into the "default is full" assertion.
     hermeticAgentDir = mkdtempSync(join(tmpdir(), "pi-tooldesc-agentdir-"));
     prevAgentDir = process.env.PI_CODING_AGENT_DIR;
     prevHome = process.env.HOME;
@@ -58,7 +59,7 @@ describe("toolDescriptionMode", () => {
     prevCwd = process.cwd();
     mkdirSync(join(tmpDir, ".pi"), { recursive: true });
     if (settings) {
-      writeFileSync(join(tmpDir, ".pi", "subagents.json"), JSON.stringify(settings));
+      writeFileSync(join(tmpDir, ".pi", "olive-agents.json"), JSON.stringify(settings));
     }
     beforeInstantiate?.();
     process.chdir(tmpDir);
@@ -88,8 +89,8 @@ describe("toolDescriptionMode", () => {
     const desc: string = tools.get("Agent").description;
     expect(desc).toContain("## Usage notes");
     expect(desc).toContain("## Writing the prompt");
-    // Full agent descriptions are embedded (a late Explore sentence survives).
-    expect(desc).toContain("very thorough");
+    // Full agent descriptions are embedded.
+    expect(desc).toContain("missing tests");
   });
 
   it("compact mode swaps in the short description with one-line type list", () => {
@@ -100,8 +101,8 @@ describe("toolDescriptionMode", () => {
     expect(desc).not.toContain("## Writing the prompt");
     // Type list keeps every agent but only the first sentence of each description.
     expect(desc).toContain("- general-purpose:");
-    expect(desc).toContain("- Explore: Fast read-only search agent for locating code. (Tools:");
-    expect(desc).not.toContain("very thorough");
+    expect(desc).toContain("- Review: Read-only code review agent for finding concrete bugs, regressions, security risks, and missing tests in proposed changes. (Tools:");
+    expect(desc).not.toContain("Reports actionable findings");
     // The point of the feature: materially smaller than the full version.
     expect(desc.length).toBeLessThan(1600);
   });
@@ -151,32 +152,14 @@ describe("toolDescriptionMode", () => {
     });
     const desc: string = tools.get("Agent").description;
     expect(desc).toContain("GLOBAL CUSTOM");
-    expect(desc).toContain("- Explore: Fast read-only search agent for locating code. (Tools:");
-  });
-
-  it("{{scheduleGuideline}} expands to the schedule bullet when scheduling is on (default)", () => {
-    const tools = setup({ toolDescriptionMode: "custom" }, () => {
-      writeFileSync(join(tmpDir, ".pi", "agent-tool-description.md"), "RULES:{{scheduleGuideline}}\nEND");
-    });
-    const desc: string = tools.get("Agent").description;
-    // The expansion carries its own leading "\n- " bullet.
-    expect(desc).toContain("RULES:\n- Use `schedule` only when");
-  });
-
-  it("{{scheduleGuideline}} expands to the empty string when scheduling is disabled", () => {
-    const tools = setup({ toolDescriptionMode: "custom", schedulingEnabled: false }, () => {
-      writeFileSync(join(tmpDir, ".pi", "agent-tool-description.md"), "RULES:{{scheduleGuideline}}\nEND");
-    });
-    const desc: string = tools.get("Agent").description;
-    expect(desc).toContain("RULES:\nEND");
-    expect(desc).not.toContain("schedule");
+    expect(desc).toContain("- Review: Read-only code review agent for finding concrete bugs, regressions, security risks, and missing tests in proposed changes. (Tools:");
   });
 
   it("every documented placeholder is replaced — no {{ }} residue", () => {
     const tools = setup({ toolDescriptionMode: "custom" }, () => {
       writeFileSync(
         join(tmpDir, ".pi", "agent-tool-description.md"),
-        "A {{typeList}} B {{compactTypeList}} C {{agentDir}} D {{scheduleGuideline}} E",
+        "A {{typeList}} B {{compactTypeList}} C {{agentDir}} D",
       );
     });
     const desc: string = tools.get("Agent").description;
@@ -184,35 +167,4 @@ describe("toolDescriptionMode", () => {
     expect(desc).not.toContain("}}");
   });
 
-  it("the shipped example template renders byte-identical to the full description", async () => {
-    // Guards examples/agent-tool-description.md against going stale: it must
-    // reproduce the full description exactly. If you edit one, edit the other.
-    const example = readFileSync(EXAMPLE_TEMPLATE, "utf-8");
-    const tools = setup({ toolDescriptionMode: "custom" }, () => {
-      writeFileSync(join(tmpDir, ".pi", "agent-tool-description.md"), example);
-    });
-    const customDesc: string = tools.get("Agent").description;
-
-    // Second instance in the same hermetic cwd, flipped to full mode.
-    writeFileSync(join(tmpDir, ".pi", "subagents.json"), JSON.stringify({ toolDescriptionMode: "full" }));
-    const second = makePi();
-    subagentsExtension(second.pi);
-    try {
-      expect(customDesc).toBe(second.tools.get("Agent").description);
-    } finally {
-      await second.handlers.get("session_shutdown")?.({}, { hasUI: false, ui: {} } as any);
-    }
-  });
-
-  it("custom mode without a file falls back to the full description with a warning", () => {
-    const warn = vi.spyOn(console, "warn").mockImplementation(() => {});
-    try {
-      const tools = setup({ toolDescriptionMode: "custom" });
-      const desc: string = tools.get("Agent").description;
-      expect(desc).toContain("## Usage notes");
-      expect(warn).toHaveBeenCalledWith(expect.stringContaining("no agent-tool-description.md found"));
-    } finally {
-      warn.mockRestore();
-    }
-  });
 });

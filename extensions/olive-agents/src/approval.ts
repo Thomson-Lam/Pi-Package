@@ -20,11 +20,11 @@ export interface ApprovalRequest {
   contextText?: string;
 }
 
-export interface ApprovedInvocation {
-  prompt: string;
-  model: Model<Api>;
-  thinking: ThinkingLevel;
-}
+export type ApprovalResult =
+  | { outcome: "launch"; prompt: string; model: Model<Api>; thinking: ThinkingLevel }
+  | { outcome: "feedback"; feedback: string }
+  | { outcome: "do-it-yourself"; prompt: string }
+  | { outcome: "cancel" };
 
 function modelId(model: Model<Api>): string {
   return `${model.provider}/${model.id}`;
@@ -60,30 +60,40 @@ export async function approveInvocation(
   ctx: ExtensionContext,
   registry: ModelRegistry,
   initial: ApprovalRequest,
-): Promise<ApprovedInvocation | undefined> {
-  if (ctx.mode !== "tui") return undefined;
+): Promise<ApprovalResult> {
+  if (ctx.mode !== "tui") return { outcome: "cancel" };
 
   const request = { ...initial };
 
   for (;;) {
     const actions = [
-      "Approve and launch",
-      "Edit task prompt",
+      "Launch",
+      "Edit child task",
       `Change model (${modelId(request.model)})`,
       `Change reasoning (${request.thinking})`,
+      "Feedback to main agent",
+      "Do it yourself",
     ];
     if (request.contextText) actions.push("View inherited context");
-    actions.push("Reject");
+    actions.push("Cancel");
 
     const action = await ctx.ui.select(buildSummary(request), actions);
-    if (!action || action === "Reject") return undefined;
-    if (action === "Approve and launch") {
-      return { prompt: request.prompt, model: request.model, thinking: request.thinking };
+    if (!action || action === "Cancel") return { outcome: "cancel" };
+    if (action === "Launch") {
+      return { outcome: "launch", prompt: request.prompt, model: request.model, thinking: request.thinking };
     }
-    if (action === "Edit task prompt") {
+    if (action === "Edit child task") {
       const prompt = await ctx.ui.editor("Edit subagent task prompt", request.prompt);
       if (prompt?.trim()) request.prompt = prompt;
       continue;
+    }
+    if (action === "Feedback to main agent") {
+      const feedback = await ctx.ui.editor("Feedback to the main agent", "");
+      if (feedback?.trim()) return { outcome: "feedback", feedback: feedback.trim() };
+      continue;
+    }
+    if (action === "Do it yourself") {
+      return { outcome: "do-it-yourself", prompt: request.prompt };
     }
     if (action.startsWith("Change model")) {
       const models = (registry.getAvailable?.() ?? registry.getAll()) as Model<Api>[];
