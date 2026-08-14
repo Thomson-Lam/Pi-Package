@@ -134,7 +134,7 @@ async function selectSubagentModel(
             ? "↑/↓ move  page up/down  enter apply  esc cancel search  ctrl+c cancel"
             : `j/k move  h/l page  / search  enter select  ${cancelHint}`,
         ));
-        return lines;
+        return lines.map((line) => truncateToWidth(line, width));
       },
       handleInput(data: string) {
         if (searchMode) {

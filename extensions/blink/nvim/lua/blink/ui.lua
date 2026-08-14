@@ -35,6 +35,17 @@ local function hunk_key(hunk)
   return string.format("%d:%d:%d:%d", hunk[1], hunk[2], hunk[3], hunk[4])
 end
 
+local function hunk_target_line(hunk, line_count)
+  local line = math.max(1, hunk[3])
+  local count = hunk[4]
+  if count > 0 and count < 20 then line = line + math.floor((count - 1) / 2) end
+  return math.max(1, math.min(line, line_count))
+end
+
+local function deletion_target_line(hunk, line_count)
+  return math.max(1, math.min(math.max(1, hunk[3]), line_count))
+end
+
 function UI.new(options)
   local self = setmetatable({}, UI)
   self.runtime_dir = assert(options.runtime_dir)
@@ -138,10 +149,26 @@ function UI:_install_keymaps(buf)
   vim.keymap.set("n", "[c", function() self:navigate_hunk(-1, vim.v.count1) end, vim.tbl_extend("force", map_options, { desc = "Blink previous change" }))
   vim.keymap.set("n", "]C", function() self:navigate_hunk_edge("last") end, vim.tbl_extend("force", map_options, { desc = "Blink last change" }))
   vim.keymap.set("n", "[C", function() self:navigate_hunk_edge("first") end, vim.tbl_extend("force", map_options, { desc = "Blink first change" }))
-  vim.keymap.set("n", "]n", function() self.send({ type = "navigate_global", payload = { delta = vim.v.count1 } }) end, vim.tbl_extend("force", map_options, { desc = "Blink next changed file" }))
-  vim.keymap.set("n", "[n", function() self.send({ type = "navigate_global", payload = { delta = -vim.v.count1 } }) end, vim.tbl_extend("force", map_options, { desc = "Blink previous changed file" }))
-  vim.keymap.set("n", "]N", function() self.send({ type = "navigate_edge", payload = { edge = "last" } }) end, vim.tbl_extend("force", map_options, { desc = "Blink latest changed file" }))
-  vim.keymap.set("n", "[N", function() self.send({ type = "navigate_edge", payload = { edge = "first" } }) end, vim.tbl_extend("force", map_options, { desc = "Blink first changed file" }))
+  vim.keymap.set("n", "]d", function() self:navigate_deletion(1, vim.v.count1) end, vim.tbl_extend("force", map_options, { desc = "Blink next deletion" }))
+  vim.keymap.set("n", "[d", function() self:navigate_deletion(-1, vim.v.count1) end, vim.tbl_extend("force", map_options, { desc = "Blink previous deletion" }))
+  vim.keymap.set("n", "]D", function() self:navigate_deletion_edge("last") end, vim.tbl_extend("force", map_options, { desc = "Blink last deletion" }))
+  vim.keymap.set("n", "[D", function() self:navigate_deletion_edge("first") end, vim.tbl_extend("force", map_options, { desc = "Blink first deletion" }))
+  vim.keymap.set("n", "]n", function()
+    self.send({ type = "navigate_global", payload = { delta = vim.v.count1 } })
+    self:show_change_list()
+  end, vim.tbl_extend("force", map_options, { desc = "Blink next changed file" }))
+  vim.keymap.set("n", "[n", function()
+    self.send({ type = "navigate_global", payload = { delta = -vim.v.count1 } })
+    self:show_change_list()
+  end, vim.tbl_extend("force", map_options, { desc = "Blink previous changed file" }))
+  vim.keymap.set("n", "]N", function()
+    self.send({ type = "navigate_edge", payload = { edge = "last" } })
+    self:show_change_list()
+  end, vim.tbl_extend("force", map_options, { desc = "Blink latest changed file" }))
+  vim.keymap.set("n", "[N", function()
+    self.send({ type = "navigate_edge", payload = { edge = "first" } })
+    self:show_change_list()
+  end, vim.tbl_extend("force", map_options, { desc = "Blink first changed file" }))
   vim.keymap.set("n", "<leader>bc", function() self:comment(current_item(), nil) end, vim.tbl_extend("force", map_options, { desc = "Blink comment" }))
   vim.keymap.set("x", "<leader>bc", function()
     local first, last = vim.fn.line("'<"), vim.fn.line("'>")
@@ -169,7 +196,7 @@ function UI:_install_keymaps(buf)
     end, vim.tbl_extend("force", map_options, { desc = "Blink abort agent" }))
   end
   vim.keymap.set("n", "<leader>bl", function() self.send({ type = "list_changes", payload = {} }) end, vim.tbl_extend("force", map_options, { desc = "Blink list changes" }))
-  vim.keymap.set("n", "<leader>h", function() self:toggle_change_list() end, vim.tbl_extend("force", map_options, { desc = "Blink toggle change panel" }))
+  vim.keymap.set("n", "]h", function() self:toggle_change_list() end, vim.tbl_extend("force", map_options, { desc = "Blink toggle change panel" }))
   vim.keymap.set("n", "?", function() self:help(current_item()) end, vim.tbl_extend("force", map_options, { desc = "Blink help" }))
 end
 
@@ -284,13 +311,19 @@ function UI:_close_change_list()
   self.list_win = nil
 end
 
+function UI:hide_change_list()
+  self.list_visible = false
+  self:_close_change_list()
+end
+
+function UI:show_change_list()
+  if #self.list_versions == 0 then return end
+  self.list_visible = true
+  self:update_change_list(self.list_versions, self.list_active_id)
+end
+
 function UI:toggle_change_list()
-  self.list_visible = not self.list_visible
-  if self.list_visible then
-    self:update_change_list(self.list_versions, self.list_active_id)
-  else
-    self:_close_change_list()
-  end
+  if self.list_visible then self:hide_change_list() else self:show_change_list() end
 end
 
 function UI:_snacks()
@@ -552,11 +585,12 @@ end
 function UI:_jump_to_hunk(buf, data, index)
   data.active_hunk = index
   self:render(buf)
-  local line = math.max(1, math.min(math.max(1, data.hunks[index][3]), vim.api.nvim_buf_line_count(buf)))
+  local line = hunk_target_line(data.hunks[index], vim.api.nvim_buf_line_count(buf))
   vim.api.nvim_win_set_cursor(0, { line, 0 })
 end
 
 function UI:navigate_hunk(delta, count)
+  self:hide_change_list()
   local buf = self.review_buf
   local data = buf and self.buffer_state[buf] or nil
   local hunks = data and data.hunks or {}
@@ -564,7 +598,7 @@ function UI:navigate_hunk(delta, count)
 
   local line_count = vim.api.nvim_buf_line_count(buf)
   local function anchor(index)
-    return math.max(1, math.min(math.max(1, hunks[index][3]), line_count))
+    return hunk_target_line(hunks[index], line_count)
   end
 
   local current = vim.api.nvim_win_get_cursor(0)[1]
@@ -583,11 +617,63 @@ function UI:navigate_hunk(delta, count)
 end
 
 function UI:navigate_hunk_edge(edge)
+  self:hide_change_list()
   local buf = self.review_buf
   local data = buf and self.buffer_state[buf] or nil
   local hunks = data and data.hunks or {}
   if #hunks == 0 then vim.notify("No Blink changes."); return end
   self:_jump_to_hunk(buf, data, edge == "first" and 1 or #hunks)
+end
+
+local function deletion_indexes(hunks)
+  local indexes = {}
+  for index, hunk in ipairs(hunks) do
+    if hunk[2] > 0 then table.insert(indexes, index) end
+  end
+  return indexes
+end
+
+function UI:_jump_to_deletion(buf, data, index)
+  data.active_hunk = index
+  self:render(buf)
+  local line = deletion_target_line(data.hunks[index], vim.api.nvim_buf_line_count(buf))
+  vim.api.nvim_win_set_cursor(0, { line, 0 })
+end
+
+function UI:navigate_deletion(delta, count)
+  self:hide_change_list()
+  local buf = self.review_buf
+  local data = buf and self.buffer_state[buf] or nil
+  local indexes = deletion_indexes(data and data.hunks or {})
+  if #indexes == 0 then vim.notify("No Blink deletions."); return end
+
+  local line_count = vim.api.nvim_buf_line_count(buf)
+  local current = vim.api.nvim_win_get_cursor(0)[1]
+  local direction = delta > 0 and 1 or -1
+  local target_position
+  if direction > 0 then
+    for position, index in ipairs(indexes) do
+      if deletion_target_line(data.hunks[index], line_count) > current then target_position = position; break end
+    end
+    target_position = target_position or 1
+  else
+    for position = #indexes, 1, -1 do
+      if deletion_target_line(data.hunks[indexes[position]], line_count) < current then target_position = position; break end
+    end
+    target_position = target_position or #indexes
+  end
+
+  target_position = ((target_position - 1 + direction * (math.max(1, count or 1) - 1)) % #indexes) + 1
+  self:_jump_to_deletion(buf, data, indexes[target_position])
+end
+
+function UI:navigate_deletion_edge(edge)
+  self:hide_change_list()
+  local buf = self.review_buf
+  local data = buf and self.buffer_state[buf] or nil
+  local indexes = deletion_indexes(data and data.hunks or {})
+  if #indexes == 0 then vim.notify("No Blink deletions."); return end
+  self:_jump_to_deletion(buf, data, edge == "first" and indexes[1] or indexes[#indexes])
 end
 
 function UI:comment(item, range)
@@ -627,7 +713,7 @@ function UI:help(item)
     and "<leader>bq dismiss/close"
     or "<leader>bq checkpoint/close, <leader>bQ close/retain"
   local mode = item.transactionId and "Slow" or "Blitz"
-  vim.notify("Blink " .. mode .. ": [c/]c hunks, [C/]C first/last hunk, [n/]n changed files (count supported), [N/]N first/latest changed file, <leader>bl list, <leader>h panel, " .. close_help)
+  vim.notify("Blink " .. mode .. ": [c/]c hunks, [C/]C first/last hunk, [d/]d deletions, [D/]D first/last deletion, [n/]n changed files (count supported), [N/]N first/latest changed file, <leader>bl list, ]h panel, " .. close_help)
 end
 
 function UI:evict(version_id)

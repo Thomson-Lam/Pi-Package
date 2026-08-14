@@ -1,5 +1,6 @@
 import type { Api, Model } from "@earendil-works/pi-ai";
 import type { ExtensionContext } from "@earendil-works/pi-coding-agent";
+import { visibleWidth } from "@earendil-works/pi-tui";
 import { describe, expect, it, vi } from "vitest";
 import { approveInvocation, availableThinkingLevels } from "../src/approval.js";
 
@@ -66,9 +67,11 @@ describe("subagent approval", () => {
       component.focused = true;
       const initialRender = component.render(100);
       expect(initialRender.filter((line: string) => line.includes("test/model-")).length).toBe(10);
+      for (const line of component.render(50)) expect(visibleWidth(line)).toBeLessThanOrEqual(50);
 
       component.handleInput("/");
       for (const char of "model-1[01]") component.handleInput(char);
+      for (const line of component.render(50)) expect(visibleWidth(line)).toBeLessThanOrEqual(50);
       component.handleInput("down");
       component.handleInput("up");
       expect(component.render(100).filter((line: string) => line.includes("test/model-")).length).toBe(2);

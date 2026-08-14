@@ -91,6 +91,72 @@ press("]C")
 eq(vim.api.nvim_win_get_cursor(0)[1], hunks[2][3], "]C moves to the last hunk")
 eq(review.buffer_state[buf].active_hunk, 2, "last-hunk navigation updates the counter")
 
+local function check_short_hunk_target(count, expected)
+  local path = tmp .. "/short-" .. count
+  local lines = {}
+  for line = 1, count do lines[line] = "line " .. line end
+  vim.fn.writefile(lines, path, "b")
+  review:show_version({
+    versionId = 700 + count,
+    fileId = "short-" .. count,
+    displayPath = "short-" .. count .. ".txt",
+    snapshotPath = path,
+    originKind = "absent",
+    firstChangedLine = 1,
+  })
+  press("]c")
+  eq(vim.api.nvim_win_get_cursor(0)[1], expected, count .. "-line hunk navigation target")
+end
+check_short_hunk_target(4, 2)
+check_short_hunk_target(19, 10)
+check_short_hunk_target(20, 1)
+local deletion_notice
+local notify_before_deletion = vim.notify
+vim.notify = function(message) deletion_notice = message end
+review:navigate_deletion(1, 1)
+vim.notify = notify_before_deletion
+eq(deletion_notice, "No Blink deletions.", "addition-only buffers report that no deletions exist")
+local short_data = review.buffer_state[buf]
+short_data.hunks = { { 1, 0, 1, 5 }, { 1, 0, 11, 5 } }
+review:_jump_to_hunk(buf, short_data, 1)
+review:navigate_hunk(-1, 1)
+eq(vim.api.nvim_win_get_cursor(0)[1], 13, "reverse navigation compares midpoint targets and reaches the previous hunk")
+
+local deletion_origin = tmp .. "/deletion-origin"
+local deletion_version = tmp .. "/deletion-version"
+vim.fn.writefile({ "A", "delete one", "B", "replace old 1", "replace old 2", "C", "D", "delete two", "E" }, deletion_origin, "b")
+vim.fn.writefile({ "A", "B", "replace new", "C", "added only", "D", "E" }, deletion_version, "b")
+review:show_version({
+  versionId = 800,
+  fileId = "deletions",
+  displayPath = "deletions.txt",
+  snapshotPath = deletion_version,
+  originKind = "file",
+  originSnapshotPath = deletion_origin,
+  firstChangedLine = 1,
+})
+local deletion_hunks = review:get_hunks(buf)
+eq(#deletion_hunks, 4, "deletion fixture includes deletion, replacement, addition, and another deletion hunk")
+eq(deletion_hunks[3][2], 0, "addition-only hunk has no deleted lines")
+press("]d")
+eq(vim.api.nvim_win_get_cursor(0)[1], 3, "]d reaches the next replacement hunk")
+eq(review.buffer_state[buf].active_hunk, 2, "]d selects the replacement hunk")
+press("]d")
+eq(vim.api.nvim_win_get_cursor(0)[1], 6, "]d skips addition-only hunks and reaches the final deletion")
+eq(review.buffer_state[buf].active_hunk, 4, "]d tracks the final deletion hunk")
+press("]d")
+eq(vim.api.nvim_win_get_cursor(0)[1], 1, "]d wraps to the first deletion")
+press("[d")
+eq(vim.api.nvim_win_get_cursor(0)[1], 6, "[d wraps to the last deletion")
+press("2[d")
+eq(vim.api.nvim_win_get_cursor(0)[1], 1, "counted [d navigates only deletion hunks")
+press("]D")
+eq(vim.api.nvim_win_get_cursor(0)[1], 6, "]D reaches the last deletion")
+press("[D")
+eq(vim.api.nvim_win_get_cursor(0)[1], 1, "[D reaches the first deletion")
+review:show_version(item)
+hunks = review:get_hunks(buf)
+
 local marks_before = #vim.api.nvim_buf_get_extmarks(buf, review.namespace, 0, -1, {})
 review:render(buf)
 local marks_after = #vim.api.nvim_buf_get_extmarks(buf, review.namespace, 0, -1, {})
@@ -132,6 +198,8 @@ for _, mark in ipairs(eof_marks) do
   if mark[4].virt_lines and mark[4].virt_lines_above == false then found_eof_deletion = true end
 end
 assert(found_eof_deletion, "EOF deletion must render after the final surviving line: hunks=" .. vim.inspect(review:get_hunks(eof_buf)) .. " marks=" .. vim.inspect(eof_marks))
+press("]d")
+eq(vim.api.nvim_win_get_cursor(0)[1], 1, "EOF deletion navigation stays on the final surviving line")
 
 local rogue = vim.api.nvim_create_buf(true, true)
 vim.api.nvim_buf_set_name(rogue, "blink://eof.txt@stale")
@@ -191,28 +259,44 @@ local descs = {}
 for _, map in ipairs(maps) do descs[map.lhs] = map.desc end
 local found = {}
 for _, desc in pairs(descs) do found[desc] = true end
-assert(found["Blink next change"] and found["Blink previous change"] and found["Blink first change"] and found["Blink last change"] and found["Blink next changed file"] and found["Blink previous changed file"] and found["Blink first changed file"] and found["Blink latest changed file"] and found["Blink list changes"] and found["Blink toggle change panel"] and found["Blink comment"] and found["Blink help"], "required described mappings missing: " .. vim.inspect(descs))
+assert(found["Blink next change"] and found["Blink previous change"] and found["Blink first change"] and found["Blink last change"] and found["Blink next deletion"] and found["Blink previous deletion"] and found["Blink first deletion"] and found["Blink last deletion"] and found["Blink next changed file"] and found["Blink previous changed file"] and found["Blink first changed file"] and found["Blink latest changed file"] and found["Blink list changes"] and found["Blink toggle change panel"] and found["Blink comment"] and found["Blink help"], "required described mappings missing: " .. vim.inspect(descs))
+eq(descs["]h"], "Blink toggle change panel", "]h owns the Blink panel mapping")
+assert(descs["<Space>h"] == nil and descs[" h"] == nil, "legacy <leader>h Blink mapping remains: " .. vim.inspect(descs))
 assert(found["Blink checkpoint and close"] and found["Blink close and retain history"], "Blitz close mappings missing: " .. vim.inspect(descs))
 local help_message
 local original_notify = vim.notify
 vim.notify = function(message) help_message = message end
 press("?")
 vim.notify = original_notify
-assert(help_message and help_message:match("%[c/%]c hunks") and help_message:match("%[C/%]C first/last hunk") and help_message:match("%[n/%]n changed files"), "Blink help omits current navigation: " .. tostring(help_message))
-vim.api.nvim_buf_call(buf, function()
-  vim.cmd("normal ]N")
-  vim.cmd("normal [N")
-end)
-eq(sent[#sent - 1], { type = "navigate_edge", payload = { edge = "last" } }, "]N dispatches latest edge action")
-eq(sent[#sent], { type = "navigate_edge", payload = { edge = "first" } }, "[N dispatches first edge action")
+assert(help_message and help_message:match("%[c/%]c hunks") and help_message:match("%[C/%]C first/last hunk") and help_message:match("%[d/%]d deletions") and help_message:match("%[D/%]D first/last deletion") and help_message:match("%[n/%]n changed files") and help_message:match("%]h panel"), "Blink help omits current navigation: " .. tostring(help_message))
 
 local panel_versions = {}
 for version_id = 1, 12 do
   table.insert(panel_versions, { versionId = version_id, displayPath = "file" .. version_id .. ".txt", unread = version_id > 6 })
 end
+review:hide_change_list()
+review.list_versions = {}
+review:show_change_list()
+eq(review.list_visible, false, "an empty change list does not arm the panel to open on a later update")
 review:update_change_list(panel_versions, 8)
-eq(review.list_visible, false, "change panel is hidden by default")
-eq(review.list_buf, nil, "hidden panel does not create a buffer")
+local file_navigation = {
+  { "]n", { type = "navigate_global", payload = { delta = 1 } } },
+  { "[n", { type = "navigate_global", payload = { delta = -1 } } },
+  { "]N", { type = "navigate_edge", payload = { edge = "last" } } },
+  { "[N", { type = "navigate_edge", payload = { edge = "first" } } },
+}
+for _, case in ipairs(file_navigation) do
+  review:hide_change_list()
+  press(case[1])
+  eq(sent[#sent], case[2], case[1] .. " dispatches its file navigation action")
+  eq(review.list_visible, true, case[1] .. " summons the change panel")
+  assert(review.list_buf and vim.api.nvim_buf_is_valid(review.list_buf), case[1] .. " renders the change panel")
+end
+
+review:hide_change_list()
+eq(review.list_visible, false, "change panel can be explicitly hidden")
+review:update_change_list(panel_versions, 8)
+eq(review.list_visible, false, "updating a hidden panel does not show it")
 review:toggle_change_list()
 eq(review.list_visible, true, "change panel can be shown")
 eq(vim.api.nvim_buf_line_count(review.list_buf), 9, "change panel shows seven items plus more indicators")
@@ -225,6 +309,12 @@ eq(review.list_visible, false, "incoming changes do not reopen a hidden panel")
 review:toggle_change_list()
 eq(review.list_visible, true, "change panel can be reopened")
 eq(vim.api.nvim_buf_line_count(review.list_buf), 8, "reopened panel restores seven items plus its more indicator")
+
+for _, keys in ipairs({ "]c", "[c", "]C", "[C", "]d", "[d", "]D", "[D" }) do
+  review:show_change_list()
+  press(keys)
+  eq(review.list_visible, false, keys .. " dismisses the change panel")
+end
 
 vim.bo[buf].readonly = false
 vim.bo[buf].modifiable = true
