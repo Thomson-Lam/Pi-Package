@@ -1115,10 +1115,10 @@ Terse command-style prompts produce shallow, generic work.
           contextLabel: "Existing subagent session (prior context retained)",
         }));
         if (resumeApproval.outcome === "feedback") {
-          return textResult(`Delegation declined. User feedback to the main agent: ${resumeApproval.feedback}`);
+          return textResult(`feedback: ${resumeApproval.feedback}`);
         }
         if (resumeApproval.outcome === "do-it-yourself") {
-          return textResult(`Do not delegate this proposal again. Perform this task yourself: ${resumeApproval.prompt}`);
+          return textResult("do it yourself");
         }
         if (resumeApproval.outcome === "cancel") {
           return textResult(`Subagent resume cancelled. Agent "${params.resume}" was not started.`);
@@ -1173,10 +1173,10 @@ Terse command-style prompts produce shallow, generic work.
         contextText: inheritContext ? buildParentContext(ctx) : undefined,
       }));
       if (approved.outcome === "feedback") {
-        return textResult(`Delegation declined. User feedback to the main agent: ${approved.feedback}`);
+        return textResult(`feedback: ${approved.feedback}`);
       }
       if (approved.outcome === "do-it-yourself") {
-        return textResult(`Do not delegate this proposal again. Perform this task yourself: ${approved.prompt}`);
+        return textResult("do it yourself");
       }
       if (approved.outcome === "cancel") {
         return textResult("Subagent launch cancelled. No session or worktree was created.");
@@ -1687,11 +1687,11 @@ Terse command-style prompts produce shallow, generic work.
     }));
 
     if (approved.outcome === "feedback") {
-      pi.sendUserMessage(`Feedback on the proposed delegation: ${approved.feedback}`);
+      pi.sendUserMessage(`feedback: ${approved.feedback}`);
       return;
     }
     if (approved.outcome === "do-it-yourself") {
-      pi.sendUserMessage(`Do not delegate this task. Perform it yourself: ${approved.prompt}`);
+      pi.sendUserMessage("do it yourself");
       return;
     }
     if (approved.outcome === "cancel") return;

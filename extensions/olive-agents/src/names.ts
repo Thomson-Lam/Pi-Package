@@ -1,12 +1,9 @@
 /**
- * names.ts — Generated names for agent windows, fleet rows, and /resume
- * sessions, in the style of Zellij's auto-generated pane names
- * (adjective-noun codenames). The word lists are Zellij's own (extracted from
- * zellij 0.44), so the generated names match what you'd see in zellij.
+ * names.ts — Zellij-style generated names for agent windows and fleet rows,
+ * plus timestamped, descriptive names for saved /resume sessions.
  *
- * Names are deterministic per agent id: the same agent always gets the same
- * codename, so a reopened window, its fleet row, and its /resume session all
- * stay consistent.
+ * Window and fleet names are deterministic per agent id so reopened windows
+ * and their fleet rows stay consistent.
  */
 
 /** Zellij's embedded adjective list (zellij 0.44). */
@@ -70,10 +67,7 @@ export function localTimeStamp(): string {
   return `${String(now.getHours()).padStart(2, "0")}:${String(now.getMinutes()).padStart(2, "0")}`;
 }
 
-/**
- * /resume session name: "<HH:MM> <codename>-<type>",
- * e.g. "21:20 unique-mouse-general" (timestamp generated with Node).
- */
-export function agentSessionName(seed: string, type: string): string {
-  return `${localTimeStamp()} ${agentWindowName(seed, type)}`;
+/** /resume session name, e.g. "21:20-[S]: inspect approval flickering". */
+export function agentSessionName(description: string): string {
+  return `${localTimeStamp()}-[S]: ${description}`;
 }

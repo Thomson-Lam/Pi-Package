@@ -409,7 +409,7 @@ export async function prepareAgentLaunch(input: PrepareLaunchInput): Promise<Pre
     },
     session: {
       id: input.childSessionId,
-      name: agentSessionName(input.agentId, type),
+      name: agentSessionName(input.description),
       parentFile: input.parentSessionFile,
       sessionDir: input.sessionDir,
     },

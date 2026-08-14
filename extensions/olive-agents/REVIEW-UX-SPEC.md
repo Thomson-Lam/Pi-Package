@@ -19,7 +19,7 @@ Agents are no longer in-process `AgentSession`s rendered inside the parent TUI. 
 
 ## Session model
 
-- Every agent launch creates a **persistent Pi session** (`SessionManager.create` with the parent's session file as `parentSession`), stored beside the parent session file, named `Agent · <type> · <description> · <agent-id>`.
+- Every agent launch creates a **persistent Pi session** (`SessionManager.create` with the parent's session file as `parentSession`), stored beside the parent session file, named `<HH:MM>-[S]: <description>`.
 - `/resume` in the parent (Threaded sort, empty search) renders agent sessions **nested under the parent**.
 - The child session header records the agent's actual cwd (worktree path when isolated); the file location stays with the parent so one `/resume` scope sees the whole tree.
 - Reopening a closed window attaches to the **existing** session file (`SessionManager.open`) — history is preserved.

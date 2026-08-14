@@ -173,10 +173,9 @@ describe("prepareAgentLaunch", () => {
     expect(spec.runtime.cwd).toBe(join(work, "wt"));
   });
 
-  it("builds a session name with timestamp, codename and type slug", async () => {
+  it("builds a timestamped subagent session name from the description", async () => {
     const { spec } = await prepare();
-    expect(spec.session.name).toMatch(/^\d{2}:\d{2} [a-z]+-[a-z]+-review$/);
-    expect(spec.session.name).not.toContain("review the diff"); // description no longer in the name
+    expect(spec.session.name).toMatch(/^\d{2}:\d{2}-\[S\]: review the diff$/);
   });
 
   it("reports unknown builtin tool names as warnings", async () => {

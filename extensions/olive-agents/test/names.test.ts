@@ -1,7 +1,4 @@
-/**
- * names.test.ts — Zellij-style generated names for agent windows, fleet rows,
- * and /resume sessions.
- */
+/** Names for agent windows, fleet rows, and saved /resume sessions. */
 
 import { describe, expect, it } from "vitest";
 import {
@@ -59,13 +56,12 @@ describe("agentWindowName", () => {
 });
 
 describe("agentSessionName", () => {
-  it("uses '<HH:MM> <codename>-<type>'", () => {
-    const name = agentSessionName("a1b2c3d4", "general-purpose");
-    expect(name).toMatch(/^\d{2}:\d{2} [a-z]+-[a-z]+-general$/);
-    expect(name).not.toContain("(using Node)");
+  it("uses '<HH:MM>-[S]: <description>'", () => {
+    expect(agentSessionName("inspect approval flickering"))
+      .toMatch(/^\d{2}:\d{2}-\[S\]: inspect approval flickering$/);
   });
   it("stays deterministic within the same minute", () => {
-    expect(agentSessionName("a1b2c3d4", "Review")).toBe(agentSessionName("a1b2c3d4", "Review"));
+    expect(agentSessionName("Review auth")).toBe(agentSessionName("Review auth"));
   });
 });
 

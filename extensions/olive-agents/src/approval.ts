@@ -1,5 +1,6 @@
 import { type Api, clampThinkingLevel, type Model } from "@earendil-works/pi-ai";
 import type { ExtensionContext } from "@earendil-works/pi-coding-agent";
+import { Input, truncateToWidth } from "@earendil-works/pi-tui";
 import type { ModelRegistry } from "./model-resolver.js";
 import type { IsolationMode, ThinkingLevel } from "./types.js";
 
@@ -34,6 +35,175 @@ export function availableThinkingLevels(model: Model<Api>): ThinkingLevel[] {
   return [...new Set(THINKING_LEVELS.map((level) => clampThinkingLevel(model, level) as ThinkingLevel))];
 }
 
+async function selectSubagentModel(
+  ctx: ExtensionContext,
+  models: Model<Api>[],
+  current: Model<Api>,
+): Promise<Model<Api> | undefined> {
+  const choices = [...new Map(models.map((model) => [modelId(model), model])).entries()]
+    .map(([id, model]) => ({ id, model }))
+    .sort((a, b) => a.id.localeCompare(b.id));
+
+  return ctx.ui.custom<Model<Api> | undefined>((tui, theme, keybindings, done) => {
+    const input = new Input();
+    let filtered = choices;
+    let selectedIndex = Math.max(0, choices.findIndex((choice) => choice.id === modelId(current)));
+    let searchMode = false;
+    let committedQuery = "";
+    let queryBeforeSearch = "";
+    let selectionBeforeSearch = choices[selectedIndex]?.id;
+    let regexError: string | undefined;
+    let focused = false;
+
+    const applyFilter = (query: string, preferredId?: string) => {
+      regexError = undefined;
+      if (!query) {
+        filtered = choices;
+      } else {
+        try {
+          const regex = new RegExp(query, "i");
+          filtered = choices.filter(({ id, model }) => regex.test(`${id} ${model.name ?? ""}`));
+        } catch (error) {
+          filtered = [];
+          regexError = error instanceof Error ? error.message : String(error);
+        }
+      }
+      const preferredIndex = preferredId ? filtered.findIndex((choice) => choice.id === preferredId) : -1;
+      selectedIndex = preferredIndex >= 0 ? preferredIndex : Math.min(selectedIndex, Math.max(0, filtered.length - 1));
+    };
+
+    const moveSelection = (delta: number) => {
+      if (filtered.length === 0) return;
+      selectedIndex = Math.max(0, Math.min(filtered.length - 1, selectedIndex + delta));
+    };
+
+    const component = {
+      get focused() { return focused; },
+      set focused(value: boolean) {
+        focused = value;
+        input.focused = value && searchMode;
+      },
+      invalidate() { input.invalidate(); },
+      render(width: number): string[] {
+        const lines = [theme.fg("accent", theme.bold("Select subagent model"))];
+        if (searchMode) {
+          lines.push(theme.fg("muted", "Regex search:"), ...input.render(width));
+        } else {
+          const filter = committedQuery ? `Filter: /${committedQuery}/` : "/ regex search";
+          lines.push(theme.fg("muted", filter), "");
+        }
+        lines.push("");
+
+        const maxVisible = 10;
+        const modelLines: string[] = [];
+        if (regexError) {
+          modelLines.push(theme.fg("error", truncateToWidth(`Invalid regex: ${regexError}`, width, "…")));
+        } else if (filtered.length === 0) {
+          modelLines.push(theme.fg("muted", "  No matching models"));
+        } else {
+          const start = Math.max(0, Math.min(
+            selectedIndex - Math.floor(maxVisible / 2),
+            filtered.length - maxVisible,
+          ));
+          const end = Math.min(start + maxVisible, filtered.length);
+          for (let i = start; i < end; i++) {
+            const choice = filtered[i]!;
+            const selected = i === selectedIndex;
+            const name = choice.model.name && choice.model.name !== choice.model.id
+              ? ` — ${choice.model.name}`
+              : "";
+            const line = `${selected ? "→ " : "  "}${choice.id}${name}`;
+            modelLines.push(truncateToWidth(
+              selected ? theme.fg("accent", line) : theme.fg("text", line),
+              width,
+              "…",
+            ));
+          }
+        }
+        while (modelLines.length < maxVisible) modelLines.push("");
+        lines.push(...modelLines);
+        lines.push(filtered.length > maxVisible
+          ? theme.fg("muted", `  (${selectedIndex + 1}/${filtered.length})`)
+          : "");
+
+        lines.push("");
+        const cancelHint = committedQuery ? "esc clear filter" : "esc cancel";
+        lines.push(theme.fg(
+          "dim",
+          searchMode
+            ? "↑/↓ move  page up/down  enter apply  esc cancel search  ctrl+c cancel"
+            : `j/k move  h/l page  / search  enter select  ${cancelHint}`,
+        ));
+        return lines;
+      },
+      handleInput(data: string) {
+        if (searchMode) {
+          if (data === "escape") {
+            searchMode = false;
+            input.setValue(queryBeforeSearch);
+            input.focused = false;
+            applyFilter(queryBeforeSearch, selectionBeforeSearch);
+          } else if (keybindings.matches(data, "tui.select.cancel")) {
+            done(undefined);
+            return;
+          } else if (keybindings.matches(data, "tui.select.up")) {
+            moveSelection(-1);
+          } else if (keybindings.matches(data, "tui.select.down")) {
+            moveSelection(1);
+          } else if (keybindings.matches(data, "tui.select.pageUp")) {
+            moveSelection(-10);
+          } else if (keybindings.matches(data, "tui.select.pageDown")) {
+            moveSelection(10);
+          } else if (keybindings.matches(data, "tui.input.submit")) {
+            if (!regexError) {
+              committedQuery = input.getValue();
+              searchMode = false;
+              input.focused = false;
+            }
+          } else {
+            const preferredId = filtered[selectedIndex]?.id;
+            input.handleInput(data);
+            applyFilter(input.getValue(), preferredId);
+          }
+          tui.requestRender();
+          return;
+        }
+
+        if (data === "/") {
+          searchMode = true;
+          queryBeforeSearch = committedQuery;
+          selectionBeforeSearch = filtered[selectedIndex]?.id;
+          input.setValue(committedQuery);
+          input.focused = focused;
+        } else if (data === "k" || keybindings.matches(data, "tui.select.up")) {
+          moveSelection(-1);
+        } else if (data === "j" || keybindings.matches(data, "tui.select.down")) {
+          moveSelection(1);
+        } else if (data === "h" || keybindings.matches(data, "tui.select.pageUp")) {
+          moveSelection(-10);
+        } else if (data === "l" || keybindings.matches(data, "tui.select.pageDown")) {
+          moveSelection(10);
+        } else if (keybindings.matches(data, "tui.select.confirm")) {
+          const selected = filtered[selectedIndex];
+          if (selected) done(selected.model);
+        } else if (keybindings.matches(data, "tui.select.cancel")) {
+          if (committedQuery) {
+            const preferredId = filtered[selectedIndex]?.id;
+            committedQuery = "";
+            input.setValue("");
+            applyFilter("", preferredId);
+          } else {
+            done(undefined);
+            return;
+          }
+        }
+        tui.requestRender();
+      },
+    };
+    return component;
+  });
+}
+
 function buildSummary(request: ApprovalRequest): string {
   const context = request.inheritContext
     ? "Inherited parent conversation snapshot (user/assistant text and summaries; tool results omitted)"
@@ -50,9 +220,6 @@ function buildSummary(request: ApprovalRequest): string {
     `System prompt: ${request.promptMode === "append" ? "inherits parent system prompt" : "standalone agent prompt"}`,
     `Extensions: ${request.isolated ? "isolated (built-ins only)" : "agent configuration"}`,
     `Filesystem: ${request.isolation === "worktree" ? "isolated worktree" : "parent working tree"}`,
-    "",
-    "Task prompt:",
-    request.prompt,
   ].join("\n");
 }
 
@@ -67,8 +234,8 @@ export async function approveInvocation(
 
   for (;;) {
     const actions = [
+      "Review / edit task prompt",
       "Launch",
-      "Edit child task",
       `Change model (${modelId(request.model)})`,
       `Change reasoning (${request.thinking})`,
       "Feedback to main agent",
@@ -82,8 +249,8 @@ export async function approveInvocation(
     if (action === "Launch") {
       return { outcome: "launch", prompt: request.prompt, model: request.model, thinking: request.thinking };
     }
-    if (action === "Edit child task") {
-      const prompt = await ctx.ui.editor("Edit subagent task prompt", request.prompt);
+    if (action === "Review / edit task prompt") {
+      const prompt = await ctx.ui.editor("Review subagent task prompt", request.prompt);
       if (prompt?.trim()) request.prompt = prompt;
       continue;
     }
@@ -97,9 +264,7 @@ export async function approveInvocation(
     }
     if (action.startsWith("Change model")) {
       const models = (registry.getAvailable?.() ?? registry.getAll()) as Model<Api>[];
-      const byId = new Map(models.map((model) => [modelId(model), model]));
-      const selected = await ctx.ui.select("Select subagent model", [...byId.keys()].sort());
-      const selectedModel = selected ? byId.get(selected) : undefined;
+      const selectedModel = await selectSubagentModel(ctx, models, request.model);
       if (selectedModel) {
         request.model = selectedModel;
         request.thinking = clampThinkingLevel(request.model, request.thinking) as ThinkingLevel;
