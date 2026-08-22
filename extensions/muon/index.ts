@@ -20,6 +20,19 @@ function applyMuonMode(state: MuonState, mode: MuonMode): void {
   state.config.enabledSkills = selectModeSkillIds(state.config.enabledSkills, mode);
 }
 
+/**
+ * Spec mode: replace only the role sentence of Pi's default system prompt
+ * with spec-prompt.md, keeping the tools list, tool note, guidelines,
+ * pi-docs block, skills catalog, and cwd intact. Sessions launched with a
+ * custom system prompt (--system-prompt / SYSTEM.md) have no "Available
+ * tools:" block; fall back to additive there.
+ */
+function buildSpecSystemPrompt(systemPrompt: string, specPrompt: string): string {
+  const toolsIndex = systemPrompt.indexOf("Available tools:");
+  if (toolsIndex < 0) return `${systemPrompt}\n\n${specPrompt}`;
+  return `${specPrompt}\n\n${systemPrompt.slice(toolsIndex)}`;
+}
+
 export default async function muonExtension(pi: ExtensionAPI): Promise<void> {
   let state: MuonState = createInitialMuonState();
 
@@ -67,6 +80,11 @@ export default async function muonExtension(pi: ExtensionAPI): Promise<void> {
     handler: async (_args, ctx) => newSessionInMode("spec", ctx),
   });
 
+  pi.registerCommand("off", {
+    description: "Start a new session in Pi's default (minimal) mode, without build or spec prompts",
+    handler: async (_args, ctx) => newSessionInMode("off", ctx),
+  });
+
   pi.on("session_start", async (event, ctx) => {
     state = restoreMuonState(ctx);
 
@@ -89,12 +107,13 @@ export default async function muonExtension(pi: ExtensionAPI): Promise<void> {
   pi.on("resources_discover", async () => discoverMuonResources(state));
 
   pi.on("before_agent_start", (event) => {
-    const prompt = state.config.mode === "build"
-      ? buildPrompt
-      : state.config.mode === "spec"
-        ? specPrompt
-        : undefined;
-    if (!prompt) return;
-    return { systemPrompt: `${event.systemPrompt}\n\n${prompt}` };
+    if (state.config.mode === "build") {
+      // Additive: Pi's default system prompt (role, tools, guidelines) plus the build prompt.
+      return { systemPrompt: `${event.systemPrompt}\n\n${buildPrompt}` };
+    }
+    if (state.config.mode === "spec") {
+      // Role-splice: spec prompt stands in for the default role line; everything else stays.
+      return { systemPrompt: buildSpecSystemPrompt(event.systemPrompt, specPrompt) };
+    }
   });
 }

@@ -8,7 +8,7 @@ import type { MuonPersistedState, MuonState } from "./types.js";
 export function createInitialMuonState(): MuonState {
   return {
     config: {
-      mode: "off",
+      mode: "build",
       enabledSkills: ["ponytail", "cindex", "github-issues-prs", "tmux-tdl-logs"],
     },
   };

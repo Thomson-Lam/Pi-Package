@@ -51,11 +51,11 @@ Muon governs interaction modes, skill profiles, and individual skills in Pi's co
 
 ## Modes
 
-Only one mode is active at a time. Activating Build enables Ponytail, cindex, github-issues-prs, and tmux-tdl-logs; each skill can then be toggled independently. Spec enables its YAGNI product-design scope guard, which is disabled when leaving Spec.
+Only one mode is active at a time. Build appends its implementation prompt to Pi's default system prompt (additive); Spec swaps only the default role sentence for its spec prompt and keeps Pi's tools, guidelines, and context; Minimal keeps it untouched. Activating Build enables Ponytail, cindex, github-issues-prs, and tmux-tdl-logs; each skill can then be toggled independently. Spec enables its YAGNI product-design scope guard, which is disabled when leaving Spec.
 
-- \`off\` — Minimal: Pi's default coding-agent system prompt.
-- \`build\` — implementation-focused system prompt plus Ponytail, cindex, github-issues-prs, and tmux-tdl-logs.
-- \`spec\` — product-specification system prompt plus the YAGNI product-design scope guard.
+- \`off\` — Minimal: Pi's default coding-agent system prompt only (no Muon prompt injection).
+- \`build\` — implementation-focused system prompt appended to Pi's default (additive) plus Ponytail, cindex, github-issues-prs, and tmux-tdl-logs.
+- \`spec\` — product-specification system prompt in place of the default role, with Pi's tools, guidelines, and context intact, plus the YAGNI product-design scope guard.
 
 Skills and profiles can be toggled independently through \`/muon skills\`.
 
@@ -142,9 +142,9 @@ async function pickMuonAction(ctx: ExtensionCommandContext): Promise<MuonAction 
 
 async function showMuonModePicker(ctx: ExtensionCommandContext, current: MuonMode): Promise<MuonMode | undefined> {
   const selected = await selectModal(ctx, `Muon mode (current: ${current})`, [
-    { value: "off", label: "Minimal", description: "Default Pi coding-agent system prompt" },
-    { value: "build", label: "Build", description: "Implementation prompt with default Muon skills" },
-    { value: "spec", label: "Spec", description: "Product-specification prompt with YAGNI scope guard" },
+    { value: "off", label: "Minimal", description: "Default Pi coding-agent system prompt only" },
+    { value: "build", label: "Build", description: "Implementation prompt appended to Pi default (additive), with default Muon skills" },
+    { value: "spec", label: "Spec", description: "Spec prompt in place of the default role, with Pi's tools/guidelines/context intact, YAGNI scope guard" },
   ]);
   return selected && isMuonMode(selected) ? selected : undefined;
 }

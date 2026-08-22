@@ -1,13 +1,14 @@
 import type { ExtensionContext } from "@earendil-works/pi-coding-agent";
 
 /**
- * Muon build-mode glue for /cb.
+ * Build-mode glue for /cb.
  *
  * The new session must carry the same `muon-state` custom entry that Muon's
  * own `/build` command writes (`newSessionInMode("build")`): config with
  * mode "build" and the build-synced skill bundle. Muon's session_start then
- * restores that state and its before_agent_start appends the build prompt —
- * ctx never touches the prompt text itself.
+ * restores that state and its before_agent_start appends the build prompt to
+ * Pi's default system prompt (additive) — ctx never touches the prompt text
+ * itself.
  *
  * Muon modules are loaded dynamically so that a missing or broken Muon
  * extension degrades to `undefined` instead of breaking the ctx extension.

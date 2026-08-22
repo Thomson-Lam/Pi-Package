@@ -12,15 +12,15 @@ Muon is the control surface for interaction modes and discoverable skills in thi
 /muon mode      # interactive picker
 ```
 
-Only one mode is active at a time:
+Only one mode is active at a time. Build appends `modes/build-prompt.md` to Pi's default system prompt (additive); Spec swaps the default role sentence for `modes/spec-prompt.md` and keeps Pi's tools, guidelines, and context; Minimal keeps it untouched.
 
 | Mode | System prompt | Synchronized skill bundle |
 |---|---|---|
-| `off` | Minimal: Pi's default coding-agent prompt | none |
-| `build` | `modes/build-prompt.md` | Ponytail, cindex, github-issues-prs, and tmux-tdl-logs |
-| `spec` | `modes/spec-prompt.md` | `yagni-product-design` |
+| `off` | Minimal: Pi's default coding-agent prompt only | none |
+| `build` | `modes/build-prompt.md` appended to Pi's default (additive) | Ponytail, cindex, github-issues-prs, and tmux-tdl-logs |
+| `spec` | `modes/spec-prompt.md` in place of the default role, with Pi's tools, guidelines, and context intact | `yagni-product-design` |
 
-Activating Build enables Ponytail, cindex, github-issues-prs, and tmux-tdl-logs. They remain independently toggleable afterward. Activating Spec enables `yagni-product-design`; leaving Spec disables that mode-owned skill. The default mode is `off` with Ponytail, cindex, github-issues-prs, and tmux-tdl-logs enabled.
+Activating Build enables Ponytail, cindex, github-issues-prs, and tmux-tdl-logs. They remain independently toggleable afterward. Activating Spec enables `yagni-product-design`; leaving Spec disables that mode-owned skill. The default mode is `build` with Ponytail, cindex, github-issues-prs, and tmux-tdl-logs enabled; use `/off`, `/muon off`, or `--muon-mode off` to start in Minimal.
 
 Mode and skill selection are session-global configuration. Navigating conversation branches with `/tree` does not rewind them; change them explicitly through `/muon`.
 

@@ -122,7 +122,7 @@ assert.match(types, /mode: MuonMode/);
 assert.doesNotMatch(types, /MuonSkillset|skillset:/);
 
 const state = readFileSync(join(muonDir, "state.ts"), "utf8");
-assert.match(state, /mode: "off"/);
+assert.match(state, /mode: "build"/);
 assert.match(state, /enabledSkills: \["ponytail", "cindex", "github-issues-prs", "tmux-tdl-logs"\]/);
 assert.match(state, /restoreConfigFromEntries/);
 assert.match(state, /normalizeModeSkillIds/);
