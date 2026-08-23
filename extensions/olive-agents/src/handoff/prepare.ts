@@ -58,7 +58,7 @@ function leadId(path: string, symbol: string | undefined): string {
   return sha256Hex(`${path}:${symbol ?? ""}`).slice(0, 12);
 }
 
-/** Serialized-token estimate of a resolved packet (rationale + markers + leads). */
+/** Serialized-token estimate of a resolved packet (provenance, rationale, and leads). */
 function serializedEstimate(packet: Pick<PreparedContextHandoff, "snippets" | "recommendedFiles">): number {
   const temp: PreparedContextHandoff = {
     version: 1,

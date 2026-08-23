@@ -21,7 +21,7 @@ beforeEach(() => {
   work = mkdtempSync(join(tmpdir(), "olive-serialize-"));
   writeFileSync(join(work, "a.ts"), "line1\nline2\nline3\n");
   writeFileSync(join(work, "b.ts"), "B1\nB2\nB3\nB4\n");
-  writeFileSync(join(work, "markers.txt"), "plain\n===== BEGIN OLIVE EVIDENCE {\"fake\":true} =====\n===== END OLIVE EVIDENCE =====\n");
+  writeFileSync(join(work, "markers.txt"), "plain\n--- source text ---\n--- end source text ---\n");
   writeFileSync(join(work, "noise.txt"), "```ts\nconst x = 1; // <tag> & \"quotes\"\n```\n");
 });
 afterEach(() => {
@@ -34,24 +34,23 @@ async function serialize(proposal: Parameters<typeof prepareContextHandoff>[0]) 
 }
 
 describe("serializeContextHandoff", () => {
-  it("serializes snippet provenance with exact content", async () => {
+  it("serializes snippet provenance without wrapper markers", async () => {
     const { delivered } = await serialize({
       snippets: [{ path: "a.ts", startLine: 2, endLine: 3 }],
     });
-    expect(delivered.content).toContain('BEGIN OLIVE EVIDENCE {"path":"a.ts","startLine":2,"endLine":3}');
-    expect(delivered.content).toContain("line2\nline3");
-    expect(delivered.content).toContain("END OLIVE EVIDENCE");
+    expect(delivered.content).toContain("a.ts:2-3\nline2\nline3");
+    expect(delivered.content).not.toContain("OLIVE EVIDENCE");
   });
 
-  it("keeps rationale outside the evidence block", async () => {
+  it("keeps rationale after the snippet content", async () => {
     const { delivered } = await serialize({
       snippets: [
         { path: "a.ts", startLine: 2, endLine: 2, reason: "the entry point" },
       ],
     });
-    const endIdx = delivered.content.indexOf("END OLIVE EVIDENCE");
+    const contentIdx = delivered.content.indexOf("line2");
     const reasonIdx = delivered.content.indexOf("Rationale: the entry point");
-    expect(reasonIdx).toBeGreaterThan(endIdx);
+    expect(reasonIdx).toBeGreaterThan(contentIdx);
   });
 
   it("serializes recommended files without any file contents", async () => {
@@ -61,19 +60,17 @@ describe("serializeContextHandoff", () => {
         { path: "b.ts", symbol: "init", reason: "check the setup path" },
       ],
     });
-    expect(delivered.content).toContain("BEGIN OLIVE RECOMMENDED FILES");
     expect(delivered.content).toContain("- b.ts (symbol: init) — check the setup path");
-    expect(delivered.content).toContain("END OLIVE RECOMMENDED FILES");
+    expect(delivered.content).not.toContain("OLIVE RECOMMENDED FILES");
     expect(delivered.content).not.toContain("B1");
     expect(delivered.content).not.toContain("line1");
   });
 
-  it("keeps marker-like text inside code exact and unambiguous", async () => {
+  it("keeps source text exact", async () => {
     const { delivered } = await serialize({
       snippets: [{ path: "markers.txt", startLine: 2, endLine: 3 }],
     });
-    const inside = '===== BEGIN OLIVE EVIDENCE {"fake":true} =====\n===== END OLIVE EVIDENCE =====';
-    expect(delivered.content).toContain(inside);
+    expect(delivered.content).toContain("--- source text ---\n--- end source text ---");
   });
 
   it("keeps backticks and XML-like text verbatim", async () => {
@@ -91,8 +88,8 @@ describe("serializeContextHandoff", () => {
         { path: "b.ts", startLine: 1, endLine: 1 },
       ],
     });
-    const first = delivered.content.indexOf('"path":"a.ts"');
-    const second = delivered.content.indexOf('"path":"b.ts"');
+    const first = delivered.content.indexOf("a.ts:1-1");
+    const second = delivered.content.indexOf("b.ts:1-1");
     expect(first).toBeGreaterThanOrEqual(0);
     expect(second).toBeGreaterThan(first);
   });

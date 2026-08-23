@@ -36,41 +36,28 @@ export interface DeliveredContextHandoff {
   };
 }
 
-const EVIDENCE_BEGIN = "===== BEGIN OLIVE EVIDENCE ";
-const MARKER_END = " =====\n";
-const EVIDENCE_END = "===== END OLIVE EVIDENCE =====\n";
-const LEADS_BEGIN = "===== BEGIN OLIVE RECOMMENDED FILES =====\n";
-const LEADS_END = "===== END OLIVE RECOMMENDED FILES =====\n";
 
-/** Render an approved packet. The packet is opaque text for the child — it is
- *  never parsed, so marker-like content inside excerpts cannot break binding. */
+/** Render an approved packet using only useful provenance and content. */
 export function serializeContextHandoff(
   prepared: PreparedContextHandoff,
 ): DeliveredContextHandoff {
   const parts: string[] = [];
   for (const snippet of prepared.snippets) {
-    const meta = JSON.stringify({
-      path: snippet.path,
-      startLine: snippet.startLine,
-      endLine: snippet.endLine,
-    });
     parts.push(
-      `${EVIDENCE_BEGIN}${meta}${MARKER_END}${snippet.content}\n${EVIDENCE_END}`,
+      `${snippet.path}:${snippet.startLine}-${snippet.endLine}\n${snippet.content}\n`,
     );
     if (snippet.reason) {
       parts.push(`Rationale: ${snippet.reason}\n`);
     }
   }
 
-  let leadsBlock = "";
   if (prepared.recommendedFiles.length > 0) {
     const leadLines = prepared.recommendedFiles.map((lead) => {
       const symbol = lead.symbol ? ` (symbol: ${lead.symbol})` : "";
       const reason = lead.reason ? ` — ${lead.reason}` : "";
       return `- ${lead.path}${symbol}${reason}`;
     });
-    leadsBlock = `${LEADS_BEGIN}${leadLines.join("\n")}\n${LEADS_END}`;
-    parts.push(leadsBlock);
+    parts.push(leadLines.join("\n"));
   }
 
   return {

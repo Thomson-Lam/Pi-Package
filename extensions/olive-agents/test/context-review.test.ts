@@ -73,11 +73,38 @@ describe("ContextReviewList — fixed height", () => {
 
   it("clamps the selection when the packet shrinks", () => {
     const list = new ContextReviewList(packet(50), noopActions(), themeStub);
-    list.handleInput("j");
-    list.handleInput("j");
-    list.handleInput("j");
-    list.handleInput("j");
+    list.handleInput("\u001b[B");
+    list.handleInput("\u001b[B");
+    list.handleInput("\u001b[B");
+    list.handleInput("\u001b[B");
     expect(list.getSelectedIndex()).toBe(4);
+  });
+
+  it("navigates with raw vim j/k like the approval selector", () => {
+    const list = new ContextReviewList(packet(50), noopActions(), themeStub);
+    list.handleInput("j");
+    list.handleInput("j");
+    expect(list.getSelectedIndex()).toBe(2);
+    list.handleInput("k");
+    expect(list.getSelectedIndex()).toBe(1);
+    // Clamps at the top.
+    list.handleInput("k");
+    list.handleInput("k");
+    expect(list.getSelectedIndex()).toBe(0);
+    // Enter still views through the SelectList, Esc still goes back.
+    let viewed: string | undefined;
+    let backed = false;
+    const actions = {
+      view: (id: string) => { viewed = id; },
+      remove: () => {},
+      back: () => { backed = true; },
+    };
+    const list2 = new ContextReviewList(packet(3), actions, themeStub);
+    list2.handleInput("\u001b[B");
+    list2.handleInput("\r");
+    expect(viewed).toBe("s2");
+    list2.handleInput("\u001b");
+    expect(backed).toBe(true);
   });
 });
 

@@ -194,7 +194,7 @@ describe("prepareAgentLaunch", () => {
 describe("constrained-context handoff propagation", () => {
   const cannedHandoff: DeliveredContextHandoff = {
     version: 1,
-    content: '===== BEGIN OLIVE EVIDENCE {"path":"a.ts","startLine":1,"endLine":2} =====\nx\n===== END OLIVE EVIDENCE =====\n',
+    content: "a.ts:1-2\nx\n",
     details: {
       snippets: [{ id: "s1", path: "a.ts", startLine: 1, endLine: 2, bytes: 3, estimatedTokens: 1, sourceHash: "h".repeat(64) }],
       recommendedFiles: [],
