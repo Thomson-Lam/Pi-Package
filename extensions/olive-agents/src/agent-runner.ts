@@ -25,6 +25,7 @@ import { buildMemoryBlock, buildReadOnlyMemoryBlock } from "./memory.js";
 import { buildAgentPrompt, type PromptExtras } from "./prompts.js";
 import { preloadSkills } from "./skill-loader.js";
 import { agentSessionName } from "./names.js";
+import type { DeliveredContextHandoff } from "./handoff/serialize.js";
 import type { AgentLaunchSpec, SubagentType, ThinkingLevel } from "./types.js";
 import { writeJsonAtomic } from "./event-mailbox.js";
 
@@ -198,6 +199,8 @@ export interface PrepareLaunchInput {
     cwd?: string;
     /** Parent config cwd when a custom cwd is in play. */
     configCwd?: string;
+    /** Approved constrained-context packet (immutable, already serialized). */
+    handoff?: DeliveredContextHandoff;
   };
   agentId: string;
   childSessionId: string;
@@ -400,7 +403,7 @@ export async function prepareAgentLaunch(input: PrepareLaunchInput): Promise<Pre
 
   const config2 = getConfig(type);
   const spec: AgentLaunchSpec = {
-    version: 1,
+    version: 2,
     agent: {
       id: input.agentId,
       type,
@@ -428,6 +431,7 @@ export async function prepareAgentLaunch(input: PrepareLaunchInput): Promise<Pre
       prompt: effectivePrompt,
       maxTurns: normalizeMaxTurns(options.maxTurns ?? getDefaultMaxTurns()),
       graceTurns: getGraceTurns(),
+      handoff: options.handoff,
     },
     bridge: { mailboxDir: input.mailboxDir },
   };

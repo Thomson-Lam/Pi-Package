@@ -30,6 +30,13 @@ import { resolveAgentInvocationConfig, resolveJoinMode } from "./invocation-conf
 import { type ModelRegistry, resolveModel } from "./model-resolver.js";
 import { applyAndEmitLoaded, type SubagentsSettings, saveAndEmitChanged, type ToolDescriptionMode } from "./settings.js";
 import { getStatusNote } from "./status-note.js";
+import {
+  isContextHandoffEmpty,
+  type ContextHandoffProposal,
+  type PreparedContextHandoff,
+} from "./handoff/types.js";
+import { prepareContextHandoff } from "./handoff/prepare.js";
+import { serializeContextHandoff } from "./handoff/serialize.js";
 import { type AgentConfig, type AgentInvocation, type AgentRecord, type JoinMode, type NotificationDetails, type SubagentType, type ThinkingLevel } from "./types.js";
 import {
   type AgentActivity,
@@ -765,7 +772,8 @@ Notes:
 - Parallel work: one message, multiple Agent calls, run_in_background: true on each. You are notified when background agents finish — never poll or sleep.
 - The result is not shown to the user — summarize it for them. Verify an agent's claimed code changes before reporting work done.
 - resume continues a previous agent by ID; steer_subagent messages a running one.
-- isolation: "worktree" runs the agent in an isolated git worktree; changes land on a branch.`;
+- isolation: "worktree" runs the agent in an isolated git worktree; changes land on a branch.
+- Context: fresh default · context.snippets = exact path + inclusive 1-indexed lines, small ranges · context.recommended_files = leads to explore, no contents · inherit_context only for conversation-dependent tasks (combining with context duplicates and needs approval). Never paste file text into the prompt.`;
 
   const fullAgentToolDescription = `Launch a new agent to handle complex, multi-step tasks autonomously. Each agent type has specific capabilities and tools available to it.
 
@@ -808,7 +816,16 @@ Provide clear, detailed prompts so the agent can work autonomously. Brief it lik
 
 Terse command-style prompts produce shallow, generic work.
 
-**Never delegate understanding.** Don't write "based on your findings, fix the bug" or "based on the research, implement it." Those phrases push synthesis onto the agent instead of doing it yourself. Write prompts that prove you understood: include file paths, line numbers, what specifically to change.`;
+**Never delegate understanding.** Don't write "based on your findings, fix the bug" or "based on the research, implement it." Those phrases push synthesis onto the agent instead of doing it yourself. Write prompts that prove you understood: include file paths, line numbers, what specifically to change.
+
+## Context handoff
+
+Prefer fresh context, then constrained context, then inherit_context.
+
+- Default: fresh child with a self-contained task.
+- Add constrained context only when selected evidence materially improves the brief: context.snippets take project-relative paths with inclusive 1-indexed line ranges — choose the smallest complete range that establishes the fact and avoid full-file ranges. context.recommended_files list files/symbols the child should investigate; they never preload contents.
+- Use inherit_context only when the parent conversation itself is source material. Combining inherit_context with a context packet duplicates content and requires explicit approval.
+- Never paste file contents into the prompt; put source text in context.snippets.`;
 
   // `toolDescriptionMode: "custom"` — user-authored description with live
   // dynamic parts. Project file wins over global; missing/empty falls back to
@@ -911,12 +928,35 @@ Terse command-style prompts produce shallow, generic work.
       ),
       inherit_context: Type.Optional(
         Type.Boolean({
-          description: "If true, fork parent conversation into the agent. Default: false (fresh context).",
+          description: "If true, fork a snapshot of the parent conversation into the agent's context (user/assistant text and summaries only; tool results omitted). Default: false (fresh context). Prefer context.snippets for coding evidence; combining inheritance with a context packet may duplicate content and requires explicit approval.",
         }),
       ),
       isolation: Type.Optional(
         Type.Literal("worktree", {
           description: 'Set to "worktree" to run the agent in an isolated git worktree. Changes are checkpointed to a branch and the worktree remains available for follow-ups.',
+        }),
+      ),
+      context: Type.Optional(
+        Type.Object({
+          snippets: Type.Optional(
+            Type.Array(
+              Type.Object({
+                path: Type.String({ description: "Project-relative source file path shown to the subagent." }),
+                start_line: Type.Integer({ minimum: 1, description: "First source line, 1-indexed and inclusive." }),
+                end_line: Type.Integer({ minimum: 1, description: "Last source line, 1-indexed and inclusive (must be >= start_line)." }),
+                reason: Type.Optional(Type.String({ maxLength: 200, description: "Why this excerpt matters (≤200 chars). Treated as your rationale, never verified fact." })),
+              }),
+            ),
+          ),
+          recommended_files: Type.Optional(
+            Type.Array(
+              Type.Object({
+                path: Type.String({ description: "Project-relative file or directory the subagent should consider exploring." }),
+                symbol: Type.Optional(Type.String({ maxLength: 120, description: "Optional symbol or search target within the source (≤120 chars)." })),
+                reason: Type.Optional(Type.String({ maxLength: 200, description: "Why the subagent may want to inspect this source (≤200 chars)." })),
+              }),
+            ),
+          ),
         }),
       ),
     }),
@@ -1159,6 +1199,40 @@ Terse command-style prompts produce shallow, generic work.
         );
       }
 
+      // ---- Constrained context: the agent proposes references, Olive
+      // resolves them into an exact, attributable, bounded packet BEFORE the
+      // human reviews. Invalid/oversized items surface as problems.
+      let initialHandoff: PreparedContextHandoff | undefined;
+      if (params.context !== undefined) {
+        const proposal: ContextHandoffProposal = {
+          snippets: params.context.snippets?.map((snippet: any) => ({
+            path: snippet.path,
+            startLine: snippet.start_line,
+            endLine: snippet.end_line,
+            reason: snippet.reason,
+          })),
+          recommendedFiles: params.context.recommended_files?.map((lead: any) => ({
+            path: lead.path,
+            symbol: lead.symbol,
+            reason: lead.reason,
+          })),
+        };
+        try {
+          const prepared = await prepareContextHandoff(proposal, {
+            sourceRoot: ctx.cwd,
+            // Decision #4: worktree launches approve the content the child will
+            // actually see (the seed commit), never dirty parent working-tree
+            // edits that the worktree will not contain.
+            sourceKind: isolation === "worktree" ? "git-head" : "working-tree",
+          });
+          if (!isContextHandoffEmpty(prepared)) initialHandoff = prepared;
+        } catch (error) {
+          return textResult(
+            `Context preparation failed: ${error instanceof Error ? error.message : String(error)}`,
+          );
+        }
+      }
+
       const approved = await withApproval(() => approveInvocation(ctx, ctx.modelRegistry, {
         agentType: subagentType,
         description: params.description,
@@ -1171,6 +1245,7 @@ Terse command-style prompts produce shallow, generic work.
         isolation,
         promptMode: customConfig?.promptMode ?? "append",
         contextText: inheritContext ? buildParentContext(ctx) : undefined,
+        handoff: initialHandoff,
       }));
       if (approved.outcome === "feedback") {
         return textResult(`feedback: ${approved.feedback}`);
@@ -1186,6 +1261,12 @@ Terse command-style prompts produce shallow, generic work.
       const effectiveModel = approved.model;
       model = effectiveModel;
       thinking = approved.thinking;
+      // Only the final APPROVED packet is serialized once and carried through
+      // the launch — never the original proposal, so removed or problem items
+      // cannot reach the child.
+      const deliveredHandoff = approved.handoff
+        ? serializeContextHandoff(approved.handoff)
+        : undefined;
       const parentModelId = ctx.model?.id;
       const effectiveModelId = effectiveModel.id;
       const modelName = effectiveModelId !== parentModelId
@@ -1226,6 +1307,7 @@ Terse command-style prompts produce shallow, generic work.
             thinkingLevel: thinking,
             isBackground: true,
             isolation,
+            handoff: deliveredHandoff,
             invocation: agentInvocation,
             ...bgCallbacks,
           });
@@ -1311,6 +1393,7 @@ Terse command-style prompts produce shallow, generic work.
           inheritContext,
           thinkingLevel: thinking,
           isolation,
+          handoff: deliveredHandoff,
           invocation: agentInvocation,
           signal,
           ...fgCallbacks,

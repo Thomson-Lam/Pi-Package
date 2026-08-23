@@ -3,6 +3,8 @@ import type { ExtensionContext } from "@earendil-works/pi-coding-agent";
 import { visibleWidth } from "@earendil-works/pi-tui";
 import { describe, expect, it, vi } from "vitest";
 import { approveInvocation, availableThinkingLevels } from "../src/approval.js";
+import { ContextReviewList } from "../src/ui/context-review.js";
+import type { PreparedContextHandoff } from "../src/handoff/types.js";
 
 const models = [
   { provider: "test", id: "basic", name: "Basic", reasoning: false },
@@ -108,5 +110,204 @@ describe("subagent approval", () => {
   it("keeps cancellation neutral and fails closed outside TUI", async () => {
     expect(await approveInvocation(ctx(["Cancel"]), registry, request)).toEqual({ outcome: "cancel" });
     expect(await approveInvocation({ mode: "print" } as ExtensionContext, registry, request)).toEqual({ outcome: "cancel" });
+  });
+});
+
+function packetFixture(overrides: Partial<PreparedContextHandoff> = {}): PreparedContextHandoff {
+  return {
+    version: 1,
+    snippets: [],
+    recommendedFiles: [],
+    snippetProblems: [],
+    leadProblems: [],
+    packetProblems: [],
+    warnings: [],
+    totalBytes: 0,
+    estimatedTokens: 0,
+    ...overrides,
+  };
+}
+
+function snippetFixture(overrides: Partial<PreparedContextHandoff["snippets"][number]> = {}): PreparedContextHandoff["snippets"][number] {
+  return {
+    id: "snippet-fixture",
+    path: "src/a.ts",
+    absolutePath: "/tmp/x/src/a.ts",
+    startLine: 1,
+    endLine: 2,
+    content: "line1\nline2",
+    bytes: 11,
+    estimatedTokens: 3,
+    sourceHash: "h".repeat(64),
+    ...overrides,
+  };
+}
+
+const themeStub = { bold: (text: string) => text, fg: (_color: string, text: string) => text };
+
+function reviewContextCtx(selections: string[], customChoices: Array<{ kind: string; id?: string }>) {
+  return {
+    mode: "tui",
+    ui: {
+      select: async () => selections.shift(),
+      editor: async () => "edited",
+      custom: async () => customChoices.shift(),
+    },
+  } as unknown as ExtensionContext;
+}
+
+describe("constrained-context approval", () => {
+  it("does not add a context action when no packet exists", async () => {
+    const select = vi.fn(async () => "Cancel");
+    await approveInvocation({ mode: "tui", ui: { select } } as unknown as ExtensionContext, registry, request);
+    const actions = select.mock.calls[0]![1] as string[];
+    expect(actions.some((action) => action.startsWith("Review context"))).toBe(false);
+  });
+
+  it("adds a Review context action with packet counts after the task-prompt action", async () => {
+    const handoff = packetFixture({
+      snippets: [snippetFixture()],
+      recommendedFiles: [{ id: "lead-1", path: "other.ts" }],
+      estimatedTokens: 6,
+      totalBytes: 20,
+    });
+    const select = vi.fn(async () => "Cancel");
+    await approveInvocation(
+      { mode: "tui", ui: { select, custom: vi.fn(async () => ({ kind: "back" })) } } as unknown as ExtensionContext,
+      registry,
+      { ...request, handoff },
+    );
+    const [title, actions] = select.mock.calls[0]!;
+    const list = actions as string[];
+    expect(list[0]).toBe("Review / edit task prompt");
+    expect(list[1]).toContain("Review context");
+    expect(list[1]).toContain("1 snippet");
+    expect(list[1]).toContain("1 lead");
+    expect(list[1]).toContain("est. 6 tokens");
+    expect(title).toContain("Context packet: 1 evidence snippet(s)");
+  });
+
+  it("launch returns the final approved packet", async () => {
+    const handoff = packetFixture({ snippets: [snippetFixture()] });
+    const result = await approveInvocation(ctx(["Launch"]), registry, { ...request, handoff });
+    expect(result.outcome).toBe("launch");
+    if (result.outcome === "launch") {
+      expect(result.handoff?.snippets).toHaveLength(1);
+      expect(result.prompt).toBe("task");
+    }
+  });
+
+  it("launch with context problems routes feedback with each failing reference", async () => {
+    const handoff = packetFixture({
+      snippetProblems: [{
+        id: "p1",
+        kind: "missing",
+        message: "File does not exist.",
+        snippet: { path: "nope.ts", startLine: 1, endLine: 1 },
+      }],
+      packetProblems: [{ id: "packet-too-large", kind: "too-large", message: "Packet exceeds 5 tokens." }],
+    });
+    const result = await approveInvocation(ctx(["Launch"]), registry, { ...request, handoff });
+    expect(result.outcome).toBe("feedback");
+    if (result.outcome === "feedback") {
+      expect(result.feedback).toContain("nope.ts:1-1");
+      expect(result.feedback).toContain("missing");
+      expect(result.feedback).toContain("too-large");
+    }
+  });
+
+  it("removing a problem item during review enables launch", async () => {
+    const handoff = packetFixture({
+      snippetProblems: [{
+        id: "p1",
+        kind: "missing",
+        message: "File does not exist.",
+        snippet: { path: "nope.ts", startLine: 1, endLine: 1 },
+      }],
+    });
+    const result = await approveInvocation(
+      reviewContextCtx(["Review context (…)", "Launch"], [{ kind: "remove", id: "p1" }, { kind: "back" }]),
+      registry,
+      { ...request, handoff },
+    );
+    expect(result.outcome).toBe("launch");
+  });
+
+  it("removing every item empties the packet and launches fresh", async () => {
+    const handoff = packetFixture({ snippets: [snippetFixture()] });
+    const result = await approveInvocation(
+      reviewContextCtx(["Review context (…)", "Launch"], [{ kind: "remove", id: "snippet-fixture" }, { kind: "back" }]),
+      registry,
+      { ...request, handoff },
+    );
+    expect(result.outcome).toBe("launch");
+    if (result.outcome === "launch") expect(result.handoff).toBeUndefined();
+  });
+
+  it("warns when inheritance and a packet are combined", async () => {
+    const handoff = packetFixture({ snippets: [snippetFixture()] });
+    const select = vi.fn(async () => "Cancel");
+    await approveInvocation(
+      { mode: "tui", ui: { select, custom: vi.fn(async () => ({ kind: "back" })) } } as unknown as ExtensionContext,
+      registry,
+      { ...request, inheritContext: true, handoff },
+    );
+    const title = select.mock.calls[0]![0] as string;
+    expect(title).toContain("may duplicate content");
+  });
+
+  it("keeps a large excerpt out of the top-level summary", async () => {
+    const handoff = packetFixture({
+      snippets: [snippetFixture({ content: "A".repeat(100_000), bytes: 100_000, estimatedTokens: 25_000 })],
+    });
+    const select = vi.fn(async () => "Cancel");
+    await approveInvocation(
+      { mode: "tui", ui: { select, custom: vi.fn(async () => ({ kind: "back" })) } } as unknown as ExtensionContext,
+      registry,
+      { ...request, handoff },
+    );
+    const title = select.mock.calls[0]![0] as string;
+    expect(title).not.toContain("AAAAA");
+  });
+
+  it("oversized packet problems must be resolved by removal, not bypassed", async () => {
+    const handoff = packetFixture({
+      snippets: [snippetFixture()],
+      packetProblems: [{ id: "packet-too-large", kind: "too-large", message: "Packet exceeds 5 tokens." }],
+    });
+    const result = await approveInvocation(ctx(["Launch"]), registry, { ...request, handoff });
+    expect(result.outcome).toBe("feedback");
+  });
+
+  it("opens the exact excerpt in the view-only editor from the review", async () => {
+    const handoff = packetFixture({ snippets: [snippetFixture()] });
+    const editorContent = vi.fn(async (_title: string, content: string) => content);
+    const customChoices = [{ kind: "view", id: "snippet-fixture" }, { kind: "back" }];
+    const selections = ["Review context (…)", "Cancel"];
+    const result = await approveInvocation(
+      {
+        mode: "tui",
+        ui: {
+          select: async () => selections.shift(),
+          editor: editorContent,
+          custom: async () => customChoices.shift(),
+        },
+      } as unknown as ExtensionContext,
+      registry,
+      { ...request, handoff },
+    );
+    expect(result).toEqual({ outcome: "cancel" });
+    expect(editorContent).toHaveBeenCalledWith(expect.stringContaining("src/a.ts:1-2"), "line1\nline2");
+  });
+
+  it("cancels the whole approval when the review returns cancelled (custom resolved undefined)", async () => {
+    const handoff = packetFixture({ snippets: [snippetFixture()] });
+    const result = await approveInvocation(
+      reviewContextCtx(["Review context (…)", "Launch"], [undefined as any]),
+      registry,
+      { ...request, handoff },
+    );
+    // The cancelled review must abort the approval — Launch must never run.
+    expect(result.outcome).toBe("cancel");
   });
 });

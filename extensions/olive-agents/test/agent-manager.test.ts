@@ -5,12 +5,15 @@
  * filesystem mailbox.
  */
 
-import { mkdtempSync, readdirSync, readFileSync, rmSync } from "node:fs";
+import { createHash } from "node:crypto";
+import { execFileSync } from "node:child_process";
+import { mkdirSync, mkdtempSync, readdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { AgentManager, type SpawnOptions } from "../src/agent-manager.js";
 import { emitChildEvent } from "../src/event-mailbox.js";
+import type { DeliveredContextHandoff } from "../src/handoff/serialize.js";
 import type { AgentLaunchSpec } from "../src/types.js";
 
 let work: string;
@@ -18,7 +21,7 @@ beforeEach(() => { work = mkdtempSync(join(tmpdir(), "olive-mgr-test-")); });
 afterEach(() => { rmSync(work, { recursive: true, force: true }); });
 
 const CANNED_SPEC: AgentLaunchSpec = {
-  version: 1,
+  version: 2,
   agent: { id: "x", type: "Review", displayName: "Review", description: "review auth" },
   session: { id: "child-session-id", name: "Agent · Review · review auth · xxxxxxxx", sessionDir: work },
   runtime: {
@@ -56,10 +59,16 @@ function makeDeps(options: { focusedWindow?: string } = {}) {
     if (key.startsWith("kill-window ")) return { code: 0, stdout: "", stderr: "", killed: false };
     return { code: 1, stdout: "", stderr: `unmocked ${key}`, killed: false };
   });
-  const prepare = vi.fn(async (input: any) => ({
-    spec: { ...CANNED_SPEC, bridge: { mailboxDir: input.mailboxDir }, session: { ...CANNED_SPEC.session, parentFile: input.parentSessionFile } },
-    warnings: [],
-  }));
+  const prepare = vi.fn(async (input: any) => {
+    const spec = {
+      ...CANNED_SPEC,
+      bridge: { mailboxDir: input.mailboxDir },
+      session: { ...CANNED_SPEC.session, parentFile: input.parentSessionFile },
+      runtime: { ...CANNED_SPEC.runtime, cwd: input.options?.cwd ?? CANNED_SPEC.runtime.cwd },
+      run: { ...CANNED_SPEC.run, handoff: input.options?.handoff },
+    };
+    return { spec, warnings: [] };
+  });
   const childCommand = vi.fn((specPath: string) => `node child.mjs ${specPath}`);
   return { tmux, prepare, childCommand };
 }
@@ -385,3 +394,149 @@ function readCommands(mailboxDir: string): any[] {
     return [];
   }
 }
+
+describe("constrained-context launch verification (decision B)", () => {
+  function cannedHandoff(sourceHash: string): DeliveredContextHandoff {
+    return {
+      version: 1,
+      content: "e",
+      details: {
+        snippets: [{ id: "s1", path: "a.txt", startLine: 1, endLine: 1, bytes: 3, estimatedTokens: 1, sourceHash }],
+        recommendedFiles: [],
+        totalBytes: 3,
+        estimatedTokens: 1,
+      },
+    };
+  }
+
+  function sha256(text: string): string {
+    return createHash("sha256").update(Buffer.from(text, "utf8")).digest("hex");
+  }
+
+  it("verifies the packet against the child cwd and opens the window on match", async () => {
+    const childDir = join(work, "wt");
+    mkdirSync(childDir, { recursive: true });
+    writeFileSync(join(childDir, "a.txt"), "abc");
+    const deps = makeDeps();
+    const manager = new AgentManager(undefined, 2, undefined, undefined, deps);
+    const ctx = makeCtx();
+    await spawnBg(manager, ctx, "review auth", { handoff: cannedHandoff(sha256("abc")), cwd: childDir });
+    expect(deps.tmux).toHaveBeenCalledWith(expect.arrayContaining(["new-window"]));
+    manager.dispose();
+  });
+
+  it("aborts before any child window when the child cwd copy differs from the approved content", async () => {
+    const childDir = join(work, "wt");
+    mkdirSync(childDir, { recursive: true });
+    writeFileSync(join(childDir, "a.txt"), "xyz");
+    const deps = makeDeps();
+    const manager = new AgentManager(undefined, 2, undefined, undefined, deps);
+    const ctx = makeCtx();
+    await expect(
+      spawnBg(manager, ctx, "review auth", { handoff: cannedHandoff(sha256("abc")), cwd: childDir }),
+    ).rejects.toThrow(/changed after it was reviewed/);
+    expect(deps.tmux).not.toHaveBeenCalledWith(expect.arrayContaining(["new-window"]));
+    expect(manager.listAgents()).toHaveLength(0);
+    manager.dispose();
+  });
+
+  it("aborts when the child cwd lacks the file entirely (worktree not seeded)", async () => {
+    const childDir = join(work, "wt");
+    mkdirSync(childDir, { recursive: true });
+    const deps = makeDeps();
+    const manager = new AgentManager(undefined, 2, undefined, undefined, deps);
+    const ctx = makeCtx();
+    await expect(
+      spawnBg(manager, ctx, "review auth", { handoff: cannedHandoff(sha256("abc")), cwd: childDir }),
+    ).rejects.toThrow(/no longer available/);
+    expect(deps.tmux).not.toHaveBeenCalledWith(expect.arrayContaining(["new-window"]));
+    manager.dispose();
+  });
+
+  it("skips verification when no packet was approved", async () => {
+    const deps = makeDeps();
+    const manager = new AgentManager(undefined, 2, undefined, undefined, deps);
+    const ctx = makeCtx();
+    const id = await spawnBg(manager, ctx, "plain");
+    expect(deps.tmux).toHaveBeenCalledWith(expect.arrayContaining(["new-window"]));
+    expect(manager.getRecord(id)!.launchSpec?.run.handoff).toBeUndefined();
+    manager.dispose();
+  });
+});
+
+describe("worktree isolation fixes (R02/R04)", () => {
+  let repo: string;
+  function initRepo(subdir?: string): string {
+    const dir = mkdtempSync(join(tmpdir(), "olive-mgr-wt-"));
+    execFileSync("git", ["init"], { cwd: dir, stdio: "pipe" });
+    execFileSync("git", ["config", "user.email", "t@t"], { cwd: dir, stdio: "pipe" });
+    execFileSync("git", ["config", "user.name", "T"], { cwd: dir, stdio: "pipe" });
+    writeFileSync(join(dir, "README.md"), "# repo\n");
+    execFileSync("git", ["add", "-A"], { cwd: dir, stdio: "pipe" });
+    execFileSync("git", ["commit", "-m", "init"], { cwd: dir, stdio: "pipe" });
+    if (subdir) {
+      mkdirSync(join(dir, subdir), { recursive: true });
+      writeFileSync(join(dir, subdir, "a.ts"), "sub\n");
+      execFileSync("git", ["add", "-A"], { cwd: dir, stdio: "pipe" });
+      execFileSync("git", ["commit", "-m", "sub"], { cwd: dir, stdio: "pipe" });
+    }
+    return dir;
+  }
+  function listWorktrees(dir: string): string[] {
+    try {
+      return execFileSync("git", ["worktree", "list", "--porcelain"], { cwd: dir, stdio: "pipe" })
+        .toString()
+        .split("worktree ")
+        .slice(1)
+        .map((s) => s.split("\n")[0]);
+    } catch {
+      return [];
+    }
+  }
+  afterEach(() => {
+    if (repo) {
+      try {
+        for (const wt of listWorktrees(repo)) {
+          execFileSync("git", ["worktree", "remove", "--force", wt], { cwd: repo, stdio: "pipe" });
+          rmSync(wt, { recursive: true, force: true });
+        }
+      } catch { /* ignore */ }
+      rmSync(repo, { recursive: true, force: true });
+    }
+  });
+
+  it("R02 — subdirectory cwd: child runs at the worktree subpath, not the worktree root", async () => {
+    repo = initRepo("packages/app");
+    const subdir = join(repo, "packages", "app");
+    const deps = makeDeps();
+    const manager = new AgentManager(undefined, 2, undefined, undefined, deps);
+    const ctx = makeCtx();
+    const id = await spawnBg(manager, ctx, "sub", { isolation: "worktree", cwd: subdir });
+    const spec = manager.getRecord(id)!.launchSpec!;
+    // Prepare received the subdir-scoped worktree cwd (wt.workPath), and the
+    // launch spec carries it into runtime.cwd.
+    const preparedCwd = deps.prepare.mock.calls[0]![0].options.cwd as string;
+    expect(preparedCwd).toBe(spec.runtime.cwd);
+    expect(spec.runtime.cwd.endsWith(join("packages", "app"))).toBe(true);
+    expect(spec.runtime.cwd).not.toBe(spec.runtime.cwd.slice(0, -"packages/app".length - 1));
+    // Cleanup: settle the record, then remove it (releases the worktree).
+    const rec = manager.getRecord(id)!;
+    emitChildEvent(rec.mailboxDir!, { type: "run_settled", runNumber: 1, status: "completed", result: "x", turnCount: 1, toolUses: 1 });
+    await sleep(250);
+    manager.removeTerminal(id);
+    manager.dispose();
+  });
+
+  it("R04 — a prepare failure after worktree creation releases the worktree and record", async () => {
+    repo = initRepo();
+    const deps = makeDeps();
+    deps.prepare.mockRejectedValue(new Error("boom"));
+    const manager = new AgentManager(undefined, 2, undefined, undefined, deps);
+    const ctx = makeCtx();
+    await expect(spawnBg(manager, ctx, "wtfail", { isolation: "worktree", cwd: repo })).rejects.toThrow("boom");
+    expect(manager.listAgents()).toHaveLength(0);
+    // Only the main worktree remains.
+    expect(listWorktrees(repo).length).toBe(1);
+    manager.dispose();
+  });
+});

@@ -19,6 +19,8 @@ import type { Model } from "@earendil-works/pi-ai";
 import type { ExtensionAPI, ExtensionContext } from "@earendil-works/pi-coding-agent";
 import { type AgentLaunchSpec, normalizeMaxTurns, prepareAgentLaunch, writeLaunchSpec } from "./agent-runner.js";
 import { type ChildEvent, ensureMailboxDir, removeMailboxDir, watchChildEvents, writeParentCommand } from "./event-mailbox.js";
+import { verifyHandoffFreshness } from "./handoff/freshness.js";
+import type { DeliveredContextHandoff } from "./handoff/serialize.js";
 import { createAgentWindow, execFromPi, focusWindow as focusTmuxWindow, killWindow as killTmuxWindow, shellQuote, windowAlive as tmuxWindowAlive, type TmuxExec } from "./tmux-window.js";
 import { agentSessionName, agentWindowName } from "./names.js";
 import { type AgentRecord, type IsolationMode, type SubagentType, type ThinkingLevel } from "./types.js";
@@ -45,6 +47,9 @@ export interface SpawnOptions {
   /** Parent config cwd when `cwd` points elsewhere (legacy RPC spawns). */
   configCwd?: string;
   isolation?: IsolationMode;
+  /** Approved constrained-context packet (immutable). Verified against the
+   *  child's launch cwd before the child window opens (decision B). */
+  handoff?: DeliveredContextHandoff;
   invocation?: AgentRecord["invocation"];
   onToolActivity?: (activity: ToolActivity) => void;
   onTurnEnd?: (turnCount: number) => void;
@@ -229,6 +234,12 @@ export class AgentManager {
     try {
       await this.startAgent(id, { pi, ctx, type, prompt, options });
     } catch (err) {
+      // Release a worktree created for a launch that never opened a child
+      // window — leftover worktrees block re-checkouts and rot on disk.
+      const record = this.agents.get(id);
+      if (record?.worktree && !record.window) {
+        try { releaseWorktree(record.worktree.repoCwd ?? process.cwd(), record.worktree); } catch { /* best effort */ }
+      }
       this.agents.delete(id);
       throw err;
     }
@@ -257,7 +268,11 @@ export class AgentManager {
         );
       }
       record.worktree = { ...wt, repoCwd: baseCwd };
-      worktreeCwd = wt.path;
+      // Subdirectory scoping: a repo with cwd inside `packages/app` creates a
+      // worktree whose CHILD CWD is `wt.workPath` (the same subdir inside the
+      // copy). Using the worktree root would send the child to the wrong
+      // directory and break relative-path handoff + freshness resolution.
+      worktreeCwd = wt.workPath ?? wt.path;
     }
 
     const parentSessionId = ctx.sessionManager.getSessionId();
@@ -287,6 +302,7 @@ export class AgentManager {
         inheritContext: options.inheritContext ?? false,
         cwd: worktreeCwd ?? options.cwd,
         configCwd: options.configCwd,
+        handoff: options.handoff,
       },
       agentId: id,
       childSessionId,
@@ -297,6 +313,25 @@ export class AgentManager {
 
     for (const warning of warnings) {
       try { ctx.ui.notify(`Agent "${type}": ${warning}`, "warning"); } catch { /* ignore */ }
+    }
+
+    // Launch-time freshness (decision B): the approved packet must match the
+    // exact bytes at the CHILD's launch cwd (a worktree copy for worktree
+    // isolation). A dirty parent tree therefore cannot silently deliver
+    // evidence the worktree does not contain. Failures abort before any child
+    // window opens; the spawn error surfaces to the main agent via feedback.
+    if (spec.run.handoff && spec.run.handoff.details.snippets.length > 0) {
+      const failures = await verifyHandoffFreshness(spec.run.handoff, spec.runtime.cwd);
+      if (failures.length > 0) {
+        if (record.worktree) {
+          try { releaseWorktree(record.worktree.repoCwd ?? process.cwd(), record.worktree); } catch { /* best effort */ }
+        }
+        this.agents.delete(id);
+        throw new Error(
+          `Context sources changed after review; re-approve before launching.\n` +
+          failures.map((failure) => `- ${failure}`).join("\n"),
+        );
+      }
     }
 
     // Record the child session identity up front (sessionFile arrives via ready).
@@ -631,6 +666,10 @@ export class AgentManager {
         await this.startAgent(next.id, next.args);
       } catch (err) {
         const message = err instanceof Error ? err.message : String(err);
+        const record = this.agents.get(next.id);
+        if (record?.worktree && !record.window) {
+          try { releaseWorktree(record.worktree.repoCwd ?? process.cwd(), record.worktree); } catch { /* best effort */ }
+        }
         record.status = "error";
         record.error = message;
         record.completedAt = Date.now();

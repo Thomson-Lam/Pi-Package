@@ -20,6 +20,7 @@
 import { chmodSync, readFileSync, renameSync, rmSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { pathToFileURL } from "node:url";
+import { buildHandoffMessage, shouldInjectHandoff, wireHandoffBridge } from "./child-handoff.mjs";
 
 // ---- Mailbox helpers (self-contained; keep in sync with event-mailbox.ts) ----
 
@@ -86,6 +87,12 @@ const bridgeFactory = (pi) => {
       if (text.trim()) emitEvent(spec.bridge.mailboxDir, { type: "human_steer", text: text.slice(0, 500) });
     }
   });
+  // Constrained-context handoff: deliver the approved packet once, on the
+  // child's FIRST prompt, as a distinct agent-start message. Pre-appended
+  // session entries never reach the model (the run builds its message list
+  // from the agent state + the new task), so injection must go through
+  // before_agent_start, whose messages land in the prompt array directly.
+  wireHandoffBridge(pi, spec);
 };
 
 const createRuntime = async ({ cwd, agentDir, sessionManager: sm }) => {
@@ -329,6 +336,26 @@ emitEvent(spec.bridge.mailboxDir, {
   sessionId: sessionManager.getSessionId(),
   sessionFile: sessionManager.getSessionFile(),
 });
+
+// The approved constrained-context packet is delivered via the bridge's
+// before_agent_start hook above. A handoff that carries nothing is a launch
+// failure: launching without the approved packet would silently violate
+// "reviewed content and delivered content must agree".
+if (shouldInjectHandoff(spec) && !buildHandoffMessage(spec.run.handoff)) {
+  console.error("[olive-agent] handoff packet is empty — refusing to launch without the approved context.");
+  emitEvent(spec.bridge.mailboxDir, {
+    type: "run_settled",
+    runNumber: Math.max(1, runNumber),
+    status: "error",
+    error: "context packet empty at child start; approved context would not be delivered.",
+    turnCount,
+    toolUses,
+    compactions,
+  });
+  emitEvent(spec.bridge.mailboxDir, { type: "process_exit" });
+  try { await runtime.dispose(); } catch {}
+  process.exit(1);
+}
 
 const mode = new InteractiveMode(runtime, {
   initialMessage: spec.run.prompt || undefined,

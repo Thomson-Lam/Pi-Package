@@ -24,6 +24,7 @@ vi.mock("../src/agent-types.js", () => ({
 
 import { getAgentConfig, getConfig, getToolNamesForType } from "../src/agent-types.js";
 import { prepareAgentLaunch, setDefaultMaxTurns, setGraceTurns, SUBAGENT_TOOL_NAMES } from "../src/agent-runner.js";
+import type { DeliveredContextHandoff } from "../src/handoff/serialize.js";
 import type { AgentLaunchSpec } from "../src/types.js";
 
 let work: string;
@@ -104,7 +105,7 @@ async function prepare(overrides: any = {}, options: any = BASE_OPTIONS) {
 describe("prepareAgentLaunch", () => {
   it("produces a fully serializable spec", async () => {
     const { spec } = await prepare();
-    expect(spec.version).toBe(1);
+    expect(spec.version).toBe(2);
     expect(spec.agent).toMatchObject({ type: "Review", description: "review the diff" });
     expect(spec.runtime.model).toEqual({ provider: "test", id: "basic" });
     expect(spec.runtime.thinking).toBe("high");
@@ -116,6 +117,8 @@ describe("prepareAgentLaunch", () => {
     expect(spec.bridge.mailboxDir).toBe(join(work, "mailbox"));
     expect(spec.run.prompt).toContain("Review the diff");
     expect(spec.run.maxTurns).toBe(10);
+    // No packet was approved — the spec must not carry one.
+    expect(spec.run.handoff).toBeUndefined();
     // JSON-serializable, no functions, no secrets.
     const parsed = JSON.parse(JSON.stringify(spec)) as AgentLaunchSpec;
     expect(parsed.runtime.model.id).toBe("basic");
@@ -185,5 +188,33 @@ describe("prepareAgentLaunch", () => {
     } as any);
     const { warnings } = await prepare();
     expect(warnings.some((w) => w.includes("not-a-tool"))).toBe(true);
+  });
+});
+
+describe("constrained-context handoff propagation", () => {
+  const cannedHandoff: DeliveredContextHandoff = {
+    version: 1,
+    content: '===== BEGIN OLIVE EVIDENCE {"path":"a.ts","startLine":1,"endLine":2} =====\nx\n===== END OLIVE EVIDENCE =====\n',
+    details: {
+      snippets: [{ id: "s1", path: "a.ts", startLine: 1, endLine: 2, bytes: 3, estimatedTokens: 1, sourceHash: "h".repeat(64) }],
+      recommendedFiles: [],
+      totalBytes: 3,
+      estimatedTokens: 1,
+    },
+  };
+
+  it("carries the approved packet into spec.run.handoff without touching the task", async () => {
+    const { spec } = await prepare({}, { ...BASE_OPTIONS, handoff: cannedHandoff });
+    expect(spec.run.handoff).toEqual(cannedHandoff);
+    expect(spec.run.prompt).toBe("Review the diff");
+    expect(spec.run.prompt).not.toContain("OLIVE");
+    // Fully serializable — survives a JSON round trip.
+    const parsed = JSON.parse(JSON.stringify(spec)) as AgentLaunchSpec;
+    expect(parsed.run.handoff).toEqual(cannedHandoff);
+  });
+
+  it("omits the packet entirely when none was approved", async () => {
+    const { spec } = await prepare();
+    expect(spec.run.handoff).toBeUndefined();
   });
 });

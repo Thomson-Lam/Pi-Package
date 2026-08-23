@@ -1,6 +1,13 @@
 import { type Api, clampThinkingLevel, type Model } from "@earendil-works/pi-ai";
 import type { ExtensionContext } from "@earendil-works/pi-coding-agent";
 import { Input, truncateToWidth } from "@earendil-works/pi-tui";
+import { reviewContextHandoff } from "./ui/context-review.js";
+import {
+  hasContextHandoffProblems,
+  isContextHandoffEmpty,
+  type ContextProblem,
+  type PreparedContextHandoff,
+} from "./handoff/types.js";
 import type { ModelRegistry } from "./model-resolver.js";
 import type { IsolationMode, ThinkingLevel } from "./types.js";
 
@@ -19,10 +26,12 @@ export interface ApprovalRequest {
   promptMode: "replace" | "append";
   contextLabel?: string;
   contextText?: string;
+  /** Prepared constrained-context packet (resolved before review). */
+  handoff?: PreparedContextHandoff;
 }
 
 export type ApprovalResult =
-  | { outcome: "launch"; prompt: string; model: Model<Api>; thinking: ThinkingLevel }
+  | { outcome: "launch"; prompt: string; model: Model<Api>; thinking: ThinkingLevel; handoff?: PreparedContextHandoff }
   | { outcome: "feedback"; feedback: string }
   | { outcome: "do-it-yourself"; prompt: string }
   | { outcome: "cancel" };
@@ -209,7 +218,7 @@ function buildSummary(request: ApprovalRequest): string {
     ? "Inherited parent conversation snapshot (user/assistant text and summaries; tool results omitted)"
     : request.contextLabel ?? "Fresh conversation";
 
-  return [
+  const lines = [
     `Approve subagent: ${request.description}`,
     "",
     `Agent: ${request.agentType}`,
@@ -220,7 +229,24 @@ function buildSummary(request: ApprovalRequest): string {
     `System prompt: ${request.promptMode === "append" ? "inherits parent system prompt" : "standalone agent prompt"}`,
     `Extensions: ${request.isolated ? "isolated (built-ins only)" : "agent configuration"}`,
     `Filesystem: ${request.isolation === "worktree" ? "isolated worktree" : "parent working tree"}`,
-  ].join("\n");
+  ];
+
+  if (request.handoff) {
+    const handoff = request.handoff;
+    const problems =
+      handoff.snippetProblems.length + handoff.leadProblems.length + handoff.packetProblems.length;
+    lines.push(
+      `Context packet: ${handoff.snippets.length} evidence snippet(s) · ${handoff.recommendedFiles.length} recommended file(s) · est. ${handoff.estimatedTokens} tokens`,
+    );
+    if (problems > 0) {
+      lines.push(`Context problems: ${problems} item(s) need attention before launch (see Review context)`);
+    }
+    if (request.inheritContext) {
+      lines.push("Warning: inherit_context plus a context packet may duplicate content — confirm this is intentional.");
+    }
+  }
+
+  return lines.join("\n");
 }
 
 export async function approveInvocation(
@@ -241,17 +267,39 @@ export async function approveInvocation(
       "Feedback to main agent",
       "Do it yourself",
     ];
+    if (request.handoff && !isContextHandoffEmpty(request.handoff)) {
+      const handoff = request.handoff;
+      const problems =
+        handoff.snippetProblems.length + handoff.leadProblems.length + handoff.packetProblems.length;
+      actions.splice(
+        1,
+        0,
+        `Review context (${handoff.snippets.length} snippet${handoff.snippets.length === 1 ? "" : "s"} · ${handoff.recommendedFiles.length} lead${handoff.recommendedFiles.length === 1 ? "" : "s"} · est. ${handoff.estimatedTokens} tokens${problems > 0 ? ` · ⚠ ${problems} problem${problems === 1 ? "" : "s"}` : ""})`,
+      );
+    }
     if (request.contextText) actions.push("View inherited context");
     actions.push("Cancel");
 
     const action = await ctx.ui.select(buildSummary(request), actions);
     if (!action || action === "Cancel") return { outcome: "cancel" };
     if (action === "Launch") {
-      return { outcome: "launch", prompt: request.prompt, model: request.model, thinking: request.thinking };
+      if (request.handoff && hasContextHandoffProblems(request.handoff)) {
+        // Decision #2: problems route back to the main agent as feedback so it
+        // can correct the proposal and retry, without the human re-prompting.
+        return { outcome: "feedback", feedback: buildContextProblemReport(request.handoff) };
+      }
+      return { outcome: "launch", prompt: request.prompt, model: request.model, thinking: request.thinking, handoff: request.handoff };
     }
     if (action === "Review / edit task prompt") {
       const prompt = await ctx.ui.editor("Review subagent task prompt", request.prompt);
       if (prompt?.trim()) request.prompt = prompt;
+      continue;
+    }
+    if (action.startsWith("Review context") && request.handoff) {
+      const review = await reviewContextHandoff(ctx, request.handoff);
+      // A cancelled review aborts the whole approval — Launch must never run.
+      if (review.cancelled) return { outcome: "cancel" };
+      request.handoff = review.prepared;
       continue;
     }
     if (action === "Feedback to main agent") {
@@ -280,4 +328,31 @@ export async function approveInvocation(
       await ctx.ui.editor("Inherited context (view only; edits are discarded)", request.contextText);
     }
   }
+}
+
+/** Render one problem for the feedback report. */
+function describeProblem(problem: ContextProblem): string {
+  if (problem.snippet) {
+    return `${problem.snippet.path}:${problem.snippet.startLine}-${problem.snippet.endLine}: ${problem.kind} — ${problem.message}`;
+  }
+  if (problem.lead) {
+    return `${problem.lead.path}: ${problem.kind} — ${problem.message}`;
+  }
+  return `packet: ${problem.kind} — ${problem.message}`;
+}
+
+/** Structured report the main agent receives when problems block launch. */
+function buildContextProblemReport(handoff: PreparedContextHandoff): string {
+  const problems = [
+    ...handoff.snippetProblems,
+    ...handoff.leadProblems,
+    ...handoff.packetProblems,
+  ];
+  const lines = [
+    "The subagent proposal has context problems that must be fixed before it can launch:",
+    ...problems.map((problem) => `- ${describeProblem(problem)}`),
+    "",
+    "Fix or remove the failing context references and retry the Agent call, or omit context for a fresh launch.",
+  ];
+  return lines.join("\n");
 }

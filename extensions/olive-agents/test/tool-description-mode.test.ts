@@ -104,7 +104,7 @@ describe("toolDescriptionMode", () => {
     expect(desc).toContain("- Review: Read-only code review agent for finding concrete bugs, regressions, security risks, and missing tests in proposed changes. (Tools:");
     expect(desc).not.toContain("Reports actionable findings");
     // The point of the feature: materially smaller than the full version.
-    expect(desc.length).toBeLessThan(1600);
+    expect(desc.length).toBeLessThan(1900);
   });
 
   it("invalid mode in the settings file is dropped — full description", () => {
@@ -165,6 +165,43 @@ describe("toolDescriptionMode", () => {
     const desc: string = tools.get("Agent").description;
     expect(desc).not.toContain("{{");
     expect(desc).not.toContain("}}");
+  });
+
+  it("keeps compact mode load-bearing context contracts", () => {
+    const tools = setup({ toolDescriptionMode: "compact" });
+    const desc: string = tools.get("Agent").description;
+    expect(desc).toContain("context.snippets");
+    expect(desc).toContain("inherit_context");
+  });
+
+  it("exposes a strictly optional context parameter with references, never content", () => {
+    const tools = setup();
+    const tool = tools.get("Agent");
+    const params = tool.parameters as any;
+    expect(params.type).toBe("object");
+    const props = params.properties ?? {};
+    expect(props.context?.type).toBe("object");
+    expect(params.required ?? []).not.toContain("context");
+    const snippetProps = props.context?.properties?.snippets?.items?.properties ?? {};
+    expect(snippetProps.path?.type).toBe("string");
+    expect(snippetProps.start_line?.type).toBe("integer");
+    expect(snippetProps.start_line?.minimum).toBe(1);
+    expect(snippetProps.end_line?.type).toBe("integer");
+    expect(snippetProps.content).toBeUndefined();
+    expect(snippetProps.text).toBeUndefined();
+    const leadProps = props.context?.properties?.recommended_files?.items?.properties ?? {};
+    expect(leadProps.path?.type).toBe("string");
+    expect(leadProps.symbol?.type).toBe("string");
+    expect(leadProps.content).toBeUndefined();
+  });
+
+  it("documents the context hierarchy and inheritance duplication risk", () => {
+    const tools = setup();
+    const desc: string = tools.get("Agent").description;
+    expect(desc).toContain("## Context handoff");
+    expect(desc).toContain("1-indexed");
+    const inheritDesc = tools.get("Agent").parameters.properties.inherit_context.description as string;
+    expect(inheritDesc).toMatch(/duplicat/i);
   });
 
 });

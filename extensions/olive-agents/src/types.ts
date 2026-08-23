@@ -7,6 +7,7 @@
  */
 
 import type { ModelThinkingLevel } from "@earendil-works/pi-ai";
+import type { DeliveredContextHandoff } from "./handoff/serialize.js";
 import type { LifetimeUsage } from "./usage.js";
 
 export type ThinkingLevel = ModelThinkingLevel;
@@ -72,7 +73,7 @@ export type JoinMode = 'async' | 'group' | 'smart';
  * through its own credential store.
  */
 export interface AgentLaunchSpec {
-  version: 1;
+  version: 2;
   agent: {
     id: string;
     type: string;
@@ -103,6 +104,9 @@ export interface AgentLaunchSpec {
     prompt: string;
     maxTurns?: number;
     graceTurns: number;
+    /** Approved constrained-context packet, serialized for the child. Never
+     *  concatenated into `prompt` — delivered as its own custom message. */
+    handoff?: DeliveredContextHandoff;
   };
   bridge: {
     mailboxDir: string;
