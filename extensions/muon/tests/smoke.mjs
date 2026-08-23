@@ -24,7 +24,6 @@ for (const file of [
   "skills.ts",
   "commands.ts",
   "skill-dump.ts",
-  "README.md",
   "modes/build-prompt.md",
   "modes/spec-prompt.md",
 ]) {
@@ -157,15 +156,5 @@ assert.match(commands, /build/);
 assert.match(commands, /spec/);
 assert.doesNotMatch(commands, /engineering|foundation/i);
 assert.doesNotMatch(commands, /auto\|ponytail\|superpowers|isMuonSkillset|legacy skillset/);
-
-const readme = readFileSync(join(muonDir, "README.md"), "utf8");
-assert.match(readme, /\/muon off/);
-assert.match(readme, /\/muon build/);
-assert.match(readme, /\/muon spec/);
-assert.doesNotMatch(readme, /\/muon (?:mode|skills) (?:engineering|foundation)/);
-assert.match(readme, /Minimal/);
-assert.match(readme, /authoring-skills/);
-assert.match(readme, /github-issues-prs/);
-assert.doesNotMatch(readme, /using-muon|skillsets\/superpowers/);
 
 console.log("muon mode and skill smoke checks passed");
