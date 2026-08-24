@@ -6,7 +6,7 @@ Components:
 - `package.json` — root manifest; Pi loads each `extensions/*/index.ts` entrypoint. Runtime is TypeScript ESM.
 - `README.md` — installation, update, and local-development workflows; Pi-managed clones under `~/.pi/agent/git/...` must not be edited.
 - `manual.md` — package usage notes and manual reference.
-- `extensions/active-session-shortcuts/index.ts` — registers `/rn` and `/rename` to rename the current session with a local timestamp.
+- `extensions/active-session-shortcuts/index.ts` — registers `/rs` for native session resume, `/rl` for native reload, plus `/rn` and `/rename` for session naming.
 - `extensions/blink/index.ts` — registers `/blink` (off/slow/blitz human file-review modes) and wraps edit/write tools.
 - `extensions/ctx/index.ts` — forwards to `src/index.ts`, which registers `/ctx`, `/cnew`, `/cb`, `/reads`, `/can`, `/cana`, `/canu`.
 - `extensions/feedback-editor/index.ts` and `client.lua` — register `/fb` and `/fpr`, opening a right-side tmux Neovim pane and returning saved text to Pi's chat editor.

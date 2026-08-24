@@ -1,5 +1,10 @@
 import type { ExtensionAPI } from "@mariozechner/pi-coding-agent";
 
+function submitNativeCommand(ctx: { ui: { setEditorText(text: string): void } }, command: string): void {
+	ctx.ui.setEditorText(command);
+	setTimeout(() => process.stdin.emit("data", "\r"), 0);
+}
+
 function localTimestamp(): string {
 	return new Intl.DateTimeFormat("sv-SE", {
 		year: "numeric",
@@ -12,6 +17,30 @@ function localTimestamp(): string {
 }
 
 export default function activeSessionShortcuts(pi: ExtensionAPI): void {
+	pi.registerCommand("rs", {
+		description: "Resume a previous session",
+		handler: async (_args, ctx) => {
+			if (ctx.mode !== "tui") {
+				ctx.ui.notify("Resume requires Pi's TUI mode", "warning");
+				return;
+			}
+
+			submitNativeCommand(ctx, "/resume");
+		},
+	});
+
+	pi.registerCommand("rl", {
+		description: "Reload Pi extensions",
+		handler: async (_args, ctx) => {
+			if (ctx.mode !== "tui") {
+				ctx.ui.notify("Reload requires Pi's TUI mode", "warning");
+				return;
+			}
+
+			submitNativeCommand(ctx, "/reload");
+		},
+	});
+
 	pi.registerCommand("rn", {
 		description: "Rename current session with a local timestamp",
 		handler: async (args, ctx) => {

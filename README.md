@@ -204,3 +204,7 @@ For reproducible setup, prefer installing a tag instead of the local clone:
 ```bash
 pi install git:github.com/Thomson-Lam/Pi-Package.git@v0.1.0
 ```
+
+## dev 
+
+Run `npm install -g --ignore-scripts @earendil-works/pi-coding-agent` to install when using Pi in this repo for dev work.
