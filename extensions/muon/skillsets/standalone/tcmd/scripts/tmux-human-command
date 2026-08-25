@@ -1,0 +1,72 @@
+#!/usr/bin/env bash
+set -euo pipefail
+
+usage() {
+  cat >&2 <<'EOF'
+Usage:
+  tmux-human-command stage %pane-id command
+  tmux-human-command capture-pane %pane-id [lines]
+EOF
+  exit 2
+}
+
+[[ $# -ge 1 ]] || usage
+
+action=$1
+shift
+
+valid_pane() {
+  [[ ${1:-} =~ ^%[0-9]+$ ]]
+}
+
+pane_exists() {
+  tmux display-message -p -t "$1" '#{pane_id}' >/dev/null 2>&1
+}
+
+protected_pane() {
+  local pane=$1 blink role
+  if [[ -n "${TMUX_PANE:-}" && "$pane" == "$TMUX_PANE" ]]; then
+    # Pi's own pane comes from the environment; the server's focused pane
+    # (un-targeted display-message) is NOT a reliable stand-in.
+    return 0
+  fi
+  blink=$(tmux display-message -p -t "$pane" '#{@blink_role}' 2>/dev/null || true)
+  role=$(tmux display-message -p -t "$pane" '#{@pi_extension_role}' 2>/dev/null || true)
+  if [[ -n "$blink" || -n "$role" ]]; then
+    return 0
+  fi
+  return 1
+}
+
+require_target() {
+  local pane=${1:-}
+  valid_pane "$pane" || { echo "tmux-human-command: target must be a %pane-id" >&2; exit 1; }
+  pane_exists "$pane" || { echo "tmux-human-command: pane not found: $pane" >&2; exit 1; }
+  if protected_pane "$pane"; then
+    echo "tmux-human-command: refusing protected pane: $pane" >&2
+    exit 1
+  fi
+}
+
+case "$action" in
+  stage)
+    [[ $# -eq 2 ]] || usage
+    pane=$1
+    command=$2
+    [[ -n "$command" ]] || { echo "tmux-human-command: command must not be empty" >&2; exit 1; }
+    require_target "$pane"
+    # Literal input only. This deliberately does not send Enter or any other submit key.
+    tmux send-keys -t "$pane" -l "$command"
+    ;;
+  capture-pane)
+    [[ $# -ge 1 && $# -le 2 ]] || usage
+    pane=$1
+    lines=${2:-200}
+    require_target "$pane"
+    [[ "$lines" =~ ^[0-9]+$ && "$lines" -gt 0 ]] || { echo "tmux-human-command: lines must be positive" >&2; exit 1; }
+    tmux capture-pane -p -t "$pane" -S "-$lines"
+    ;;
+  *)
+    usage
+    ;;
+esac

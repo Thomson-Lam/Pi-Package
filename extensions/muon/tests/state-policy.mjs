@@ -8,7 +8,8 @@ const order = [
   "cindex",
   "github-issues-prs",
   "ipynb-toolshed",
-  "tmux-tdl-logs",
+  "tlogs",
+  "tcmd",
   "yagni-product-design",
 ];
 const valid = new Set(order);
@@ -23,7 +24,7 @@ const policies = {
 };
 const initial = {
   mode: "off",
-  enabledSkills: ["ponytail", "cindex", "github-issues-prs", "tmux-tdl-logs"],
+  enabledSkills: ["ponytail", "cindex", "github-issues-prs", "tlogs", "tcmd"],
 };
 const custom = (customType, data) => ({ type: "custom", customType, data });
 

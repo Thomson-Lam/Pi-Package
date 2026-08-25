@@ -5,7 +5,8 @@ import {
   MUON_GITHUB_ISSUES_PRS_SKILL_DIR,
   MUON_IPYNB_TOOLS_SHED_SKILL_DIR,
   MUON_PONYTAIL_SKILLS_DIR,
-  MUON_TMUX_TDL_LOGS_SKILL_DIR,
+  MUON_TLOGS_SKILL_DIR,
+  MUON_TCMD_SKILL_DIR,
   MUON_YAGNI_PRODUCT_DESIGN_SKILL_DIR,
 } from "./constants.js";
 import {
@@ -60,11 +61,18 @@ export const MUON_SKILL_SOURCES: MuonSkillSource[] = [
     paths: () => [MUON_IPYNB_TOOLS_SHED_SKILL_DIR],
   },
   {
-    id: "tmux-tdl-logs",
-    label: "tmux-tdl-logs",
+    id: "tlogs",
+    label: "tlogs",
     kind: "skill",
-    description: "Inspect companion dev-server pane output in the td tmux workflow.",
-    paths: () => [MUON_TMUX_TDL_LOGS_SKILL_DIR],
+    description: "Inspect selected tmux pane output in a read-only workflow.",
+    paths: () => [MUON_TLOGS_SKILL_DIR],
+  },
+  {
+    id: "tcmd",
+    label: "tcmd",
+    kind: "skill",
+    description: "Stage human-approved commands and return bounded pane output.",
+    paths: () => [MUON_TCMD_SKILL_DIR],
   },
   {
     id: "yagni-product-design",
@@ -77,6 +85,10 @@ export const MUON_SKILL_SOURCES: MuonSkillSource[] = [
 
 const SOURCE_BY_ID = new Map(MUON_SKILL_SOURCES.map((source) => [source.id, source]));
 const SOURCE_ORDER = MUON_SKILL_SOURCES.map((source) => source.id);
+const SKILL_ID_ALIASES: Record<string, MuonSkillId> = {
+  "tmux-tdl-logs": "tlogs",
+  "tmux-human-command": "tcmd",
+};
 
 export function isMuonSkillId(value: string): value is MuonSkillId {
   return SOURCE_BY_ID.has(value as MuonSkillId);
@@ -89,7 +101,8 @@ export function getMuonSkillSource(id: MuonSkillId): MuonSkillSource {
 export function normalizeMuonSkillIds(values: readonly string[] | undefined): MuonSkillId[] {
   const enabled = new Set<MuonSkillId>();
   for (const value of values ?? []) {
-    const id = value.trim();
+    const rawId = value.trim();
+    const id = SKILL_ID_ALIASES[rawId] ?? rawId;
     if (isMuonSkillId(id)) enabled.add(id);
   }
   return MUON_SKILL_SOURCES.map((source) => source.id).filter((id) => enabled.has(id));

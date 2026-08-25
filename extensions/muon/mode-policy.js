@@ -1,5 +1,5 @@
 const PROFILE_IDS = new Set(["ponytail"]);
-const BUILD_SKILL_IDS = ["ponytail", "cindex", "github-issues-prs", "tmux-tdl-logs"];
+const BUILD_SKILL_IDS = ["ponytail", "cindex", "github-issues-prs", "tlogs", "tcmd"];
 const SPEC_SKILL_ID = "yagni-product-design";
 
 function ordered(values, sourceOrder) {

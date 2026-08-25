@@ -52,19 +52,29 @@ for (const path of [
   ["standalone", "cindex"],
   ["standalone", "github-issues-prs"],
   ["standalone", "ipynb_toolshed"],
-  ["standalone", "tmux-tdl-logs"],
+  ["standalone", "tlogs"],
+  ["standalone", "tcmd"],
   ["standalone", "yagni-product-design"],
 ]) {
   assert.equal(existsSync(join(skillsetsDir, ...path, "SKILL.md")), true, `missing skill ${path.join("/")}`);
 }
 
-const tmuxLogsSkillDir = join(skillsetsDir, "standalone", "tmux-tdl-logs");
+const tmuxLogsSkillDir = join(skillsetsDir, "standalone", "tlogs");
 assert.equal(existsSync(join(tmuxLogsSkillDir, "extension.ts")), true, "missing Muon-governed tmux logs extension");
-assert.equal(existsSync(join(tmuxLogsSkillDir, "scripts", "tmux-tdl-logs")), true, "missing tmux logs helper");
-assert.equal(existsSync(join(root, "extensions", "tmux-tdl-logs")), false, "tmux logs should not have a separate extension entrypoint");
+assert.equal(existsSync(join(tmuxLogsSkillDir, "scripts", "tmux-tdl-logs")), true, "missing tlogs helper");
+assert.equal(existsSync(join(root, "extensions", "tmux-tdl-logs")), false, "tlogs should not have a separate extension entrypoint");
 const tmuxLogsExtension = readFileSync(join(tmuxLogsSkillDir, "extension.ts"), "utf8");
 assert.match(tmuxLogsExtension, /isEnabled/);
 assert.match(tmuxLogsExtension, /setActiveTools/);
+const tmuxCommandSkillDir = join(skillsetsDir, "standalone", "tcmd");
+assert.equal(existsSync(join(tmuxCommandSkillDir, "extension.ts")), true, "missing Muon-governed tmux command extension");
+assert.equal(existsSync(join(tmuxCommandSkillDir, "scripts", "tmux-human-command")), true, "missing tcmd helper");
+const tmuxCommandExtension = readFileSync(join(tmuxCommandSkillDir, "extension.ts"), "utf8");
+assert.match(tmuxCommandExtension, /registerCommand\("cmd"/);
+assert.match(tmuxCommandExtension, /registerCommand\("cmdone"/);
+const tmuxCommandScript = readFileSync(join(tmuxCommandSkillDir, "scripts", "tmux-human-command"), "utf8");
+assert.match(tmuxCommandScript, /send-keys/);
+assert.match(tmuxCommandScript, /does not send Enter|does not send Enter|does not send/);
 
 const githubSkillDir = join(skillsetsDir, "standalone", "github-issues-prs");
 assert.equal(existsSync(join(githubSkillDir, "scripts", "github-md")), true, "missing github-md helper");
@@ -98,7 +108,8 @@ assert.match(archivedFoundationPrompt, /## Teach-Back Gate/);
 
 const index = readFileSync(join(muonDir, "index.ts"), "utf8");
 assert.match(index, /registerMuonCommands/);
-assert.match(index, /registerTmuxTdlLogs/);
+assert.match(index, /registerTlogs/);
+assert.match(index, /registerTcmd/);
 assert.match(index, /discoverMuonResources/);
 assert.match(index, /before_agent_start/);
 assert.match(index, /buildPrompt/);
@@ -122,7 +133,7 @@ assert.doesNotMatch(types, /MuonSkillset|skillset:/);
 
 const state = readFileSync(join(muonDir, "state.ts"), "utf8");
 assert.match(state, /mode: "build"/);
-assert.match(state, /enabledSkills: \["ponytail", "cindex", "github-issues-prs", "tmux-tdl-logs"\]/);
+assert.match(state, /enabledSkills: \["ponytail", "cindex", "github-issues-prs", "tlogs", "tcmd"\]/);
 assert.match(state, /restoreConfigFromEntries/);
 assert.match(state, /normalizeModeSkillIds/);
 
@@ -138,6 +149,7 @@ const skills = readFileSync(join(muonDir, "skills.ts"), "utf8");
 assert.match(skills, /id: "authoring-skills"/);
 assert.match(skills, /id: "github-issues-prs"/);
 assert.match(skills, /id: "yagni-product-design"/);
+assert.match(skills, /id: "tcmd"/);
 assert.doesNotMatch(skills, /engineering|foundation/i);
 assert.match(skills, /normalizeModeSkillIds/);
 assert.match(skills, /selectModeSkillIds/);
@@ -154,6 +166,7 @@ assert.match(commands, /\{ value: "skills"[\s\S]*\{ value: "mode"[\s\S]*\{ value
 assert.match(commands, /Mode/);
 assert.match(commands, /build/);
 assert.match(commands, /spec/);
+assert.match(commands, /tcmd/);
 assert.doesNotMatch(commands, /engineering|foundation/i);
 assert.doesNotMatch(commands, /auto\|ponytail\|superpowers|isMuonSkillset|legacy skillset/);
 

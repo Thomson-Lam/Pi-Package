@@ -5,7 +5,8 @@ import { MUON_BUILD_PROMPT_PATH, MUON_SPEC_PROMPT_PATH, MUON_STATE_ENTRY_TYPE } 
 import { discoverMuonResources } from "./resources.js";
 import { selectModeSkillIds } from "./skills.js";
 import { createInitialMuonState, persistMuonState, restoreMuonState, updateMuonStatus } from "./state.js";
-import registerTmuxTdlLogs from "./skillsets/standalone/tmux-tdl-logs/extension.js";
+import registerTlogs from "./skillsets/standalone/tlogs/extension.js";
+import registerTcmd from "./skillsets/standalone/tcmd/extension.js";
 import type { MuonMode, MuonState } from "./types.js";
 
 const buildPrompt = readFileSync(MUON_BUILD_PROMPT_PATH, "utf8");
@@ -102,7 +103,8 @@ export default async function muonExtension(pi: ExtensionAPI): Promise<void> {
     updateMuonStatus(ctx, state);
   });
 
-  registerTmuxTdlLogs(pi, () => state.config.enabledSkills.includes("tmux-tdl-logs"));
+  registerTlogs(pi, () => state.config.enabledSkills.includes("tlogs"));
+  registerTcmd(pi, () => state.config.enabledSkills.includes("tcmd"));
 
   pi.on("resources_discover", async () => discoverMuonResources(state));
 

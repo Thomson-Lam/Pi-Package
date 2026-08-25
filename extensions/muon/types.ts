@@ -6,7 +6,8 @@ export type MuonSkillId =
   | "cindex"
   | "github-issues-prs"
   | "ipynb-toolshed"
-  | "tmux-tdl-logs"
+  | "tlogs"
+  | "tcmd"
   | "yagni-product-design";
 
 export interface MuonConfig {

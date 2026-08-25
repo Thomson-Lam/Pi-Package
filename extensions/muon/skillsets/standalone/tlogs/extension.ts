@@ -12,8 +12,9 @@ import {
 import { Container, type SettingItem, SettingsList, Text } from "@earendil-works/pi-tui";
 import { Type } from "typebox";
 
-const STATE_ENTRY = "tmux-tdl-logs-state";
-const STATUS_ID = "tmux-tdl-logs";
+const STATE_ENTRY = "tlogs-state";
+const LEGACY_STATE_ENTRY = "tmux-tdl-logs-state";
+const STATUS_ID = "tlogs";
 const SCRIPT = fileURLToPath(new URL("./scripts/tmux-tdl-logs", import.meta.url));
 const PANE_FORMAT = [
   "#{pane_id}",
@@ -54,7 +55,7 @@ function isPane(value: unknown): value is Pane {
 function restoreSelection(ctx: ExtensionContext): Pane[] {
   let panes: Pane[] = [];
   for (const entry of ctx.sessionManager.getEntries()) {
-    if (entry.type !== "custom" || entry.customType !== STATE_ENTRY) continue;
+    if (entry.type !== "custom" || (entry.customType !== STATE_ENTRY && entry.customType !== LEGACY_STATE_ENTRY)) continue;
     const candidate = (entry.data as { panes?: unknown } | undefined)?.panes;
     if (Array.isArray(candidate) && candidate.every(isPane)) panes = candidate;
   }
@@ -165,15 +166,15 @@ export default function registerTmuxTdlLogs(pi: ExtensionAPI, isEnabled: () => b
     updateStatus(ctx, selectedPanes);
   });
 
-  pi.registerCommand("tdlogs", {
+  pi.registerCommand("logs", {
     description: "Select tmux panes and prepare a focused log workflow",
     handler: async (_args, ctx) => {
       if (!isEnabled()) {
-        ctx.ui.notify("Enable tmux-tdl-logs under /muon skills first.", "warning");
+        ctx.ui.notify("Enable tlogs under /muon skills first.", "warning");
         return;
       }
       if (ctx.mode !== "tui") {
-        ctx.ui.notify("/tdlogs requires Pi TUI mode.", "error");
+        ctx.ui.notify("/logs requires Pi TUI mode.", "error");
         return;
       }
       try {
@@ -205,11 +206,7 @@ export default function registerTmuxTdlLogs(pi: ExtensionAPI, isEnabled: () => b
   pi.registerTool({
     name: "tmux_tdl_logs",
     label: "Tmux logs",
-    description: "Query only the tmux panes selected with /tdlogs. Uses the existing tmux-tdl-logs CLI positional arguments: panes; capture-pane <pane-id> [lines]; capture-servers [lines]; watch-pane <pane-id> [interval] [count] [lines]; watch-servers [interval] [count] [lines]; record-start [name] [interval] [lines] [max-seconds]; record-stop [name]; record-list; record-info/read/page/grep with their normal arguments. Output is limited to 1200 lines or 30KB.",
-    promptSnippet: "Query user-selected tmux pane logs",
-    promptGuidelines: [
-      "Use tmux_tdl_logs only after the user selects panes with /tdlogs; search recordings before reading broad ranges.",
-    ],
+    description: "Read bounded output from tmux panes selected with /logs. Supports pane listing, capture, bounded watches, and reproduction recording/search. Read-only; operates only on the current /logs selection.",
     parameters: Type.Object({
       action: StringEnum([
         "panes", "capture-pane", "capture-servers", "watch-pane", "watch-servers",
@@ -218,8 +215,8 @@ export default function registerTmuxTdlLogs(pi: ExtensionAPI, isEnabled: () => b
       args: Type.Optional(Type.Array(Type.String(), { maxItems: 4, description: "Positional arguments after the action" })),
     }),
     async execute(_toolCallId, params, signal) {
-      if (!isEnabled()) throw new Error("tmux-tdl-logs is disabled under /muon skills.");
-      if (!selectedPanes.length) throw new Error("No tmux panes selected. Ask the user to run /tdlogs first.");
+      if (!isEnabled()) throw new Error("tlogs is disabled under /muon skills.");
+      if (!selectedPanes.length) throw new Error("No tmux panes selected. Ask the user to run /logs first.");
       const args = params.args ?? [];
       validateBoundedWatch(params.action, args);
       const result = await pi.exec(

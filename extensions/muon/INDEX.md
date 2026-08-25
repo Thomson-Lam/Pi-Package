@@ -14,8 +14,9 @@ Components:
 - `command-parser.js`, `mode-policy.js`, `state-policy.js` (with `.d.ts`) — plain-JS policy modules: `/muon` argument parsing, mode/skill synchronization, and state normalization/migration. These are the implementation; no TypeScript source exists.
 - `modes/` — Build and Spec system prompts (`build-prompt.md`, `spec-prompt.md`).
 - `skillsets/ponytail/` — ponytail, ponytail-review, and ponytail-debt skills; each `SKILL.md` is its source of truth.
-- `skillsets/standalone/` — authoring-skills, cindex, github-issues-prs, ipynb_toolshed, tmux-tdl-logs, yagni-product-design.
-- `skillsets/standalone/tmux-tdl-logs/extension.ts` — `/tdlogs` pane selection, workflow prompts, session state, and the selection-restricted `tmux_tdl_logs` tool backed by its bundled script.
+- `skillsets/standalone/` — authoring-skills, cindex, github-issues-prs, ipynb_toolshed, tlogs, tcmd, yagni-product-design.
+- `skillsets/standalone/tlogs/extension.ts` — `/logs` pane selection, workflow prompts, session state, and the selection-restricted `tmux_tdl_logs` tool backed by its bundled script.
+- `skillsets/standalone/tcmd/extension.ts` — `/cmd` and `/cmdone`, human-approved command staging, bounded feedback observation, and Auto/Manual delivery backed by its bundled script.
 - `tests/` — policy and smoke coverage (`smoke.mjs`, `command-parser.mjs`, `mode-policy.mjs`, `state-policy.mjs`, `engineering-skills.mjs`).
 
 Related:
