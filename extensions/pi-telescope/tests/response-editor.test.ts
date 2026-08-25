@@ -15,6 +15,13 @@ test("resolves response names under docs/planning", () => {
 	);
 });
 
+test("resolves a file name under a custom directory", () => {
+	assert.equal(
+		resolvePlanningPath("/workspace/project", "architecture", "docs/ideas"),
+		"/workspace/project/docs/ideas/architecture.md",
+	);
+});
+
 test("rejects paths instead of file names", () => {
 	for (const name of ["", ".", "..", "../escape.md", "nested/file.md", "nested\\file.md"]) {
 		assert.equal(resolvePlanningPath("/workspace/project", name), undefined);

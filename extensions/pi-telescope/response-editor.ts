@@ -7,17 +7,68 @@ import {
 	rmSync,
 	writeFileSync,
 } from "node:fs";
-import { extname, join, resolve } from "node:path";
+import { extname, join, relative, resolve, isAbsolute } from "node:path";
 import { tmpdir } from "node:os";
+import { DynamicBorder } from "@mariozechner/pi-coding-agent";
 import type { ExtensionContext } from "@mariozechner/pi-coding-agent";
+import { Container, SelectList, Text, type SelectItem } from "@mariozechner/pi-tui";
 
-export function resolvePlanningPath(cwd: string, input: string): string | undefined {
+export function resolvePlanningPath(
+	cwd: string,
+	input: string,
+	directory = "docs/planning",
+): string | undefined {
 	const raw = input.trim();
 	if (!raw || raw === "." || raw === ".." || raw.includes("/") || raw.includes("\\")) {
 		return undefined;
 	}
 	const filename = extname(raw) ? raw : `${raw}.md`;
-	return resolve(cwd, "docs", "planning", filename);
+	const targetPath = resolve(cwd, directory, filename);
+	const relativePath = relative(cwd, targetPath);
+	return relativePath.startsWith("..") || isAbsolute(relativePath) ? undefined : targetPath;
+}
+
+async function selectResponseDirectory(ctx: ExtensionContext): Promise<string | undefined> {
+	const items: SelectItem[] = [
+		{ value: "default", label: "Default path", description: "docs/planning" },
+		{ value: "custom", label: "Custom path", description: "Choose another project directory" },
+	];
+	const choice = await ctx.ui.custom<string | null>((tui, theme, _keybindings, done) => {
+		const container = new Container();
+		container.addChild(new DynamicBorder((s: string) => theme.fg("accent", s)));
+		container.addChild(new Text(theme.fg("accent", theme.bold("Choose save path")), 1, 0));
+		const selectList = new SelectList(items, items.length, {
+			selectedPrefix: (t) => theme.fg("accent", t),
+			selectedText: (t) => theme.fg("accent", t),
+			description: (t) => theme.fg("muted", t),
+			scrollInfo: (t) => theme.fg("dim", t),
+			noMatch: (t) => theme.fg("warning", t),
+		});
+		selectList.onSelect = (item) => done(item.value);
+		selectList.onCancel = () => done(null);
+		container.addChild(selectList);
+		container.addChild(new Text(theme.fg("dim", "↑↓ navigate • enter select • esc cancel"), 1, 0));
+		container.addChild(new DynamicBorder((s: string) => theme.fg("accent", s)));
+		return {
+			render: (width) => container.render(width),
+			invalidate: () => container.invalidate(),
+			handleInput: (data) => { selectList.handleInput(data); tui.requestRender(); },
+		};
+	});
+
+	if (choice === null) return undefined;
+	if (choice === "default") return "docs/planning";
+
+	const customPath = await ctx.ui.input("Custom save path", "project-relative directory");
+	if (customPath === undefined) return undefined;
+	const raw = customPath.trim();
+	if (!raw || isAbsolute(raw) || raw.includes("\\") || raw.split("/").includes("..")) {
+		ctx.ui.notify("Enter a valid project-relative directory", "warning");
+		return undefined;
+	}
+	const resolved = resolve(ctx.cwd, raw);
+	const relativePath = relative(ctx.cwd, resolved);
+	return relativePath.startsWith("..") || isAbsolute(relativePath) ? undefined : relativePath;
 }
 
 export async function editResponseInNvim(
@@ -35,7 +86,10 @@ export async function editResponseInNvim(
 	);
 	if (input === undefined) return;
 
-	const targetPath = resolvePlanningPath(ctx.cwd, input);
+	const directory = await selectResponseDirectory(ctx);
+	if (directory === undefined) return;
+
+	const targetPath = resolvePlanningPath(ctx.cwd, input, directory);
 	if (!targetPath) {
 		ctx.ui.notify("Enter a file name without directories", "warning");
 		return;
@@ -54,7 +108,7 @@ export async function editResponseInNvim(
 		} catch {}
 	}
 
-	mkdirSync(resolve(ctx.cwd, "docs", "planning"), { recursive: true });
+	mkdirSync(resolve(ctx.cwd, directory), { recursive: true });
 	const runtimeDir = mkdtempSync(join(tmpdir(), "pi-telescope-response-"));
 	const sourcePath = join(runtimeDir, "response.md");
 	writeFileSync(sourcePath, text, "utf8");
