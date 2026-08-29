@@ -57,12 +57,18 @@ end
 local function send(action)
   if action.type == "navigate_global" then
     local selected = State.navigate_global(model, model.activeVersionId, action.payload.delta)
-    if selected then ui:show_version(selected); refresh_change_list() end
+    if selected then
+      ui:show_version(selected, { preserve_change_list = true })
+      refresh_change_list()
+    end
     return
   end
   if action.type == "navigate_edge" then
     local selected = State.navigate_edge(model, action.payload.edge)
-    if selected then ui:show_version(selected); refresh_change_list() end
+    if selected then
+      ui:show_version(selected, { preserve_change_list = true })
+      refresh_change_list()
+    end
     return
   end
   if action.type == "list_changes" then

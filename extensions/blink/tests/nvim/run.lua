@@ -270,6 +270,8 @@ press("?")
 vim.notify = original_notify
 assert(help_message and help_message:match("%[c/%]c hunks") and help_message:match("%[C/%]C first/last hunk") and help_message:match("%[d/%]d deletions") and help_message:match("%[D/%]D first/last deletion") and help_message:match("%[n/%]n changed files") and help_message:match("%]h panel"), "Blink help omits current navigation: " .. tostring(help_message))
 
+review:show_version(item)
+vim.api.nvim_win_set_cursor(0, { 1, 0 })
 local panel_versions = {}
 for version_id = 1, 12 do
   table.insert(panel_versions, { versionId = version_id, displayPath = "file" .. version_id .. ".txt", unread = version_id > 6 })
@@ -302,6 +304,16 @@ eq(review.list_visible, true, "change panel can be shown")
 eq(vim.api.nvim_buf_line_count(review.list_buf), 9, "change panel shows seven items plus more indicators")
 eq(vim.api.nvim_buf_get_lines(review.list_buf, 0, 1, false)[1], "↑ 4 more", "panel reports more omitted changes above")
 eq(vim.api.nvim_buf_get_lines(review.list_buf, -2, -1, false)[1], "↓ 1 more", "panel reports more omitted changes below")
+review:show_version(item, { preserve_change_list = true })
+vim.api.nvim_exec_autocmds("CursorMoved", { buffer = buf })
+eq(review.list_visible, true, "Blink file navigation preserves the visible change panel")
+press("j")
+eq(vim.api.nvim_win_get_cursor(0)[1], 3, "normal-mode cursor movement advances the review buffer")
+-- Headless Neovim does not dispatch CursorMoved from feedkeys, so trigger the registered event explicitly.
+vim.api.nvim_exec_autocmds("CursorMoved", { buffer = buf })
+eq(review.list_visible, false, "normal-mode cursor movement dismisses the change panel")
+review:show_change_list()
+eq(review.list_visible, true, "change panel can be reopened after cursor movement")
 review:toggle_change_list()
 eq(review.list_visible, false, "change panel can be hidden")
 review:update_change_list(panel_versions, 9)
@@ -316,6 +328,15 @@ for _, keys in ipairs({ "]c", "[c", "]C", "[C", "]d", "[d", "]D", "[D" }) do
   eq(review.list_visible, false, keys .. " dismisses the change panel")
 end
 
+review:show_version({
+  versionId = 159,
+  fileId = "stress-159",
+  absolutePath = tmp .. "/stress-159.txt",
+  displayPath = "stress-159.txt",
+  snapshotPath = eof_version,
+  originKind = "file",
+  originSnapshotPath = eof_origin,
+})
 vim.bo[buf].readonly = false
 vim.bo[buf].modifiable = true
 vim.api.nvim_buf_set_lines(buf, 0, 1, false, { "tamper" })

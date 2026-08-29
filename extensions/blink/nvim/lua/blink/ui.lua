@@ -66,6 +66,7 @@ function UI.new(options)
   self.close_pending = false
   self.close_action = nil
   self.close_timer = nil
+  self.internal_cursor_move = nil
   return self
 end
 
@@ -228,6 +229,19 @@ function UI:_make_buffer(name, item, lines, has_eol)
         self.review_state = nil
       end
       self.buffer_state[buf] = nil
+    end,
+  })
+  vim.api.nvim_create_autocmd("CursorMoved", {
+    buffer = buf,
+    callback = function()
+      if vim.fn.mode() ~= "n" then return end
+      local internal = self.internal_cursor_move
+      if internal then
+        local cursor = vim.api.nvim_win_get_cursor(0)
+        self.internal_cursor_move = nil
+        if internal.buf == buf and cursor[1] == internal.line and cursor[2] == internal.col then return end
+      end
+      if self.list_visible then self:hide_change_list() end
     end,
   })
   vim.api.nvim_create_autocmd("FileType", {
@@ -456,7 +470,7 @@ function UI:update_change_list(versions, active_id)
   pcall(vim.cmd, "redraw")
 end
 
-function UI:show_version(item)
+function UI:show_version(item, options)
   local version_text = normalize_visual(read_bytes(item.snapshotPath, self.runtime_dir))
   local origin_text = ""
   if item.originKind ~= "absent" then
@@ -511,6 +525,9 @@ function UI:show_version(item)
   vim.api.nvim_set_current_buf(buf)
   self:_close_other_buffers_for_file(buf, item)
   local target = math.max(1, math.min(location, vim.api.nvim_buf_line_count(buf)))
+  if options and options.preserve_change_list then
+    self.internal_cursor_move = { buf = buf, line = target, col = 0 }
+  end
   pcall(vim.api.nvim_win_set_cursor, 0, { target, 0 })
   return buf
 end
