@@ -50,6 +50,10 @@ The proposed new workflow, with the above changes, would look like:
   3.3. a `/compact` is run (currently intending to use default compact if possible and test performance) to compact and preserve conversation progression and decisions leading to the implementation plan in under 100 words. This removes old temporal file reads, tool calls, and bash command outputs that no longer matter now that a plan is ready.
   3.4. this launches a new tmux pane with the agent + the following as input, with everything else the same as the current `olive-agents`.
 
+So the flow is: agent tool or human runs `/mag` -> human TUI (context ledger building, whether the current agent should be allowed to continue while the launched agent is working, and whether to compact) -> then compacts and sends off subagent.
+
+The agent gets launched with the following format:
+
 ```
 # context 
 <compacted context>
@@ -63,6 +67,7 @@ Notes:
 - this attempts to keep the same working formula found by the user of human in the loop implementation without finnicky `/tree` jumping and provides the needed context for a good review, and does the same thing I did manually by navigating to a specific point in the tree, running `/ar`, and then navigating back to a point and instructing the main agent to launch the subagent, and then editing the prompt the main agent wrote to instruct the subagent to read the md file I saved at a specific file path. This gives the agent what it needs, minus the snapshot of file reads, write tool call results, and bash commands that a fresh session does not need, but keeps the important signals. This virtually achieves the same effect that I have been doing manually in a more streamlined manner, with more refined controls, and approval modals baked into it.
 - this is not the same as a simple `/compact`, because we can parallelize, branch off asynchronously expanded beyond a single session tree with more than one agent, and have fine grained control over exact output preservation, which I think is enough as an evolution of subagents custom built for my workflow, and is a realistic and grounded optimization. While not used by the human, parallelization and longer workflows is now feasible with this structure, but this implementation should be kept at its most atomic and simplest base form possible because this should be a minimal and general purpose tool at the infra level for the harness, and not a Langgraph Pi. How I use this general tool is up to me to prompt, configure and decide in the future, we simply need to implement it such that it can be kept versatile and applied flexibly without needing to refactor or change how the code works. Every part of this re-uses concepts of Pi and links and extends parts of the Pi coding agent that already exists as a default feature baked in, so it should not be a complex, from the ground up implementation.
 - the context ledger + flow above **only applies for launching a new fresh agent**, NOT for feedback back to the agent that launched it. That should be an output of the agent just like how `olive-agents` is right now with no change.
+- since we are already rendering a TUI of the context ledger for inspection, we should use the same TUI for during the context ledger building (see below).
 - this is a general purpose tool and does not enforce any semantics, conventions or how you should use the tools. This adheres to Pi coding agent's philosophy strictly, keeps the tool and infra versatile by not hard coding any semantics and abstractions which should be done at the skill level with the agents instead, which will be done and tweaked by the user and should not be within the co-agent application code itself directly. How to use, launch and instruct agents is a best practices that should be in context learning and loadable domain knowledge (skills).
 - because this becomes a workflow and a chain designed for context optimization, adherance & alignment and HITL control, the context ledger is now the tree: this means that this context ledger needs to preserved and propagated or reusable/extensible with versioning, so co-agents, despite working in isolation and doing no A2A between >= 2 live always running agents, can function cohesively through each subsequent launch (see below)
 - the existing `/mag` slash command that enables manual launching of agents needs to be reworked to use the same mechanism as this as well
@@ -85,6 +90,36 @@ B1 agent <name>
     └── C2 (produced after B2 is done or launches a B3; is C1 appended by B2's context)
         └── C3 (produced after B3 is done or launches a B4; is C2 appeneded by B3's context)
 ```
+
+Edge cases for the context ledger rendered: 
+
+Case 1) If B2 is launched after B1 but B2 does not use any context ledger or compaction from B1, then the context tree would look like - 
+
+```
+B1 agent <name>
+└── C1_1 (any additional agents launched with a context ledger or compaction built B1 will be treated the same)
+B2 agent <name>
+```
+
+Because technically, there is nothing downstream in the context ledger from B1 -> B2. B2 is effectively a new, isolated agent and has the same effect as a normal subagent with isolated context and only receiving a prompt from the agent B1.
+
+Case 2) If B3 is launched by B2, and B2 used a context ledger from B1, but B3 does not use any context ledger from B2 but B1, B3's ledger is treated at the same nested level as B2's since the have the same number of parents and thus should be at the same level-
+
+```
+B1 agent <name>
+└── C1_1 (from /build agent 1 B1, used by /build agent B2)
+└── C1_2 (from /build agent 1 B1, used by /build agent B3)
+```
+
+Case 3) If B3 is launched by B2 but B3 does not use any downstream context from B1 or B2-
+
+```
+B1 agent <name>
+└── C1_1 (from /build agent 1 B1, used by /build agent B2)
+B3 agent <name> C1_2 (treated the same as case 1)
+```
+
+To make the context ledger easier to use, I think rendering the agent session name in the ledger after the C numbering is needed. We need to flesh out how we name the context tree properly.
 
 Requirements:
 
@@ -145,7 +180,7 @@ And if there are parallels, we do -
   └── [2] - <co-agent session name> # agent that spawned with a context ledger from [1] ([0] appended by agent [1])
 ```
 
-We should keep the existing semantics used for the agent name session from olive-agents, and make this context ledger follow the same format.
+We should keep the existing semantics used for the agent name session from olive-agents, and make this context ledger follow the same format. For the agent sessions themselves, we should apply the same format as `/rn` and let the agent that launches it configure the naming.
 
 6. the new additions must keep the tmux session performant; this means that we need to cap the max number of panes to 10 at most, which is more than enough. Once the limit is reached, notify and enforce the user to 
 7. We put in hard agent turn stops and reconciliations/short syncs which use the same HITL UI for continuing, context ledger building and handoff, or feedback to the agent that spawned it, but never hard capping or stopping based on context window size.
