@@ -16,12 +16,10 @@ export const DEFAULT_AGENTS: Map<string, AgentConfig> = new Map([
       displayName: "Agent",
       description: "General-purpose agent for researching complex questions, searching for code, and executing multi-step tasks. When you are searching for a keyword or file and are not confident that you will find the right match in the first few tries use this agent to perform the search for you.",
       // builtinToolNames omitted — means "all available tools" (resolved at lookup time)
-      // inheritContext / runInBackground / isolated omitted — strategy fields, callers decide per-call.
-      // Setting them to false would lock callsite intent (see resolveAgentInvocationConfig in invocation-config.ts).
+      // runInBackground is caller-controlled.
       extensions: true,
       skills: true,
       systemPrompt: "",
-      promptMode: "append",
       isDefault: true,
     },
   ],
@@ -70,7 +68,6 @@ Review process:
 - Explain impact and the smallest reasonable correction
 - Keep summaries brief
 - Do not use emojis`,
-      promptMode: "replace",
       isDefault: true,
     },
   ],

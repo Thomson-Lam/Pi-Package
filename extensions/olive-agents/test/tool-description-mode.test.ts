@@ -113,21 +113,14 @@ describe("toolDescriptionMode", () => {
     expect(desc).toContain("## Usage notes");
   });
 
-  it("compact keeps every load-bearing contract — fails when a behavior change forgets compact", () => {
+  it("compact keeps the current launch contracts", () => {
     const tools = setup({ toolDescriptionMode: "compact" });
     const desc: string = tools.get("Agent").description;
-    // One keyword per behavioral contract the orchestrator must know about.
-    // If you change one of these behaviors, update BOTH descriptions.
-    for (const contract of [
-      "run_in_background",
-      "resume",
-      "steer_subagent",
-      'isolation: "worktree"',
-      ".pi/agents/",
-      "self-contained",
-    ]) {
+    for (const contract of ["run_in_background", "resume", "parent working directory", "self-contained"]) {
       expect(desc).toContain(contract);
     }
+    expect(desc).not.toContain("steer_subagent");
+    expect(desc).not.toContain('isolation: "worktree"');
   });
 
   it("custom mode renders the project template with placeholders substituted", () => {
@@ -167,41 +160,13 @@ describe("toolDescriptionMode", () => {
     expect(desc).not.toContain("}}");
   });
 
-  it("keeps compact mode load-bearing context contracts", () => {
-    const tools = setup({ toolDescriptionMode: "compact" });
-    const desc: string = tools.get("Agent").description;
-    expect(desc).toContain("context.snippets");
-    expect(desc).toContain("inherit_context");
-  });
-
-  it("exposes a strictly optional context parameter with references, never content", () => {
-    const tools = setup();
-    const tool = tools.get("Agent");
+  it("exposes a fresh-task-only parameter schema", () => {
+    const tool = setup().get("Agent");
     const params = tool.parameters as any;
     expect(params.type).toBe("object");
-    const props = params.properties ?? {};
-    expect(props.context?.type).toBe("object");
-    expect(params.required ?? []).not.toContain("context");
-    const snippetProps = props.context?.properties?.snippets?.items?.properties ?? {};
-    expect(snippetProps.path?.type).toBe("string");
-    expect(snippetProps.start_line?.type).toBe("integer");
-    expect(snippetProps.start_line?.minimum).toBe(1);
-    expect(snippetProps.end_line?.type).toBe("integer");
-    expect(snippetProps.content).toBeUndefined();
-    expect(snippetProps.text).toBeUndefined();
-    const leadProps = props.context?.properties?.recommended_files?.items?.properties ?? {};
-    expect(leadProps.path?.type).toBe("string");
-    expect(leadProps.symbol?.type).toBe("string");
-    expect(leadProps.content).toBeUndefined();
-  });
-
-  it("documents the context hierarchy and inheritance duplication risk", () => {
-    const tools = setup();
-    const desc: string = tools.get("Agent").description;
-    expect(desc).toContain("## Context handoff");
-    expect(desc).toContain("1-indexed");
-    const inheritDesc = tools.get("Agent").parameters.properties.inherit_context.description as string;
-    expect(inheritDesc).toMatch(/duplicat/i);
+    expect(params.properties.context).toBeUndefined();
+    expect(params.properties.inherit_context).toBeUndefined();
+    expect(tool.description).toContain("child starts fresh");
   });
 
 });

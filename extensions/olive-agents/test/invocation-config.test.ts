@@ -4,106 +4,35 @@ import type { AgentConfig } from "../src/types.js";
 
 function makeConfig(overrides: Partial<AgentConfig> = {}): AgentConfig {
   return {
-    name: "Explore",
-    description: "Explore",
-    builtinToolNames: ["read"],
-    extensions: false,
-    skills: false,
-    systemPrompt: "Test agent",
-    promptMode: "replace",
-    inheritContext: false,
-    runInBackground: false,
-    isolated: false,
-    ...overrides,
+    name: "Explore", description: "Explore", extensions: false, skills: false,
+    systemPrompt: "Test agent", ...overrides,
   };
 }
 
 describe("resolveAgentInvocationConfig", () => {
-  it("prefers agent config over tool-call params for locked fields", () => {
-    const resolved = resolveAgentInvocationConfig(
-      makeConfig({
-        model: "provider/config-model",
-        thinking: "high",
-        maxTurns: 42,
-        inheritContext: false,
-        runInBackground: false,
-        isolated: false,
-        isolation: "worktree",
-      }),
-      {
-        model: "provider/param-model",
-        thinking: "minimal",
-        max_turns: 1,
-        inherit_context: true,
-        run_in_background: true,
-        isolated: true,
-        isolation: "worktree",
-      },
-    );
-
+  it("prefers configured model, thinking, and turn limit", () => {
+    const resolved = resolveAgentInvocationConfig(makeConfig({
+      model: "provider/config-model", thinking: "high", maxTurns: 42,
+    }), { model: "provider/param-model", thinking: "minimal", max_turns: 1 });
     expect(resolved.modelInput).toBe("provider/config-model");
     expect(resolved.modelFromParams).toBe(false);
     expect(resolved.thinking).toBe("high");
     expect(resolved.maxTurns).toBe(42);
-    expect(resolved.inheritContext).toBe(false);
-    expect(resolved.runInBackground).toBe(false);
-    expect(resolved.isolated).toBe(false);
-    expect(resolved.isolation).toBe("worktree");
   });
 
-  it("uses tool-call params when no agent config is available", () => {
+  it("uses tool-call values when no agent config is available", () => {
     const resolved = resolveAgentInvocationConfig(undefined, {
-      model: "provider/param-model",
-      thinking: "minimal",
-      max_turns: 3,
-      inherit_context: true,
-      run_in_background: true,
-      isolated: true,
-      isolation: "worktree",
+      model: "provider/param-model", thinking: "minimal", max_turns: 3, run_in_background: true,
     });
-
     expect(resolved.modelInput).toBe("provider/param-model");
     expect(resolved.modelFromParams).toBe(true);
     expect(resolved.thinking).toBe("minimal");
     expect(resolved.maxTurns).toBe(3);
-    expect(resolved.inheritContext).toBe(true);
     expect(resolved.runInBackground).toBe(true);
-    expect(resolved.isolated).toBe(true);
-    expect(resolved.isolation).toBe("worktree");
   });
 
-  it("lets parent fill in booleans when config leaves them undefined", () => {
-    const resolved = resolveAgentInvocationConfig(
-      makeConfig({
-        inheritContext: undefined,
-        runInBackground: undefined,
-        isolated: undefined,
-      }),
-      {
-        inherit_context: true,
-        run_in_background: true,
-        isolated: true,
-      },
-    );
-
-    expect(resolved.inheritContext).toBe(true);
-    expect(resolved.runInBackground).toBe(true);
-    expect(resolved.isolated).toBe(true);
-  });
-
-  it("defaults booleans to false when neither config nor params set them", () => {
-    const resolved = resolveAgentInvocationConfig(
-      makeConfig({
-        inheritContext: undefined,
-        runInBackground: undefined,
-        isolated: undefined,
-      }),
-      {},
-    );
-
-    expect(resolved.inheritContext).toBe(false);
-    expect(resolved.runInBackground).toBe(false);
-    expect(resolved.isolated).toBe(false);
+  it("defaults run mode to foreground", () => {
+    expect(resolveAgentInvocationConfig(makeConfig(), {}).runInBackground).toBe(false);
   });
 });
 

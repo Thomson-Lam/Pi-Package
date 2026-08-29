@@ -74,7 +74,7 @@ export interface AgentDetails {
   spinnerFrame?: number;
   /** Short model name if different from parent (e.g. "haiku", "sonnet"). */
   modelName?: string;
-  /** Notable config tags (e.g. ["thinking: high", "isolated"]). */
+  /** Notable invocation tags (e.g. ["thinking: high", "background"]). */
   tags?: string[];
   /** Current turn count. */
   turnCount?: number;
@@ -150,12 +150,6 @@ export function getDisplayName(type: SubagentType): string {
   return getConfig(type).displayName;
 }
 
-/** Short label for prompt mode: "twin" for append, nothing for replace (the default). */
-export function getPromptModeLabel(type: SubagentType): string | undefined {
-  const config = getConfig(type);
-  return config.promptMode === "append" ? "twin" : undefined;
-}
-
 /** Mode label is not included — callers add it where they want it. */
 export function buildInvocationTags(
   invocation: AgentInvocation | undefined,
@@ -163,9 +157,6 @@ export function buildInvocationTags(
   const tags: string[] = [];
   if (!invocation) return { tags };
   if (invocation.thinking) tags.push(`thinking: ${invocation.thinking}`);
-  if (invocation.isolated) tags.push("isolated");
-  if (invocation.isolation === "worktree") tags.push("worktree");
-  if (invocation.inheritContext) tags.push("inherit context");
   if (invocation.runInBackground) tags.push("background");
   if (invocation.maxTurns != null) tags.push(`max turns: ${invocation.maxTurns}`);
   return { modelName: invocation.modelName, tags };

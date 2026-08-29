@@ -5,7 +5,7 @@
  *
  *   - prepares launch specs and creates tmux windows (concurrency-queued)
  *   - watches each child's mailbox for lifecycle/tool events
- *   - forwards commands (steer / follow_up / abort / shutdown) to the child
+ *   - forwards commands (follow_up / abort / shutdown) to the child
  *   - tracks per-record status, activity, usage and window state
  *
  * Foreground spawns bypass the concurrency queue and await run_settled.
@@ -19,12 +19,9 @@ import type { Model } from "@earendil-works/pi-ai";
 import type { ExtensionAPI, ExtensionContext } from "@earendil-works/pi-coding-agent";
 import { type AgentLaunchSpec, normalizeMaxTurns, prepareAgentLaunch, writeLaunchSpec } from "./agent-runner.js";
 import { type ChildEvent, ensureMailboxDir, removeMailboxDir, watchChildEvents, writeParentCommand } from "./event-mailbox.js";
-import { verifyHandoffFreshness } from "./handoff/freshness.js";
-import type { DeliveredContextHandoff } from "./handoff/serialize.js";
 import { createAgentWindow, execFromPi, focusWindow as focusTmuxWindow, killWindow as killTmuxWindow, shellQuote, windowAlive as tmuxWindowAlive, type TmuxExec } from "./tmux-window.js";
 import { agentSessionName, agentWindowName } from "./names.js";
-import { type AgentRecord, type IsolationMode, type SubagentType, type ThinkingLevel } from "./types.js";
-import { checkpointWorktree, createWorktree, releaseWorktree } from "./worktree.js";
+import { type AgentRecord, type SubagentType, type ThinkingLevel } from "./types.js";
 
 /** Tool activity callback (kept for foreground streaming compatibility). */
 export interface ToolActivity {
@@ -38,18 +35,8 @@ export interface SpawnOptions {
   model?: Model<any>;
   maxTurns?: number;
   signal?: AbortSignal;
-  isolated?: boolean;
-  inheritContext?: boolean;
   thinkingLevel?: ThinkingLevel;
   isBackground?: boolean;
-  /** Override working directory (e.g. for worktree isolation). */
-  cwd?: string;
-  /** Parent config cwd when `cwd` points elsewhere (legacy RPC spawns). */
-  configCwd?: string;
-  isolation?: IsolationMode;
-  /** Approved constrained-context packet (immutable). Verified against the
-   *  child's launch cwd before the child window opens (decision B). */
-  handoff?: DeliveredContextHandoff;
   invocation?: AgentRecord["invocation"];
   onToolActivity?: (activity: ToolActivity) => void;
   onTurnEnd?: (turnCount: number) => void;
@@ -234,12 +221,6 @@ export class AgentManager {
     try {
       await this.startAgent(id, { pi, ctx, type, prompt, options });
     } catch (err) {
-      // Release a worktree created for a launch that never opened a child
-      // window — leftover worktrees block re-checkouts and rot on disk.
-      const record = this.agents.get(id);
-      if (record?.worktree && !record.window) {
-        try { releaseWorktree(record.worktree.repoCwd ?? process.cwd(), record.worktree); } catch { /* best effort */ }
-      }
       this.agents.delete(id);
       throw err;
     }
@@ -253,27 +234,6 @@ export class AgentManager {
   ): Promise<void> {
     const record = this.agents.get(id);
     if (!record || this.disposed) return;
-
-    // Worktree isolation: create the worktree BEFORE anything else so a
-    // failure never leaves a half-started record. The child runs inside the
-    // worktree copy; the parent checkpoints it when a run settles.
-    let worktreeCwd: string | undefined;
-    if (options.isolation === "worktree") {
-      const baseCwd = options.cwd ?? ctx.cwd;
-      const wt = createWorktree(baseCwd, id);
-      if (!wt) {
-        throw new Error(
-          'Cannot run with isolation: "worktree" — not a git repo, no commits yet, or `git worktree add` failed. ' +
-          'Initialize git and commit at least once, or omit `isolation`.'
-        );
-      }
-      record.worktree = { ...wt, repoCwd: baseCwd };
-      // Subdirectory scoping: a repo with cwd inside `packages/app` creates a
-      // worktree whose CHILD CWD is `wt.workPath` (the same subdir inside the
-      // copy). Using the worktree root would send the child to the wrong
-      // directory and break relative-path handoff + freshness resolution.
-      worktreeCwd = wt.workPath ?? wt.path;
-    }
 
     const parentSessionId = ctx.sessionManager.getSessionId();
     const parentSessionFile = ctx.sessionManager.getSessionFile();
@@ -298,11 +258,6 @@ export class AgentManager {
         model,
         thinking: options.thinkingLevel,
         maxTurns: options.maxTurns,
-        isolated: options.isolated ?? false,
-        inheritContext: options.inheritContext ?? false,
-        cwd: worktreeCwd ?? options.cwd,
-        configCwd: options.configCwd,
-        handoff: options.handoff,
       },
       agentId: id,
       childSessionId,
@@ -313,25 +268,6 @@ export class AgentManager {
 
     for (const warning of warnings) {
       try { ctx.ui.notify(`Agent "${type}": ${warning}`, "warning"); } catch { /* ignore */ }
-    }
-
-    // Launch-time freshness (decision B): the approved packet must match the
-    // exact bytes at the CHILD's launch cwd (a worktree copy for worktree
-    // isolation). A dirty parent tree therefore cannot silently deliver
-    // evidence the worktree does not contain. Failures abort before any child
-    // window opens; the spawn error surfaces to the main agent via feedback.
-    if (spec.run.handoff && spec.run.handoff.details.snippets.length > 0) {
-      const failures = await verifyHandoffFreshness(spec.run.handoff, spec.runtime.cwd);
-      if (failures.length > 0) {
-        if (record.worktree) {
-          try { releaseWorktree(record.worktree.repoCwd ?? process.cwd(), record.worktree); } catch { /* best effort */ }
-        }
-        this.agents.delete(id);
-        throw new Error(
-          `Context sources changed after review; re-approve before launching.\n` +
-          failures.map((failure) => `- ${failure}`).join("\n"),
-        );
-      }
     }
 
     // Record the child session identity up front (sessionFile arrives via ready).
@@ -520,19 +456,6 @@ export class AgentManager {
     if (event.usage) record.lifetimeUsage = { ...event.usage };
     record.reviewedAt = undefined;
 
-    // Checkpoint a retained worktree on every settled run.
-    if (record.worktree) {
-      try {
-        const wtResult = checkpointWorktree(record.worktree.repoCwd ?? process.cwd(), record.worktree, record.description);
-        record.worktreeResult = wtResult;
-        if (wtResult.hasChanges && wtResult.branch) {
-          const repoNote = record.worktree.repoCwd !== undefined ? ` in \`${record.worktree.repoCwd}\`` : "";
-          record.result = (record.result ?? "") +
-            `\n\n---\nChanges saved to branch \`${wtResult.branch}\`${repoNote}. Merge with: \`git merge ${wtResult.branch}\`${record.worktree.repoCwd !== undefined ? ` (run in \`${record.worktree.repoCwd}\`)` : ""}`;
-        }
-      } catch { /* checkpoint is best effort */ }
-    }
-
     record.stopReason =
       record.status === "steered" ? "turn limit"
       : record.status === "aborted" ? "max turns exceeded"
@@ -667,9 +590,6 @@ export class AgentManager {
       } catch (err) {
         const message = err instanceof Error ? err.message : String(err);
         const record = this.agents.get(next.id);
-        if (record?.worktree && !record.window) {
-          try { releaseWorktree(record.worktree.repoCwd ?? process.cwd(), record.worktree); } catch { /* best effort */ }
-        }
         record.status = "error";
         record.error = message;
         record.completedAt = Date.now();
@@ -755,19 +675,6 @@ export class AgentManager {
     writeParentCommand(record.mailboxDir, { type: "follow_up", message: prompt });
     await wait;
     return this.agents.get(id);
-  }
-
-  /** Steer a running child via the mailbox. Returns false if not steerable. */
-  steer(id: string, message: string): boolean {
-    const record = this.agents.get(id);
-    if (!record) return false;
-    if (record.status !== "running") return false;
-    if (!record.mailboxDir) return false;
-    record.feedback = { kind: "steer", text: message, state: "queued", updatedAt: Date.now() };
-    record.updatedAt = Date.now();
-    this.emit({ type: "updated", record });
-    writeParentCommand(record.mailboxDir, { type: "steer", message });
-    return true;
   }
 
   getRecord(id: string): AgentRecord | undefined {
@@ -883,9 +790,6 @@ export class AgentManager {
   /** Remove a record (fleet cleanup). The Pi session file is preserved. */
   private removeRecord(id: string, record: AgentRecord): void {
     this.stopWatchers(id);
-    if (record.worktree) {
-      try { releaseWorktree(record.worktree.repoCwd ?? process.cwd(), record.worktree); } catch { /* best effort */ }
-    }
     this.agents.delete(id);
     try { if (record.mailboxDir) removeMailboxDir(record.mailboxDir); } catch { /* ignore */ }
     this.emit({ type: "removed", id });

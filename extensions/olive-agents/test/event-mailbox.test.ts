@@ -109,10 +109,10 @@ describe("child events", () => {
 
 describe("parent commands", () => {
   it("writes and reads commands in order", () => {
-    writeParentCommand(dir, { type: "steer", message: "stop" });
+    writeParentCommand(dir, { type: "follow_up", message: "continue" });
     writeParentCommand(dir, { type: "abort" });
     const cmds = readPendingCommands(dir);
-    expect(cmds.map((c) => c.type)).toEqual(["steer", "abort"]);
+    expect(cmds.map((c) => c.type)).toEqual(["follow_up", "abort"]);
   });
 
   it("consumes commands via ack", () => {

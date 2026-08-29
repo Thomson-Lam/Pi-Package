@@ -4,7 +4,6 @@
  * Tools:
  *   Agent             — LLM-callable: spawn a sub-agent
  *   get_subagent_result  — LLM-callable: check background agent status/result
- *   steer_subagent       — LLM-callable: send a steering message to a running agent
  *
  * Commands:
  *   /agents                 — Interactive agent management menu
@@ -19,8 +18,7 @@ import { Type } from "typebox";
 import { AgentManager } from "./agent-manager.js";
 import { getDefaultMaxTurns, getGraceTurns, normalizeMaxTurns, SUBAGENT_TOOL_NAMES, setDefaultMaxTurns, setGraceTurns } from "./agent-runner.js";
 import { approveInvocation } from "./approval.js";
-import { buildParentContext } from "./context.js";
-import { BUILTIN_TOOL_NAMES, getAgentConfig, getAllTypes, getAvailableTypes, isDefaultsDisabled, registerAgents, resolveType, setDefaultsDisabled } from "./agent-types.js";
+import { getAgentConfig, getAllTypes, getAvailableTypes, isDefaultsDisabled, registerAgents, resolveType, setDefaultsDisabled } from "./agent-types.js";
 import { type RpcHandle, registerRpcHandlers } from "./cross-extension-rpc.js";
 import { loadCustomAgents } from "./custom-agents.js";
 import { isModelInScope, readEnabledModels, resolveEnabledModels } from "./enabled-models.js";
@@ -30,13 +28,6 @@ import { resolveAgentInvocationConfig, resolveJoinMode } from "./invocation-conf
 import { type ModelRegistry, resolveModel } from "./model-resolver.js";
 import { applyAndEmitLoaded, type SubagentsSettings, saveAndEmitChanged, type ToolDescriptionMode } from "./settings.js";
 import { getStatusNote } from "./status-note.js";
-import {
-  isContextHandoffEmpty,
-  type ContextHandoffProposal,
-  type PreparedContextHandoff,
-} from "./handoff/types.js";
-import { prepareContextHandoff } from "./handoff/prepare.js";
-import { serializeContextHandoff } from "./handoff/serialize.js";
 import { type AgentConfig, type AgentInvocation, type AgentRecord, type JoinMode, type NotificationDetails, type SubagentType, type ThinkingLevel } from "./types.js";
 import {
   type AgentActivity,
@@ -49,7 +40,6 @@ import {
   formatTokens,
   formatTurns,
   getDisplayName,
-  getPromptModeLabel,
   SPINNER,
   type Theme,
 } from "./ui/format.js";
@@ -679,15 +669,8 @@ export default function (pi: ExtensionAPI) {
     fleet.setUICtx(ctx.ui as unknown as FleetUICtx);
   });
 
-  /** Format an agent's tool scope: "*" when it has all built-ins, else a comma-separated list. */
-  const formatToolsSuffix = (cfg: AgentConfig | undefined): string => {
-    const tools = cfg?.builtinToolNames;
-    if (!tools || tools.length === 0) return "*";
-    const isFullSet =
-      tools.length === BUILTIN_TOOL_NAMES.length
-      && BUILTIN_TOOL_NAMES.every((t) => tools.includes(t));
-    return isFullSet ? "*" : tools.join(", ");
-  };
+  /** Agent tools are copied from the parent at launch time. */
+  const formatToolsSuffix = (_cfg: AgentConfig | undefined): string => "parent";
 
   /** Build the full type list text dynamically from available agents only. */
   const buildTypeListText = () => {
@@ -771,9 +754,8 @@ Notes:
 - description: 3-5 words (shown in UI). Prompts must be self-contained — the agent has not seen this conversation.
 - Parallel work: one message, multiple Agent calls, run_in_background: true on each. You are notified when background agents finish — never poll or sleep.
 - The result is not shown to the user — summarize it for them. Verify an agent's claimed code changes before reporting work done.
-- resume continues a previous agent by ID; steer_subagent messages a running one.
-- isolation: "worktree" runs the agent in an isolated git worktree; changes land on a branch.
-- Context: fresh default · context.snippets = exact path + inclusive 1-indexed lines, small ranges · context.recommended_files = leads to explore, no contents · inherit_context only for conversation-dependent tasks (combining with context duplicates and needs approval). Never paste file text into the prompt.`;
+- resume continues a previous agent by ID.
+- The child uses the parent working directory, tools, and extensions.`;
 
   const fullAgentToolDescription = `Launch a new agent to handle complex, multi-step tasks autonomously. Each agent type has specific capabilities and tools available to it.
 
@@ -797,13 +779,11 @@ If the target is already known, use a direct tool — \`read\` for a known path,
 - Use run_in_background for work you don't need immediately. You will be notified when it completes — do NOT poll or sleep waiting for it. Continue with other work or respond to the user instead.
 - Foreground vs background: use foreground (default) when you need the agent's results before you can proceed. Use background when you have genuinely independent work to do in parallel.
 - Use resume with an agent ID to continue a previous agent's work. A new (non-resume) Agent call starts a fresh agent with no memory of prior runs, so the prompt must be self-contained.
-- Use steer_subagent to send mid-run messages to a running background agent.
 - Clearly tell the agent whether you expect it to write code or just to do research (search, file reads, etc.), since it is not aware of the user's intent.
 - If an agent's description says it should be used proactively, try to use it without the user having to ask for it first.
 - Use model to specify a different model (as "provider/modelId", or fuzzy e.g. "haiku", "sonnet").
 - Use thinking to control extended thinking level.
-- Use inherit_context if the agent needs the parent conversation history.
-- Use isolation: "worktree" to run the agent in an isolated git worktree (safe parallel file modifications). Changes are checkpointed to a branch; the worktree remains available for follow-ups until the child is cleared or the parent session ends.
+- The child uses the parent's working directory, active tools, and loaded extensions.
 
 ## Writing the prompt
 
@@ -818,14 +798,11 @@ Terse command-style prompts produce shallow, generic work.
 
 **Never delegate understanding.** Don't write "based on your findings, fix the bug" or "based on the research, implement it." Those phrases push synthesis onto the agent instead of doing it yourself. Write prompts that prove you understood: include file paths, line numbers, what specifically to change.
 
-## Context handoff
+## Context
 
-Prefer fresh context, then constrained context, then inherit_context.
+The child starts fresh and receives only the self-contained task prompt.
 
-- Default: fresh child with a self-contained task.
-- Add constrained context only when selected evidence materially improves the brief: context.snippets take project-relative paths with inclusive 1-indexed line ranges — choose the smallest complete range that establishes the fact and avoid full-file ranges. context.recommended_files list files/symbols the child should investigate; they never preload contents.
-- Use inherit_context only when the parent conversation itself is source material. Combining inherit_context with a context packet duplicates content and requires explicit approval.
-- Never paste file contents into the prompt; put source text in context.snippets.`;
+- The child uses the parent's working directory, active tools, and loaded extensions.`;
 
   // `toolDescriptionMode: "custom"` — user-authored description with live
   // dynamic parts. Project file wins over global; missing/empty falls back to
@@ -919,44 +896,6 @@ Prefer fresh context, then constrained context, then inherit_context.
       resume: Type.Optional(
         Type.String({
           description: "Optional agent ID to resume from. Continues from previous context.",
-        }),
-      ),
-      isolated: Type.Optional(
-        Type.Boolean({
-          description: "If true, agent gets no extension/MCP tools — only built-in tools.",
-        }),
-      ),
-      inherit_context: Type.Optional(
-        Type.Boolean({
-          description: "If true, fork a snapshot of the parent conversation into the agent's context (user/assistant text and summaries only; tool results omitted). Default: false (fresh context). Prefer context.snippets for coding evidence; combining inheritance with a context packet may duplicate content and requires explicit approval.",
-        }),
-      ),
-      isolation: Type.Optional(
-        Type.Literal("worktree", {
-          description: 'Set to "worktree" to run the agent in an isolated git worktree. Changes are checkpointed to a branch and the worktree remains available for follow-ups.',
-        }),
-      ),
-      context: Type.Optional(
-        Type.Object({
-          snippets: Type.Optional(
-            Type.Array(
-              Type.Object({
-                path: Type.String({ description: "Project-relative source file path shown to the subagent." }),
-                start_line: Type.Integer({ minimum: 1, description: "First source line, 1-indexed and inclusive." }),
-                end_line: Type.Integer({ minimum: 1, description: "Last source line, 1-indexed and inclusive (must be >= start_line)." }),
-                reason: Type.Optional(Type.String({ maxLength: 200, description: "Why this excerpt matters (≤200 chars). Treated as your rationale, never verified fact." })),
-              }),
-            ),
-          ),
-          recommended_files: Type.Optional(
-            Type.Array(
-              Type.Object({
-                path: Type.String({ description: "Project-relative file or directory the subagent should consider exploring." }),
-                symbol: Type.Optional(Type.String({ maxLength: 120, description: "Optional symbol or search target within the source (≤120 chars)." })),
-                reason: Type.Optional(Type.String({ maxLength: 200, description: "Why the subagent may want to inspect this source (≤200 chars)." })),
-              }),
-            ),
-          ),
         }),
       ),
     }),
@@ -1119,10 +1058,7 @@ Prefer fresh context, then constrained context, then inherit_context.
         initialModel,
         resolvedConfig.thinking ?? pi.getThinkingLevel(),
       ) as ThinkingLevel;
-      const inheritContext = resolvedConfig.inheritContext;
       const runInBackground = resolvedConfig.runInBackground;
-      const isolated = resolvedConfig.isolated;
-      const isolation = resolvedConfig.isolation;
       const effectiveMaxTurns = normalizeMaxTurns(resolvedConfig.maxTurns ?? getDefaultMaxTurns());
 
       // Resume existing agent. A resume is a new delegated task and therefore
@@ -1148,11 +1084,6 @@ Prefer fresh context, then constrained context, then inherit_context.
           model: resumeModel,
           thinking: existing.launchSpec?.runtime.thinking ?? pi.getThinkingLevel(),
           runInBackground: false,
-          inheritContext: false,
-          isolated: existing.invocation?.isolated ?? false,
-          isolation: existing.invocation?.isolation,
-          promptMode: getAgentConfig(existing.type)?.promptMode ?? "append",
-          contextLabel: "Existing subagent session (prior context retained)",
         }));
         if (resumeApproval.outcome === "feedback") {
           return textResult(`feedback: ${resumeApproval.feedback}`);
@@ -1199,40 +1130,6 @@ Prefer fresh context, then constrained context, then inherit_context.
         );
       }
 
-      // ---- Constrained context: the agent proposes references, Olive
-      // resolves them into an exact, attributable, bounded packet BEFORE the
-      // human reviews. Invalid/oversized items surface as problems.
-      let initialHandoff: PreparedContextHandoff | undefined;
-      if (params.context !== undefined) {
-        const proposal: ContextHandoffProposal = {
-          snippets: params.context.snippets?.map((snippet: any) => ({
-            path: snippet.path,
-            startLine: snippet.start_line,
-            endLine: snippet.end_line,
-            reason: snippet.reason,
-          })),
-          recommendedFiles: params.context.recommended_files?.map((lead: any) => ({
-            path: lead.path,
-            symbol: lead.symbol,
-            reason: lead.reason,
-          })),
-        };
-        try {
-          const prepared = await prepareContextHandoff(proposal, {
-            sourceRoot: ctx.cwd,
-            // Decision #4: worktree launches approve the content the child will
-            // actually see (the seed commit), never dirty parent working-tree
-            // edits that the worktree will not contain.
-            sourceKind: isolation === "worktree" ? "git-head" : "working-tree",
-          });
-          if (!isContextHandoffEmpty(prepared)) initialHandoff = prepared;
-        } catch (error) {
-          return textResult(
-            `Context preparation failed: ${error instanceof Error ? error.message : String(error)}`,
-          );
-        }
-      }
-
       const approved = await withApproval(() => approveInvocation(ctx, ctx.modelRegistry, {
         agentType: subagentType,
         description: params.description,
@@ -1240,12 +1137,6 @@ Prefer fresh context, then constrained context, then inherit_context.
         model: initialModel,
         thinking,
         runInBackground,
-        inheritContext,
-        isolated,
-        isolation,
-        promptMode: customConfig?.promptMode ?? "append",
-        contextText: inheritContext ? buildParentContext(ctx) : undefined,
-        handoff: initialHandoff,
       }));
       if (approved.outcome === "feedback") {
         return textResult(`feedback: ${approved.feedback}`);
@@ -1254,19 +1145,13 @@ Prefer fresh context, then constrained context, then inherit_context.
         return textResult("do it yourself");
       }
       if (approved.outcome === "cancel") {
-        return textResult("Subagent launch cancelled. No session or worktree was created.");
+        return textResult("Subagent launch cancelled. No session was created.");
       }
 
       const prompt = approved.prompt;
       const effectiveModel = approved.model;
       model = effectiveModel;
       thinking = approved.thinking;
-      // Only the final APPROVED packet is serialized once and carried through
-      // the launch — never the original proposal, so removed or problem items
-      // cannot reach the child.
-      const deliveredHandoff = approved.handoff
-        ? serializeContextHandoff(approved.handoff)
-        : undefined;
       const parentModelId = ctx.model?.id;
       const effectiveModelId = effectiveModel.id;
       const modelName = effectiveModelId !== parentModelId
@@ -1276,14 +1161,9 @@ Prefer fresh context, then constrained context, then inherit_context.
         modelName,
         thinking,
         maxTurns: normalizeMaxTurns(resolvedConfig.maxTurns),
-        isolated,
-        inheritContext,
         runInBackground,
-        isolation,
       };
-      const modeLabel = getPromptModeLabel(subagentType);
-      const { tags: invocationTags } = buildInvocationTags(agentInvocation);
-      const agentTags = modeLabel ? [modeLabel, ...invocationTags] : invocationTags;
+      const { tags: agentTags } = buildInvocationTags(agentInvocation);
       const detailBase = {
         displayName,
         description: params.description,
@@ -1302,12 +1182,8 @@ Prefer fresh context, then constrained context, then inherit_context.
             description: params.description,
             model,
             maxTurns: effectiveMaxTurns,
-            isolated,
-            inheritContext,
             thinkingLevel: thinking,
             isBackground: true,
-            isolation,
-            handoff: deliveredHandoff,
             invocation: agentInvocation,
             ...bgCallbacks,
           });
@@ -1351,7 +1227,7 @@ Prefer fresh context, then constrained context, then inherit_context.
           (record?.childSession?.sessionFile ? `Session file: ${record.childSession.sessionFile}\n` : "") +
           (isQueued ? `Position: queued (max ${manager.getMaxConcurrent()} concurrent)\n` : "") +
           `\nYou will be notified when this agent completes.\n` +
-          `Use get_subagent_result to retrieve full results, or steer_subagent to send it messages.\n` +
+          `Use get_subagent_result to retrieve full results.\n` +
           `Do not duplicate this agent's work.`,
           { ...detailBase, toolUses: 0, tokens: "", durationMs: 0, status: "background" as const, agentId: id },
         );
@@ -1389,11 +1265,7 @@ Prefer fresh context, then constrained context, then inherit_context.
           description: params.description,
           model,
           maxTurns: effectiveMaxTurns,
-          isolated,
-          inheritContext,
           thinkingLevel: thinking,
-          isolation,
-          handoff: deliveredHandoff,
           invocation: agentInvocation,
           signal,
           ...fgCallbacks,
@@ -1517,52 +1389,6 @@ Prefer fresh context, then constrained context, then inherit_context.
       }
 
       return textResult(output);
-    },
-  }));
-
-  // ---- steer_subagent tool ----
-
-  pi.registerTool(defineTool({
-    name: SUBAGENT_TOOL_NAMES.STEER,
-    label: "Steer Agent",
-    description:
-      "Send a steering message to a running agent. The message will interrupt the agent after its current tool execution " +
-      "and be injected into its conversation, allowing you to redirect its work mid-run. Only works on running agents.",
-    promptSnippet: "Send a steering message to redirect a running background agent",
-    parameters: Type.Object({
-      agent_id: Type.String({
-        description: "The agent ID to steer (must be currently running).",
-      }),
-      message: Type.String({
-        description: "The steering message to send. This will appear as a user message in the agent's conversation.",
-      }),
-    }),
-    execute: async (_toolCallId, params, _signal, _onUpdate, _ctx) => {
-      const record = manager.getRecord(params.agent_id);
-      if (!record) {
-        return textResult(`Agent not found: "${params.agent_id}". It may have been cleared or belong to a prior parent session.`);
-      }
-      if (record.status !== "running") {
-        return textResult(`Agent "${params.agent_id}" is not running (status: ${record.status}). Cannot steer a non-running agent.`);
-      }
-
-      try {
-        if (!manager.steer(params.agent_id, params.message)) {
-          return textResult(`Failed to steer agent ${params.agent_id}: not running or no mailbox.`);
-        }
-        pi.events.emit("subagents:steered", { id: record.id, message: params.message });
-        const tokens = formatLifetimeTokens(record);
-        const stateParts: string[] = [];
-        if (tokens) stateParts.push(tokens);
-        stateParts.push(`${record.toolUses} tool ${record.toolUses === 1 ? "use" : "uses"}`);
-        if (record.compactionCount) stateParts.push(`${record.compactionCount} compaction${record.compactionCount === 1 ? "" : "s"}`);
-        return textResult(
-          `Steering message sent to agent ${record.id}. The agent will process it after its current tool execution.\n` +
-          `Current state: ${stateParts.join(" · ")}`,
-        );
-      } catch (err) {
-        return textResult(`Failed to steer agent: ${err instanceof Error ? err.message : String(err)}`);
-      }
     },
   }));
 
@@ -1762,11 +1588,6 @@ Prefer fresh context, then constrained context, then inherit_context.
       model: model!,
       thinking,
       runInBackground: true,
-      inheritContext: resolvedConfig.inheritContext,
-      isolated: resolvedConfig.isolated,
-      isolation: resolvedConfig.isolation,
-      promptMode: config?.promptMode ?? "append",
-      contextText: resolvedConfig.inheritContext ? buildParentContext(ctx) : undefined,
     }));
 
     if (approved.outcome === "feedback") {
@@ -1787,10 +1608,7 @@ Prefer fresh context, then constrained context, then inherit_context.
       modelName,
       thinking: approved.thinking,
       maxTurns: normalizeMaxTurns(resolvedConfig.maxTurns),
-      isolated: resolvedConfig.isolated,
-      inheritContext: resolvedConfig.inheritContext,
       runInBackground: true,
-      isolation: resolvedConfig.isolation,
     };
 
     let id: string;
@@ -1799,11 +1617,8 @@ Prefer fresh context, then constrained context, then inherit_context.
         description,
         model: approved.model,
         maxTurns: effectiveMaxTurns,
-        isolated: resolvedConfig.isolated,
-        inheritContext: resolvedConfig.inheritContext,
         thinkingLevel: approved.thinking,
         isBackground: true,
-        isolation: resolvedConfig.isolation,
         invocation,
       });
     } catch (err) {
@@ -1963,22 +1778,13 @@ Prefer fresh context, then constrained context, then inherit_context.
     const fmFields: string[] = [];
     fmFields.push(`description: ${JSON.stringify(cfg.description)}`);
     if (cfg.displayName) fmFields.push(`display_name: ${cfg.displayName}`);
-    fmFields.push(`tools: ${cfg.builtinToolNames?.join(", ") || "all"}`);
     if (cfg.model) fmFields.push(`model: ${cfg.model}`);
     if (cfg.thinking) fmFields.push(`thinking: ${cfg.thinking}`);
     if (cfg.maxTurns) fmFields.push(`max_turns: ${cfg.maxTurns}`);
-    fmFields.push(`prompt_mode: ${cfg.promptMode}`);
-    if (cfg.extensions === false) fmFields.push("extensions: false");
-    else if (Array.isArray(cfg.extensions)) fmFields.push(`extensions: ${cfg.extensions.join(", ")}`);
-    if (cfg.excludeExtensions?.length) fmFields.push(`exclude_extensions: ${cfg.excludeExtensions.join(", ")}`);
     if (cfg.skills === false) fmFields.push("skills: false");
     else if (Array.isArray(cfg.skills)) fmFields.push(`skills: ${cfg.skills.join(", ")}`);
-    if (cfg.disallowedTools?.length) fmFields.push(`disallowed_tools: ${cfg.disallowedTools.join(", ")}`);
-    if (cfg.inheritContext) fmFields.push("inherit_context: true");
     if (cfg.runInBackground) fmFields.push("run_in_background: true");
-    if (cfg.isolated) fmFields.push("isolated: true");
     if (cfg.memory) fmFields.push(`memory: ${cfg.memory}`);
-    if (cfg.isolation) fmFields.push(`isolation: ${cfg.isolation}`);
 
     const content = `---\n${fmFields.join("\n")}\n---\n\n${cfg.systemPrompt}\n`;
 
@@ -2092,31 +1898,18 @@ The file format is a markdown file with YAML frontmatter and a system prompt bod
 \`\`\`markdown
 ---
 description: <one-line description shown in UI>
-tools: <comma-separated built-in tools: read, bash, edit, write, grep, find, ls. Use "none" for no tools. Omit for all tools>
 model: <optional model as "provider/modelId", e.g. "anthropic/claude-haiku-4-5". Omit to inherit parent model>
 thinking: <optional thinking level: ${THINKING_LEVELS.join(", ")}. Omit to inherit>
 max_turns: <optional max agentic turns. 0 or omit for unlimited (default)>
-prompt_mode: <"replace" (body IS the full system prompt) or "append" (body is appended to default prompt). Default: replace>
-extensions: <true (inherit all MCP/extension tools), false (none), or comma-separated names. Default: true>
 skills: <true (inherit all), false (none), or comma-separated skill names to preload into prompt. Default: true>
-disallowed_tools: <comma-separated tool names to block, even if otherwise available. Omit for none>
-inherit_context: <true to fork parent conversation into agent so it sees chat history. Default: false>
 run_in_background: <true to run in background by default. Default: false>
-isolated: <true for no extension/MCP tools, only built-in tools. Default: false>
 memory: <"user" (global), "project" (per-project), or "local" (gitignored per-project) for persistent memory. Omit for none>
-isolation: <"worktree" to run in isolated git worktree. Omit for normal>
 ---
 
 <system prompt body — instructions for the agent>
 \`\`\`
 
 Guidelines for choosing settings:
-- For read-only tasks (review, analysis): tools: read, bash, grep, find, ls
-- For code modification tasks: include edit, write
-- Use prompt_mode: append if the agent should keep the default system prompt and add specialization on top
-- Use prompt_mode: replace for fully custom agents with their own personality/instructions
-- Set inherit_context: true if the agent needs to know what was discussed in the parent conversation
-- Set isolated: true if the agent should NOT have access to MCP servers or other extensions
 - Only include frontmatter fields that differ from defaults — omit fields where the default is fine
 
 Write the file using the write tool. Only write the file, nothing else.`;
@@ -2149,24 +1942,7 @@ Write the file using the write tool. Only write the file, nothing else.`;
     const description = await ctx.ui.input("Description (one line)");
     if (!description) return;
 
-    // 3. Tools
-    const toolChoice = await ctx.ui.select("Tools", ["all", "none", "read-only (read, bash, grep, find, ls)", "custom..."]);
-    if (!toolChoice) return;
-
-    let tools: string;
-    if (toolChoice === "all") {
-      tools = BUILTIN_TOOL_NAMES.join(", ");
-    } else if (toolChoice === "none") {
-      tools = "none";
-    } else if (toolChoice.startsWith("read-only")) {
-      tools = "read, bash, grep, find, ls";
-    } else {
-      const customTools = await ctx.ui.input("Tools (comma-separated)", BUILTIN_TOOL_NAMES.join(", "));
-      if (!customTools) return;
-      tools = customTools;
-    }
-
-    // 4. Model
+    // 3. Model
     const modelChoice = await ctx.ui.select("Model", [
       "inherit (parent model)",
       "haiku",
@@ -2185,7 +1961,7 @@ Write the file using the write tool. Only write the file, nothing else.`;
       if (customModel) modelLine = `\nmodel: ${customModel}`;
     }
 
-    // 5. Thinking
+    // 4. Thinking
     // "inherit" is a UI-only pseudo-choice (omit the field); the rest mirror pi.
     const thinkingChoice = await ctx.ui.select("Thinking level", ["inherit", ...THINKING_LEVELS]);
     if (!thinkingChoice) return;
@@ -2193,15 +1969,13 @@ Write the file using the write tool. Only write the file, nothing else.`;
     let thinkingLine = "";
     if (thinkingChoice !== "inherit") thinkingLine = `\nthinking: ${thinkingChoice}`;
 
-    // 6. System prompt
+    // 5. System prompt
     const systemPrompt = await ctx.ui.editor("System prompt", "");
     if (systemPrompt === undefined) return;
 
     // Build the file
     const content = `---
-description: ${description}
-tools: ${tools}${modelLine}${thinkingLine}
-prompt_mode: replace
+description: ${description}${modelLine}${thinkingLine}
 ---
 
 ${systemPrompt}

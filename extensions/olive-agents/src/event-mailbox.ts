@@ -42,7 +42,6 @@ export interface ChildEventMap {
 export type ChildEvent = { [K in keyof ChildEventMap]: { type: K } & ChildEventMap[K] }[keyof ChildEventMap];
 
 export interface ParentCommandMap {
-  steer: { message: string };
   follow_up: { message: string };
   abort: {};
   shutdown: {};

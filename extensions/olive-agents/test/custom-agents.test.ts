@@ -106,10 +106,7 @@ tools: read, grep, find
 model: anthropic/claude-opus-4-6
 thinking: high
 max_turns: 30
-prompt_mode: replace
-inherit_context: true
 run_in_background: true
-isolated: true
 ---
 
 You are a security auditor.`);
@@ -124,10 +121,7 @@ You are a security auditor.`);
     expect(agent.model).toBe("anthropic/claude-opus-4-6");
     expect(agent.thinking).toBe("high");
     expect(agent.maxTurns).toBe(30);
-    expect(agent.promptMode).toBe("replace");
-    expect(agent.inheritContext).toBe(true);
     expect(agent.runInBackground).toBe(true);
-    expect(agent.isolated).toBe(true);
     expect(agent.systemPrompt).toBe("You are a security auditor.");
   });
 
@@ -148,10 +142,7 @@ Just a prompt.`);
     expect(agent.model).toBeUndefined();
     expect(agent.thinking).toBeUndefined();
     expect(agent.maxTurns).toBeUndefined();
-    expect(agent.promptMode).toBe("replace");
-    expect(agent.inheritContext).toBeUndefined();
     expect(agent.runInBackground).toBeUndefined();
-    expect(agent.isolated).toBeUndefined();
     expect(agent.systemPrompt).toBe("Just a prompt.");
   });
 
@@ -377,28 +368,6 @@ Negative turns.`);
     expect(result.get("negturns")!.maxTurns).toBeUndefined();
   });
 
-  it("handles prompt_mode: append", () => {
-    writeAgent("appender", `---
-prompt_mode: append
----
-
-Extra instructions.`);
-
-    const result = loadCustomAgents(tmpDir);
-    expect(result.get("appender")!.promptMode).toBe("append");
-  });
-
-  it("defaults unknown prompt_mode to replace", () => {
-    writeAgent("badmode", `---
-prompt_mode: merge
----
-
-Unknown mode.`);
-
-    const result = loadCustomAgents(tmpDir);
-    expect(result.get("badmode")!.promptMode).toBe("replace");
-  });
-
   it("loads multiple agents", () => {
     writeAgent("agent1", `---
 description: First
@@ -593,40 +562,6 @@ Bad memory.`);
 
     const result = loadCustomAgents(tmpDir);
     expect(result.get("bad-mem")!.memory).toBeUndefined();
-  });
-
-  it("parses isolation: worktree", () => {
-    writeAgent("isolated-wt", `---
-description: Worktree agent
-isolation: worktree
----
-
-Isolated.`);
-
-    const result = loadCustomAgents(tmpDir);
-    expect(result.get("isolated-wt")!.isolation).toBe("worktree");
-  });
-
-  it("isolation defaults to undefined when omitted", () => {
-    writeAgent("no-isolation", `---
-description: Normal
----
-
-Normal.`);
-
-    const result = loadCustomAgents(tmpDir);
-    expect(result.get("no-isolation")!.isolation).toBeUndefined();
-  });
-
-  it("rejects invalid isolation mode", () => {
-    writeAgent("bad-isolation", `---
-isolation: docker
----
-
-Bad isolation.`);
-
-    const result = loadCustomAgents(tmpDir);
-    expect(result.get("bad-isolation")!.isolation).toBeUndefined();
   });
 
   it("honors PI_CODING_AGENT_DIR for global custom agent discovery", () => {

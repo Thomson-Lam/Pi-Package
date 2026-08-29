@@ -7,7 +7,6 @@
  */
 
 import type { ModelThinkingLevel } from "@earendil-works/pi-ai";
-import type { DeliveredContextHandoff } from "./handoff/serialize.js";
 import type { LifetimeUsage } from "./usage.js";
 
 export type ThinkingLevel = ModelThinkingLevel;
@@ -21,24 +20,17 @@ export const DEFAULT_AGENT_NAMES = ["general-purpose", "Review"] as const;
 /** Memory scope for persistent agent memory. */
 export type MemoryScope = "user" | "project" | "local";
 
-/** Isolation mode for agent execution. */
-export type IsolationMode = "worktree";
-
 /** Unified agent configuration — used for both default and user-defined agents. */
 export interface AgentConfig {
   name: string;
   displayName?: string;
   description: string;
+  /** Legacy metadata retained for custom-agent compatibility; launch uses parent tools exactly. */
   builtinToolNames?: string[];
-  /** Raw `ext:` selector entries from the `tools:` CSV, e.g. ["ext:foo", "ext:bar/x"].
-   * Presence of any entry flips extension tools to an explicit allowlist. */
   extSelectors?: string[];
-  /** Tool denylist — these tools are removed even if `builtinToolNames` or extensions include them. */
   disallowedTools?: string[];
-  /** true = inherit all, string[] = only listed, false = none */
+  /** Legacy metadata retained for custom-agent compatibility; launch uses parent extensions exactly. */
   extensions: true | string[] | false;
-  /** Extension-name denylist applied after the `extensions:` include set. Exclude wins.
-   * Plain canonical names only (case-insensitive); no paths, no wildcard. */
   excludeExtensions?: string[];
   /** true = inherit all, string[] = only listed, false = none */
   skills: true | string[] | false;
@@ -46,17 +38,10 @@ export interface AgentConfig {
   thinking?: ThinkingLevel;
   maxTurns?: number;
   systemPrompt: string;
-  promptMode: "replace" | "append";
-  /** Default for spawn: fork parent conversation. undefined = caller decides. */
-  inheritContext?: boolean;
   /** Default for spawn: run in background. undefined = caller decides. */
   runInBackground?: boolean;
-  /** Default for spawn: no extension tools. undefined = caller decides. */
-  isolated?: boolean;
   /** Persistent memory scope — agents with memory get a persistent directory and MEMORY.md */
   memory?: MemoryScope;
-  /** Isolation mode — "worktree" runs the agent in a temporary git worktree */
-  isolation?: IsolationMode;
   /** true = this is an embedded default agent (informational) */
   isDefault?: boolean;
   /** false = agent is hidden from the registry */
@@ -104,9 +89,6 @@ export interface AgentLaunchSpec {
     prompt: string;
     maxTurns?: number;
     graceTurns: number;
-    /** Approved constrained-context packet, serialized for the child. Never
-     *  concatenated into `prompt` — delivered as its own custom message. */
-    handoff?: DeliveredContextHandoff;
   };
   bridge: {
     mailboxDir: string;
@@ -184,10 +166,6 @@ export interface AgentRecord {
     updatedAt: number;
     error?: string;
   };
-  /** Worktree info if the agent is running in an isolated worktree. */
-  worktree?: { path: string; branch: string; baseSha: string; workPath: string; repoCwd?: string };
-  /** Worktree cleanup result after agent completion. */
-  worktreeResult?: { hasChanges: boolean; branch?: string };
   /** The tool_use_id from the original Agent tool call. */
   toolCallId?: string;
   /**
@@ -224,10 +202,7 @@ export interface AgentInvocation {
   modelName?: string;
   thinking?: ThinkingLevel;
   maxTurns?: number;
-  isolated?: boolean;
-  inheritContext?: boolean;
   runInBackground?: boolean;
-  isolation?: IsolationMode;
 }
 
 /** Details attached to custom notification messages for visual rendering. */
