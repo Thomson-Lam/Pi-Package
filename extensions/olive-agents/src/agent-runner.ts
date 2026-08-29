@@ -69,6 +69,8 @@ export interface PrepareLaunchInput {
   };
   agentId: string;
   childSessionId: string;
+  /** Prompt policy selected by the caller; omitted means inherited behavior. */
+  promptPolicy?: "native" | "inherit";
   parentSessionFile?: string;
   sessionDir?: string;
   mailboxDir: string;
@@ -106,8 +108,12 @@ export async function prepareAgentLaunch(input: PrepareLaunchInput): Promise<Pre
     if (loaded.length > 0) extras.skillBlocks = loaded;
   }
 
-  let systemPrompt: string;
-  if (agentConfig) {
+  // general-purpose is an alias for Pi's native system prompt. An omitted
+  // type inherits the parent's extension runtime and its active prompt hooks.
+  let systemPrompt: string | undefined;
+  if (agentConfig?.isDefault && agentConfig.name === "general-purpose") {
+    systemPrompt = undefined;
+  } else if (agentConfig) {
     systemPrompt = buildAgentPrompt(agentConfig, effectiveCwd, env, extras);
   } else {
     // Unknown type fallback: build a generic prompt from the canonical config.
@@ -161,7 +167,8 @@ export async function prepareAgentLaunch(input: PrepareLaunchInput): Promise<Pre
       noExtensions,
       extensionPaths: finalExtensionPaths,
       noSkills,
-      systemPrompt,
+      ...(systemPrompt === undefined ? {} : { systemPrompt }),
+      ...(input.promptPolicy ? { promptPolicy: input.promptPolicy } : {}),
     },
     run: {
       prompt: effectivePrompt,

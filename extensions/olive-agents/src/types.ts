@@ -14,9 +14,6 @@ export type ThinkingLevel = ModelThinkingLevel;
 /** Agent type: any string name (built-in defaults or user-defined). */
 export type SubagentType = string;
 
-/** Names of the embedded default agents. */
-export const DEFAULT_AGENT_NAMES = ["general-purpose", "Review"] as const;
-
 /** Memory scope for persistent agent memory. */
 export type MemoryScope = "user" | "project" | "local";
 
@@ -83,7 +80,10 @@ export interface AgentLaunchSpec {
     noExtensions: boolean;
     extensionPaths: string[];
     noSkills: boolean;
-    systemPrompt: string;
+    /** Replacement prompt for custom profiles; absent uses Pi's native system prompt. */
+    systemPrompt?: string;
+    /** Prompt composition policy for the child runtime. */
+    promptPolicy?: "native" | "inherit";
   };
   run: {
     prompt: string;

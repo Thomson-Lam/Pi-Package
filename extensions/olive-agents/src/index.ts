@@ -593,8 +593,8 @@ export default function (pi: ExtensionAPI) {
   function setScopeModelsEnabled(enabled: boolean): void { scopeModelsEnabled = enabled; }
 
   // ---- Disable default agents configuration ----
-  // When enabled, the hardcoded default agents (general-purpose and Review) are
-  // not registered. User-defined agents from project/global custom
+  // When enabled, the hardcoded default agent (general-purpose) is not
+  // registered. User-defined agents from project/global custom
   // agent dirs are completely unaffected — only DEFAULT_AGENTS are suppressed.
   // Defaults to false; opt-in via `/agents → Settings` or olive-agents.json.
   // State lives in agent-types.ts (isDefaultsDisabled) because registerAgents
@@ -857,7 +857,7 @@ The child starts fresh and receives only the self-contained task prompt.
     promptSnippet: "Launch autonomous sub-agents for complex multi-step tasks",
     promptGuidelines: [
       "Use Agent with specialized agents when the task matches an agent type's description. Subagents are valuable for parallelizing independent queries or for protecting the main context window from excessive results, but should not be used excessively when not needed. Importantly, avoid duplicating work that subagents are already doing — if you delegate research to a subagent, do not also perform the same searches yourself.",
-      "For broad codebase exploration or research, spawn Agent with an appropriate subagent_type. Use Review for code-review tasks. Otherwise use direct tools (read, grep, find) when the target is already known.",
+      "For broad codebase exploration or research, spawn Agent with an appropriate subagent_type. Otherwise use direct tools (read, grep, find) when the target is already known.",
       "When an agent runs in the background, you will be notified on completion — do not poll or sleep waiting for it. Continue with other work instead.",
       "Trust but verify: an agent's summary describes intent, not outcome. When an agent writes or edits code, check the actual changes before reporting work as done.",
     ],
@@ -868,9 +868,9 @@ The child starts fresh and receives only the self-contained task prompt.
       description: Type.String({
         description: "A short (3-5 word) description of the task (shown in UI).",
       }),
-      subagent_type: Type.String({
-        description: `The type of specialized agent to use. Available types: ${getAvailableTypes().join(", ")}. Custom agents from .pi/agents/*.md (project) or ${getAgentDir()}/agents/*.md (global) are also available.`,
-      }),
+      subagent_type: Type.Optional(Type.String({
+        description: `Optional agent type. Omit to inherit the parent runtime; explicitly use general-purpose for Pi's native system prompt. Available types: ${getAvailableTypes().join(", ")}. Custom agents from .pi/agents/*.md (project) or ${getAgentDir()}/agents/*.md (global) are also available.`,
+      })),
       model: Type.Optional(
         Type.String({
           description:
@@ -996,10 +996,10 @@ The child starts fresh and receives only the self-contained task prompt.
       // Reload custom agents so new project/global .md files are picked up without restart
       reloadCustomAgents();
 
-      const rawType = params.subagent_type as SubagentType;
-      const resolved = resolveType(rawType);
+      const rawType = params.subagent_type as SubagentType | undefined;
+      const resolved = rawType ? resolveType(rawType) : undefined;
       const subagentType = resolved ?? "general-purpose";
-      const fellBack = resolved === undefined;
+      const fellBack = rawType !== undefined && resolved === undefined;
 
       const displayName = getDisplayName(subagentType);
 
@@ -1183,6 +1183,7 @@ The child starts fresh and receives only the self-contained task prompt.
             model,
             maxTurns: effectiveMaxTurns,
             thinkingLevel: thinking,
+            promptPolicy: rawType?.toLowerCase() === "general-purpose" ? "native" : "inherit",
             isBackground: true,
             invocation: agentInvocation,
             ...bgCallbacks,
@@ -1266,6 +1267,7 @@ The child starts fresh and receives only the self-contained task prompt.
           model,
           maxTurns: effectiveMaxTurns,
           thinkingLevel: thinking,
+          promptPolicy: rawType?.toLowerCase() === "general-purpose" ? "native" : "inherit",
           invocation: agentInvocation,
           signal,
           ...fgCallbacks,
@@ -1618,6 +1620,7 @@ The child starts fresh and receives only the self-contained task prompt.
         model: approved.model,
         maxTurns: effectiveMaxTurns,
         thinkingLevel: approved.thinking,
+        promptPolicy: subagentType.toLowerCase() === "general-purpose" ? "native" : "inherit",
         isBackground: true,
         invocation,
       });
@@ -2057,7 +2060,7 @@ ${systemPrompt}
         {
           id: "disableDefaultAgents",
           label: "Disable defaults",
-          description: "Hide built-in agents (general-purpose, Review) — custom agents are unaffected",
+          description: "Hide the built-in general-purpose agent — custom agents are unaffected",
           currentValue: isDefaultsDisabled() ? "on" : "off",
           values: ["on", "off"],
         },

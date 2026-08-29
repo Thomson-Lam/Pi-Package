@@ -89,8 +89,8 @@ describe("toolDescriptionMode", () => {
     const desc: string = tools.get("Agent").description;
     expect(desc).toContain("## Usage notes");
     expect(desc).toContain("## Writing the prompt");
-    // Full agent descriptions are embedded.
-    expect(desc).toContain("missing tests");
+    // The current default agent is listed dynamically.
+    expect(desc).toContain("- general-purpose:");
   });
 
   it("compact mode swaps in the short description with one-line type list", () => {
@@ -101,8 +101,7 @@ describe("toolDescriptionMode", () => {
     expect(desc).not.toContain("## Writing the prompt");
     // Type list keeps every agent but only the first sentence of each description.
     expect(desc).toContain("- general-purpose:");
-    expect(desc).toContain("- Review: Read-only code review agent for finding concrete bugs, regressions, security risks, and missing tests in proposed changes. (Tools:");
-    expect(desc).not.toContain("Reports actionable findings");
+    expect(desc).not.toContain("Review: Read-only code review agent");
     // The point of the feature: materially smaller than the full version.
     expect(desc.length).toBeLessThan(1900);
   });
@@ -145,7 +144,7 @@ describe("toolDescriptionMode", () => {
     });
     const desc: string = tools.get("Agent").description;
     expect(desc).toContain("GLOBAL CUSTOM");
-    expect(desc).toContain("- Review: Read-only code review agent for finding concrete bugs, regressions, security risks, and missing tests in proposed changes. (Tools:");
+    expect(desc).toContain("- general-purpose:");
   });
 
   it("every documented placeholder is replaced — no {{ }} residue", () => {

@@ -36,6 +36,7 @@ export interface SpawnOptions {
   maxTurns?: number;
   signal?: AbortSignal;
   thinkingLevel?: ThinkingLevel;
+  promptPolicy?: "native" | "inherit";
   isBackground?: boolean;
   invocation?: AgentRecord["invocation"];
   onToolActivity?: (activity: ToolActivity) => void;
@@ -259,6 +260,7 @@ export class AgentManager {
         thinking: options.thinkingLevel,
         maxTurns: options.maxTurns,
       },
+      promptPolicy: options.promptPolicy,
       agentId: id,
       childSessionId,
       parentSessionFile,

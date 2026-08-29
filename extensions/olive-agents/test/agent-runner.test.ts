@@ -72,6 +72,23 @@ describe("prepareAgentLaunch", () => {
     expect(parsed.runtime.tools).toEqual(spec.runtime.tools);
   });
 
+  it("uses Pi's native system prompt for general-purpose", async () => {
+    vi.mocked(getConfig).mockReturnValue({
+      displayName: "Agent", description: "General-purpose", builtinToolNames: [],
+      extensions: true, skills: true,
+    } as any);
+    vi.mocked(getAgentConfig).mockReturnValue({
+      name: "general-purpose", displayName: "Agent", description: "General-purpose",
+      extensions: true, skills: true, systemPrompt: "",
+      isDefault: true,
+    } as any);
+
+    const { spec } = await prepare();
+    expect(spec.runtime).not.toHaveProperty("systemPrompt");
+    expect(spec.runtime.noExtensions).toBe(false);
+    expect(spec.runtime.extensionPaths).toEqual(["/project/custom.ts", "/project/inactive.ts"]);
+  });
+
   it("applies max-turn defaults", async () => {
     setDefaultMaxTurns(20);
     setGraceTurns(3);

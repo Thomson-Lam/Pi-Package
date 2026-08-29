@@ -50,7 +50,7 @@ export interface SubagentsSettings {
    */
   scopeModels?: boolean;
   /**
-   * When true, the built-in default agents (general-purpose and Review) are not
+   * When true, the built-in default agent (general-purpose) is not
    * registered at startup. User-defined agents from project/global custom
    * agent dirs are completely unaffected — only the hardcoded DEFAULT_AGENTS are suppressed.
    * Defaults to false.

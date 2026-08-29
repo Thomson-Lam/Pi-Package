@@ -36,9 +36,8 @@ describe("agent type registry", () => {
   });
 
   describe("default agents", () => {
-    it("recognizes all default agent types", () => {
+    it("recognizes the default agent type", () => {
       expect(isValidType("general-purpose")).toBe(true);
-      expect(isValidType("Review")).toBe(true);
     });
 
     it("does not include removed agents", () => {
@@ -54,20 +53,11 @@ describe("agent type registry", () => {
     });
 
     it("case-insensitive lookup works for isValidType", () => {
-      expect(isValidType("review")).toBe(true);
-      expect(isValidType("REVIEW")).toBe(true);
       expect(isValidType("General-Purpose")).toBe(true);
     });
 
-    it("case-insensitive lookup works for getAgentConfig", () => {
-      const config = getAgentConfig("review");
-      expect(config?.name).toBe("Review");
-      expect(config?.model).toBe("opencode-go/deepseek-v4-flash");
-    });
 
     it("resolveType returns canonical key or undefined", () => {
-      expect(resolveType("Review")).toBe("Review");
-      expect(resolveType("review")).toBe("Review");
       expect(resolveType("GENERAL-PURPOSE")).toBe("general-purpose");
       expect(resolveType("nonexistent")).toBeUndefined();
     });
@@ -80,32 +70,19 @@ describe("agent type registry", () => {
       expect(config.skills).toBe(true);
     });
 
-    it("Review has read-only tools", () => {
-      const config = getConfig("Review");
-      expect(config.builtinToolNames).toEqual(["read", "bash", "grep", "find", "ls"]);
-      expect(config.builtinToolNames).not.toContain("edit");
-      expect(config.builtinToolNames).not.toContain("write");
-    });
-
-    it("Review pins DeepSeek V4 Flash with high reasoning", () => {
-      const cfg = getAgentConfig("Review");
-      expect(cfg?.model).toBe("opencode-go/deepseek-v4-flash");
-      expect(cfg?.thinking).toBe("high");
-    });
-
     it("default agents are marked isDefault", () => {
       const cfg = getAgentConfig("general-purpose");
       expect(cfg?.isDefault).toBe(true);
     });
 
     it("default agents do not lock run mode", () => {
-      for (const name of ["general-purpose", "Review"]) {
+      for (const name of ["general-purpose"]) {
         expect(getAgentConfig(name)?.runInBackground, `${name}.runInBackground`).toBeUndefined();
       }
     });
 
     it("getDefaultAgentNames returns default agent names", () => {
-      expect(getDefaultAgentNames()).toEqual(["general-purpose", "Review"]);
+      expect(getDefaultAgentNames()).toEqual(["general-purpose"]);
     });
 
     it("BUILTIN_TOOL_NAMES includes all built-in tools", () => {
@@ -157,7 +134,6 @@ describe("agent type registry", () => {
       setDefaultsDisabled(false);
       registerAgents(new Map());
       expect(isValidType("general-purpose")).toBe(true);
-      expect(isValidType("Review")).toBe(true);
     });
 
     it("getConfig falls back to the hardcoded config when defaults are disabled and no user agents exist", () => {
@@ -185,7 +161,6 @@ describe("agent type registry", () => {
 
       const types = getAvailableTypes();
       expect(types).toContain("general-purpose");
-      expect(types).toContain("Review");
       expect(types).toContain("auditor");
     });
 

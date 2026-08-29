@@ -20,6 +20,7 @@
 import { chmodSync, readFileSync, renameSync, rmSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { pathToFileURL } from "node:url";
+import { registerPromptPolicy } from "./prompt-policy.mjs";
 
 // ---- Mailbox helpers (self-contained; keep in sync with event-mailbox.ts) ----
 
@@ -78,7 +79,12 @@ if (!model) {
   process.exit(1);
 }
 
+let nativeSystemPrompt;
+
 const bridgeFactory = (pi) => {
+  // Restore the native prompt after other extensions have processed the hook.
+  registerPromptPolicy(pi, spec.runtime.promptPolicy, () => nativeSystemPrompt);
+
   // Human steering detection: interactive input while the agent is streaming.
   pi.on("input", (event) => {
     if (event?.source === "interactive" && event.streamingBehavior) {
@@ -106,8 +112,12 @@ const createRuntime = async ({ cwd, agentDir, sessionManager: sm }) => {
       noPromptTemplates: true,
       noThemes: false,
       noContextFiles: true,
-      systemPromptOverride: () => spec.runtime.systemPrompt,
-      appendSystemPromptOverride: () => [],
+      ...(spec.runtime.systemPrompt === undefined
+        ? {}
+        : {
+            systemPromptOverride: () => spec.runtime.systemPrompt,
+            appendSystemPromptOverride: () => [],
+          }),
       extensionFactories: [{ name: "olive-agent-bridge", factory: bridgeFactory }],
     },
   });
@@ -118,6 +128,7 @@ const createRuntime = async ({ cwd, agentDir, sessionManager: sm }) => {
     thinkingLevel: spec.runtime.thinking,
     tools: spec.runtime.tools,
   });
+  nativeSystemPrompt = result.session.systemPrompt;
   return { ...result, services, diagnostics: services.diagnostics };
 };
 

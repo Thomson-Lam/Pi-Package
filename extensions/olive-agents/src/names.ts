@@ -49,7 +49,7 @@ export function zellijName(seed: string): string {
   return `${adj}-${noun}`;
 }
 
-/** Short agent-type tag: general-purpose → "general", Review → "review", others slugified. */
+/** Short agent-type tag: general-purpose → "general", others slugified. */
 export function agentTypeSlug(type: string): string {
   const t = type.toLowerCase();
   if (t === "general-purpose") return "general";
