@@ -5,6 +5,7 @@ usage() {
   cat >&2 <<'EOF'
 Usage:
   tmux-human-command stage %pane-id command
+  tmux-human-command run %pane-id command
   tmux-human-command capture-pane %pane-id [lines]
 EOF
   exit 2
@@ -49,14 +50,17 @@ require_target() {
 }
 
 case "$action" in
-  stage)
+  stage|run)
     [[ $# -eq 2 ]] || usage
     pane=$1
     command=$2
     [[ -n "$command" ]] || { echo "tmux-human-command: command must not be empty" >&2; exit 1; }
     require_target "$pane"
-    # Literal input only. This deliberately does not send Enter or any other submit key.
+    # Literal input only. Full-staging submits the separately sent command.
     tmux send-keys -t "$pane" -l "$command"
+    if [[ "$action" == "run" ]]; then
+      tmux send-keys -t "$pane" Enter
+    fi
     ;;
   capture-pane)
     [[ $# -ge 1 && $# -le 2 ]] || usage

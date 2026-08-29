@@ -16,7 +16,8 @@ Components:
 - `skillsets/ponytail/` — ponytail, ponytail-review, and ponytail-debt skills; each `SKILL.md` is its source of truth.
 - `skillsets/standalone/` — authoring-skills, cindex, github-issues-prs, ipynb_toolshed, tlogs, tcmd, yagni-product-design.
 - `skillsets/standalone/tlogs/extension.ts` — `/logs` pane selection, workflow prompts, session state, and the selection-restricted `tmux_tdl_logs` tool backed by its bundled script.
-- `skillsets/standalone/tcmd/extension.ts` — `/cmd` and `/cmdone`, human-approved command staging, bounded feedback observation, and Auto/Manual delivery backed by its bundled script.
+- `skillsets/standalone/tcmd/extension.ts` — `/cmd`, human-approved Staging/Full-staging workflows, shared command-review feedback, in-memory observe/record output strategies, and Auto/Manual delivery backed by its bundled capture/staging script.
+- `skillsets/standalone/tcmd/relative-diff.js` — relative pane-snapshot deltas for command-scoped record output.
 - `tests/` — policy and smoke coverage (`smoke.mjs`, `command-parser.mjs`, `mode-policy.mjs`, `state-policy.mjs`, `engineering-skills.mjs`).
 
 Related:
