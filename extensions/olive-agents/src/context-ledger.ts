@@ -21,8 +21,11 @@
  * /tmp/olive-agents mailbox dirs.
  */
 
-import type { AgentMessage } from "@earendil-works/pi-ai";
+import { completeSimple } from "@earendil-works/pi-ai/compat";
+import { contentText, type AgentMessage, type Context, type SimpleStreamOptions, uuidv7 } from "@earendil-works/pi-ai";
 import {
+  convertToLlm,
+  serializeConversation,
   type SessionEntry,
   type SessionHeader,
   parseSessionEntries,
@@ -232,7 +235,7 @@ function snapshotMarkdown(snapshot: LedgerSnapshot): string {
 export function nodeToMarkdown(node: ContextLedgerNode): string {
   const parts: string[] = [];
   if (node.summary?.trim()) {
-    parts.push(`## Compacted context (from ${node.sourceSessionName})\n${node.summary.trim()}`);
+    parts.push(`## Decisions from prior session\n${node.summary.trim()}`);
   }
   if (node.selections.length > 0) {
     const msgs = node.selections.filter((s) => s.kind === "message");
@@ -254,9 +257,9 @@ export function buildContextPrompt(instructions: string, chain: ContextLedgerNod
   const blocks = contextNodes.map((n, i) => {
     const body = nodeToMarkdown(n);
     const header = i === contextNodes.length - 1
-      ? `## Context: ${n.sourceSessionName}`
+      ? ""
       : `## Inherited context ${i + 1}: ${n.sourceSessionName}`;
-    return body ? `${header}\n${body}` : "";
+    return body ? `${header ? `${header}\n` : ""}${body}` : "";
   }).filter(Boolean);
   const contextBlock = blocks.length > 0 ? blocks.join("\n\n") : "(no context selected)";
   return `# context\n${contextBlock}\n\n# instructions\n${instructions}`;
@@ -630,17 +633,27 @@ interface SummarizeAuth {
   getApiKeyAndHeaders(model: unknown): Promise<{ ok: boolean; apiKey?: string; headers?: unknown; env?: Record<string, string> }>;
 }
 
+const LEDGER_SUMMARIZATION_SYSTEM_PROMPT = `You are a context ledger summarization assistant. Read the supplied conversation and produce only the requested handoff context. Do not continue the conversation, answer questions from it, or imitate its formatting.`;
+
+/** Default instructions for context sent to a fresh coding agent. */
+export const DEFAULT_HANDOFF_COMPACTION_PROMPT = `Produce a compact context ledger for a coding agent that will receive the implementation plan separately. Output only a flat bullet list with no heading or sections.
+
+Capture only prior conversation context needed to interpret and follow the plan: settled user choices; architectural decisions and how competing options were resolved; rationale, priorities, constraints, and accepted tradeoffs; and known limitations, deferrals, or excluded work, stated alongside the decision they qualify. Include current status only when it changes how the plan should be understood.
+
+Distill the discussion into direct decision statements, such as “Auth was deferred because time to first feature mattered more.” Never narrate the conversation as “the user said” or “the assistant proposed.” Do not repeat implementation-plan details unless necessary to preserve rationale or prevent a wrong assumption. Do not invent rationale.
+
+Do not add recommendations, next steps, TODOs, generic summaries, or a dedicated out-of-scope section. Omit transient tool output, abandoned exploration that did not affect the final direction, and implementation details already evident from the plan or code. Use concise, specific bullets, with one decision or closely related context item per bullet.`;
+
 /**
- * Non-mutating compaction output: uses pi's native compaction summarizer but
- * WITHOUT touching the session. The summary is produced from the selected
- * entries and returned; nothing is appended to any session file.
+ * Non-mutating context-ledger output. This uses a ledger-specific summarizer
+ * rather than pi's native compaction wrapper because the native wrapper
+ * requires a different, sectioned summary format.
  */
 export async function summarizeSelections(
   auth: SummarizeAuth,
   request: SummarizeRequest,
 ): Promise<string> {
-  const { generateSummary } = await import("@earendil-works/pi-coding-agent");
-  const model = request.model as { provider: string; id: string } | undefined;
+  const model = request.model as { provider: string; id: string; maxTokens?: number; reasoning?: boolean } | undefined;
   if (!model) throw new Error("Context summary requires the current model.");
   const resolved = await auth.getApiKeyAndHeaders(model);
   if (!resolved.ok) throw new Error(`No credentials for ${model.provider}/${model.id}`);
@@ -648,23 +661,38 @@ export async function summarizeSelections(
   const messages = request.branch
     .filter((e) => e.type === "message" && request.selectedIds.includes(e.id))
     .flatMap((e) => sessionEntryToContextMessages(e));
-
+  const conversation = serializeConversation(convertToLlm(messages));
+  const instructions = request.customInstructions?.trim() || DEFAULT_HANDOFF_COMPACTION_PROMPT;
+  const context: Context = {
+    systemPrompt: LEDGER_SUMMARIZATION_SYSTEM_PROMPT,
+    messages: [{
+      role: "user",
+      content: [{
+        type: "text",
+        text: `<conversation>\n${conversation}\n</conversation>\n\n${instructions}`,
+      }],
+      timestamp: Date.now(),
+    }],
+  };
   const reserveTokens = 16384;
-  return generateSummary(
-    messages,
-    model as never,
-    reserveTokens,
-    resolved.apiKey,
-    resolved.headers as never,
-    undefined,
-    request.customInstructions,
-    undefined,
-    request.thinking as never,
-    undefined,
-    resolved.env,
-    undefined,
-    undefined,
-  );
+  const options: SimpleStreamOptions = {
+    apiKey: resolved.apiKey,
+    headers: resolved.headers as never,
+    env: resolved.env,
+    maxTokens: Math.min(Math.floor(0.8 * reserveTokens), model.maxTokens && model.maxTokens > 0
+      ? model.maxTokens
+      : Number.POSITIVE_INFINITY),
+    cacheRetention: "none",
+    sessionId: uuidv7(),
+  };
+  if (model.reasoning && request.thinking && request.thinking !== "off") {
+    options.reasoning = request.thinking as SimpleStreamOptions["reasoning"];
+  }
+  const response = await completeSimple(model as never, context, options);
+  if (response.stopReason === "error") {
+    throw new Error(`Context summarization failed: ${response.errorMessage || "Unknown error"}`);
+  }
+  return contentText(response.content);
 }
 
 /** Best-effort display name for a session file (from session_info entries). */

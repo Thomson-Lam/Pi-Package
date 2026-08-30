@@ -1,7 +1,7 @@
 import type { Api, Model } from "@earendil-works/pi-ai";
 import type { ExtensionContext } from "@earendil-works/pi-coding-agent";
 import { describe, expect, it, vi } from "vitest";
-import { approveInvocation } from "../src/approval.js";
+import { approveInvocation, DEFAULT_HANDOFF_COMPACTION_PROMPT } from "../src/approval.js";
 
 const model = { provider: "test", id: "basic", name: "Basic", reasoning: false } as unknown as Model<Api>;
 const registry = { getAll: () => [model], getAvailable: () => [model] };
@@ -15,6 +15,17 @@ function ctx(selection: string) {
 }
 
 describe("subagent approval", () => {
+  it("keeps default handoff compaction complementary to the implementation plan", () => {
+    expect(DEFAULT_HANDOFF_COMPACTION_PROMPT).toContain("implementation plan separately");
+    expect(DEFAULT_HANDOFF_COMPACTION_PROMPT).toContain("flat bullet list with no heading or sections");
+    expect(DEFAULT_HANDOFF_COMPACTION_PROMPT).toContain("how competing options were resolved");
+    expect(DEFAULT_HANDOFF_COMPACTION_PROMPT).toContain("known limitations, deferrals, or excluded work");
+    expect(DEFAULT_HANDOFF_COMPACTION_PROMPT).toContain("Never narrate the conversation");
+    expect(DEFAULT_HANDOFF_COMPACTION_PROMPT).toContain("Do not repeat implementation-plan details");
+    expect(DEFAULT_HANDOFF_COMPACTION_PROMPT).toContain("Do not add recommendations, next steps, TODOs");
+    expect(DEFAULT_HANDOFF_COMPACTION_PROMPT).not.toContain("under 100 words");
+  });
+
   it("describes a fresh replacement prompt and parent runtime", async () => {
     let title = "";
     await approveInvocation({
@@ -59,9 +70,24 @@ describe("approval with context ledger", () => {
     };
   }
 
-  it("flow: select → inherit Yes (tree) → compact No → launch", async () => {
+  /** Drive the bounded model picker without depending on Pi's terminal runtime. */
+  function chooseModel(factory: any, moves = 0, inspect?: (lines: string[]) => void): Promise<Model<Api> | undefined> {
+    return new Promise((resolve) => {
+      const component = factory(
+        { requestRender: () => {} },
+        { fg: (_color: string, text: string) => text, bold: (text: string) => text },
+        { matches: (data: string, binding: string) => data === "enter" && binding === "tui.select.confirm" },
+        resolve,
+      );
+      inspect?.(component.render(80));
+      for (let i = 0; i < moves; i++) component.handleInput("j");
+      component.handleInput("enter");
+    });
+  }
+
+  it("flow: select → inherit Yes (tree) → no compaction → launch", async () => {
     const ui = {
-      select: selectQueue(["Build context", "Yes", "No"]),
+      select: selectQueue(["Build context", "Yes", "None"]),
       custom: customQueue([{ selectedIds: ["e1"] }]),
     };
     const openInheritTree = vi.fn(async () => [candidates[0]]);
@@ -85,7 +111,7 @@ describe("approval with context ledger", () => {
 
   it("inherit tree returning an empty chain drops the inherited context", async () => {
     const ui = {
-      select: selectQueue(["Build context", "Yes", "No"]),
+      select: selectQueue(["Build context", "Yes", "None"]),
       custom: customQueue([{ selectedIds: ["e1"] }]),
     };
     const openInheritTree = vi.fn(async () => []);
@@ -103,7 +129,7 @@ describe("approval with context ledger", () => {
 
   it("no candidates: the inherit question and tree are skipped entirely", async () => {
     const ui = {
-      select: selectQueue(["Build context", "No"]), // no inherit select slot
+      select: selectQueue(["Build context", "None"]), // no inherit select slot
       custom: customQueue([{ selectedIds: ["e1"] }]),
     };
     const openInheritTree = vi.fn(async () => [candidates[0]]);
@@ -119,10 +145,11 @@ describe("approval with context ledger", () => {
     expect(openInheritTree).not.toHaveBeenCalled();
   });
 
-  it("compact: Yes summarizes the FULL conversation through the loader surface", async () => {
-    // select queue: builder, inherit ? No, compact ? Yes → loader follows.
+  it("default compaction summarizes the FULL conversation and reviews the output", async () => {
+    // select queue: builder, inherit ? No, compact ? Default → loader follows.
     const ui = {
-      select: selectQueue(["Build context", "No", "Yes"]),
+      select: selectQueue(["Build context", "No", "Default", "Use this output"]),
+      editor: async () => "reviewed summary",
       custom: customQueue([
         { selectedIds: ["e1"] }, // selection TUI
         async (factory: any) => new Promise((resolve) => factory(null, null, null, resolve)), // loader
@@ -140,7 +167,14 @@ describe("approval with context ledger", () => {
     expect(result.outcome).toBe("launch");
     if (result.outcome !== "launch") return;
     expect(result.context?.selectedIds).toEqual(["e1"]);
-    expect(result.context?.summary).toBe("e1"); // full conversation = the only message id
+    expect(result.context?.summary).toBe("reviewed summary"); // editor output becomes ledger context
+    expect(summarize).toHaveBeenCalledWith(
+      branch,
+      ["e1"],
+      model,
+      "off",
+      DEFAULT_HANDOFF_COMPACTION_PROMPT,
+    );
     expect(summarize).toHaveBeenCalledTimes(1);
   });
 
@@ -151,5 +185,106 @@ describe("approval with context ledger", () => {
       ui: { select: async (value: string) => { title = value; return "Cancel"; } },
     } as unknown as ExtensionContext, registry, request);
     expect(title).toContain("fresh child task only");
+  });
+
+  it("configures custom compaction before generation and recompacts with feedback", async () => {
+    const select = selectQueue([
+      "Build context", "Custom", "off", "Recompact with feedback", "Use this output",
+    ]);
+    const editorTitles: string[] = [];
+    let summarizeCount = 0;
+    let customCall = 0;
+    const ui = {
+      select,
+      custom: async (factory: any) => {
+        customCall++;
+        if (customCall === 1) return { selectedIds: ["e1"] };
+        if (customCall === 2) return chooseModel(factory);
+        return new Promise((resolve) => factory(null, null, null, resolve));
+      },
+      editor: async (title: string, prefill: string) => {
+        editorTitles.push(title);
+        if (title === "Compaction prompt") return "Preserve only settled architecture decisions.";
+        if (title === "Feedback for re-compaction") return "Keep the accepted architecture decision.";
+        return prefill;
+      },
+    };
+    const summarize = vi.fn((_branch, _ids, _model, _thinking, instructions) => {
+      summarizeCount++;
+      return Promise.resolve(`summary ${summarizeCount}\n${instructions}`);
+    });
+
+    const result = await approveInvocation(
+      { mode: "tui", ui } as unknown as ExtensionContext,
+      registry,
+      request,
+      { branch, candidates: [], summarize },
+    );
+
+    expect(result.outcome).toBe("launch");
+    if (result.outcome !== "launch") return;
+    expect(result.context?.summary).toContain("summary 2");
+    expect(summarize).toHaveBeenCalledTimes(2);
+    expect(summarize.mock.calls[0]?.[4]).toBe("Preserve only settled architecture decisions.");
+    expect(summarize.mock.calls[1]?.[4]).toContain("Keep the accepted architecture decision.");
+    expect(editorTitles).toEqual([
+      "Compaction prompt",
+      "Review compacted handoff (edit to use)",
+      "Feedback for re-compaction",
+      "Review compacted handoff (edit to use)",
+    ]);
+  });
+
+  it("uses independently selected model and reasoning for compaction", async () => {
+    const compactModel = {
+      provider: "test", id: "compact", name: "Compact", reasoning: true,
+      maxTokens: 8192, contextWindow: 128000,
+    } as unknown as Model<Api>;
+    const extraModels = Array.from({ length: 12 }, (_, i) => ({
+      provider: "test", id: `extra-${i.toString().padStart(2, "0")}`, name: `Extra ${i}`,
+      reasoning: false, maxTokens: 8192, contextWindow: 128000,
+    } as unknown as Model<Api>));
+    const compactRegistry = {
+      getAll: () => [model, compactModel, ...extraModels],
+      getAvailable: () => [model, compactModel, ...extraModels],
+    };
+    let customCall = 0;
+    let pickerLines: string[] = [];
+    const ui = {
+      select: selectQueue([
+        "Build context", "Custom", "high", "Use this output",
+      ]),
+      custom: async (factory: any) => {
+        customCall++;
+        if (customCall === 1) return { selectedIds: ["e1"] };
+        if (customCall === 2) return chooseModel(factory, 1, (lines) => { pickerLines = lines; });
+        return new Promise((resolve) => factory(null, null, null, resolve));
+      },
+      editor: async (_title: string, prefill: string) => prefill,
+      notify: vi.fn(),
+    };
+    const summarize = vi.fn((_branch, _ids, selectedModel, thinking) =>
+      Promise.resolve(`${selectedModel.provider}/${selectedModel.id}:${thinking}`));
+
+    const result = await approveInvocation(
+      { mode: "tui", ui } as unknown as ExtensionContext,
+      compactRegistry,
+      request,
+      { branch, candidates: [], summarize },
+    );
+
+    expect(result.outcome).toBe("launch");
+    if (result.outcome !== "launch") return;
+    expect(result.context?.summary).toBe("test/compact:high");
+    expect(pickerLines[0]).toBe("Select compaction model");
+    expect(pickerLines.filter((line) => line.includes("test/")).length).toBe(10);
+    expect(pickerLines).toContain("  (1/14)");
+    expect(summarize).toHaveBeenCalledWith(
+      branch,
+      ["e1"],
+      compactModel,
+      "high",
+      expect.any(String),
+    );
   });
 });

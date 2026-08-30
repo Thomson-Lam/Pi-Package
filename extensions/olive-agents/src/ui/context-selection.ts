@@ -4,13 +4,12 @@
  * live preview, bounded height (no overflow / flicker).
  *
  * Selectable rows are conversation MESSAGES only (user / assistant / custom);
- * tool results are intentionally excluded from the ledger. After this TUI the
- * approval flow asks a y/n compact question (native selectList) and compacts
- * the FULL conversation, not the selected rows.
+ * tool results are intentionally excluded from the ledger. The approval flow
+ * later compacts the FULL conversation, not the selected rows.
  *
  * Keys: j/k move · space select · enter toggle expanded preview · alt-p/n
  * preview scroll · esc done. After this TUI the approval flow can ask the user
- * to choose one existing context, then whether to compact the conversation.
+ * to choose inherited context and Default / Custom / None compaction.
  * Nothing here mutates the session.
  */
 

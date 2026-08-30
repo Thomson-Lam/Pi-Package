@@ -156,7 +156,7 @@ describe("serialization", () => {
     const n = node("L1", undefined);
     n.summary = "compacted decisions";
     const md = nodeToMarkdown(n);
-    expect(md).toContain("Compacted context");
+    expect(md).toContain("## Decisions from prior session");
     expect(md).toContain("compacted decisions");
     expect(md).toContain("Selected messages");
     expect(md).toContain("hello world");
@@ -168,7 +168,7 @@ describe("serialization", () => {
     const prompt = buildContextPrompt("do the thing", [parent], child);
     expect(prompt).toMatch(/^# context/);
     expect(prompt).toContain("Inherited context 1");
-    expect(prompt).toContain("## Context: src");
+    expect(prompt).not.toContain("## Context:");
     expect(prompt).toContain("# instructions");
     expect(prompt).toContain("do the thing");
   });
@@ -506,7 +506,7 @@ describe("finalized ledger context (what goes into the agent)", () => {
     expect(ledgerNode.summary).toBe(FIXED_SUMMARY);
     expect(ledgerNode.selections).toEqual([]);
     expect(ledgerNode.parentId).toBeUndefined();
-    expect(result.prompt).toContain("## Compacted context (from B1 plan)");
+    expect(result.prompt).toContain("## Decisions from prior session");
     expect(result.prompt).toContain(FIXED_SUMMARY);
     expect(result.prompt).not.toContain("Selected messages");
     dumpText("summary-only / agent payload", result.prompt);
@@ -528,7 +528,7 @@ describe("finalized ledger context (what goes into the agent)", () => {
     expect(result.ledgerNode!.selections).toEqual([]);
     expect(result.prompt).toContain("## Inherited context 1: B1 plan");
     expect(result.prompt).toContain("## Inherited context 2: B1 plan");
-    // The empty new node contributes no block, so there is no fresh "## Context:" header.
+    // The empty new node contributes no block, so there is no fresh context header.
     expect(result.prompt).not.toContain("## Context:");
     dumpText("inherit-only / agent payload", result.prompt);
   });
@@ -564,8 +564,7 @@ describe("finalized ledger context (what goes into the agent)", () => {
       "### user (m1)",
       "hello world",
       "",
-      "## Context: B1 plan",
-      "## Compacted context (from B1 plan)",
+      "## Decisions from prior session",
       FIXED_SUMMARY,
       "",
       "## Selected messages",
