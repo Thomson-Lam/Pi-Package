@@ -17,9 +17,11 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import type { Model } from "@earendil-works/pi-ai";
 import type { ExtensionAPI, ExtensionContext } from "@earendil-works/pi-coding-agent";
-import { type AgentLaunchSpec, normalizeMaxTurns, prepareAgentLaunch, writeLaunchSpec } from "./agent-runner.js";
+import { getPackageDir } from "@earendil-works/pi-coding-agent";
+import { type AgentLaunchSpec, buildReopenDescriptor, normalizeMaxTurns, prepareAgentLaunch, writeLaunchSpec } from "./agent-runner.js";
+import { type ContextLedgerNode, type ContextLinkData } from "./context-ledger.js";
 import { type ChildEvent, ensureMailboxDir, removeMailboxDir, watchChildEvents, writeParentCommand } from "./event-mailbox.js";
-import { createAgentWindow, execFromPi, focusWindow as focusTmuxWindow, killWindow as killTmuxWindow, shellQuote, windowAlive as tmuxWindowAlive, type TmuxExec } from "./tmux-window.js";
+import { createAgentWindow, execFromPi, findWindowByName as findTmuxWindowByName, focusWindow as focusTmuxWindow, killWindow as killTmuxWindow, shellQuote, windowAlive as tmuxWindowAlive, type TmuxExec } from "./tmux-window.js";
 import { agentSessionName, agentWindowName } from "./names.js";
 import { type AgentRecord, type SubagentType, type ThinkingLevel } from "./types.js";
 
@@ -39,6 +41,8 @@ export interface SpawnOptions {
   promptPolicy?: "native" | "inherit";
   isBackground?: boolean;
   invocation?: AgentRecord["invocation"];
+  /** Optional context ledger node accompanying this launch (persisted by the child). */
+  ledgerNode?: ContextLedgerNode;
   onToolActivity?: (activity: ToolActivity) => void;
   onTurnEnd?: (turnCount: number) => void;
   onAssistantUsage?: (usage: { input: number; output: number; cacheWrite: number }) => void;
@@ -102,6 +106,7 @@ export class AgentManager {
   private onCompact?: OnAgentCompact;
   private onReady?: OnAgentReady;
   private onHumanSteer?: OnHumanSteer;
+  private onLink?: (link: ContextLinkData) => void;
   private maxConcurrent: number;
   private queue: { id: string; args: { pi: ExtensionAPI; ctx: ExtensionContext; type: SubagentType; prompt: string; options: SpawnOptions } }[] = [];
   private runningBackground = 0;
@@ -134,9 +139,10 @@ export class AgentManager {
   }
 
   /** Callback wiring (set after construction to avoid long constructor args). */
-  setCallbacks(cb: { onReady?: OnAgentReady; onHumanSteer?: OnHumanSteer }): void {
+  setCallbacks(cb: { onReady?: OnAgentReady; onHumanSteer?: OnHumanSteer; onLink?: (link: ContextLinkData) => void }): void {
     if (cb.onReady) this.onReady = cb.onReady;
     if (cb.onHumanSteer) this.onHumanSteer = cb.onHumanSteer;
+    if (cb.onLink) this.onLink = cb.onLink;
   }
 
   /** Toggle window auto-close on run completion. */
@@ -266,6 +272,7 @@ export class AgentManager {
       parentSessionFile,
       sessionDir,
       mailboxDir,
+      ledgerNode: options.ledgerNode,
     });
 
     for (const warning of warnings) {
@@ -279,6 +286,28 @@ export class AgentManager {
       parentSessionFile,
     };
     record.launchSpec = spec;
+
+    // Persist the parent-session link BEFORE the window exists, so a crash
+    // before the child reports ready leaves a discoverable launch record.
+    if (this.onLink) {
+      try {
+        this.onLink({
+          version: 1,
+          stage: "launching",
+          agentId: id,
+          agentType: spec.agent.type,
+          description: options.description,
+          childSessionId,
+          childSessionName: spec.session.name,
+          ledgerNodeId: spec.ledger?.node.id,
+          parentLedgerId: spec.ledger?.node.parentId,
+          createdAt: new Date().toISOString(),
+          reopen: buildReopenDescriptor(spec),
+        });
+      } catch {
+        /* link persistence must not break launch */
+      }
+    }
 
     const specPath = join(mailboxDir, "launch.json");
     writeLaunchSpec(specPath, spec);
@@ -364,6 +393,28 @@ export class AgentManager {
         if (record.window) record.window.state = "alive";
         record.status = "running";
         record.updatedAt = Date.now();
+        // Persist the resolved link now that the child session file is known.
+        const linkSpec = record.launchSpec;
+        if (linkSpec && this.onLink) {
+          try {
+            this.onLink({
+              version: 1,
+              stage: "ready",
+              agentId: id,
+              agentType: linkSpec.agent.type,
+              description: linkSpec.agent.description,
+              childSessionId: record.childSession?.sessionId ?? linkSpec.session.id,
+              childSessionName: record.childSession?.sessionName ?? linkSpec.session.name,
+              childSessionFile: event.sessionFile ?? record.childSession?.sessionFile,
+              ledgerNodeId: linkSpec.ledger?.node.id,
+              parentLedgerId: linkSpec.ledger?.node.parentId,
+              createdAt: new Date().toISOString(),
+              reopen: buildReopenDescriptor(linkSpec),
+            });
+          } catch {
+            /* link persistence must not break ready handling */
+          }
+        }
         this.emit({ type: "updated", record });
         if (record.childSession) this.onReady?.(record, record.childSession);
         const rt = this.readyTimers.get(id);
@@ -787,6 +838,83 @@ export class AgentManager {
     record.updatedAt = Date.now();
     this.emit({ type: "updated", record });
     return true;
+  }
+
+  /**
+   * Reopen a persisted agent session from its link metadata (used by /ot when
+   * no manager record exists, e.g. after the parent was resumed). Finds an
+   * already-live window by stable name and focuses it (no duplicate); otherwise
+   * opens the session JSONL in a fresh window WITHOUT resubmitting the task.
+   * Returns { ok, focused, windowId?, windowName? }.
+   */
+  async reopenFromPersisted(link: ContextLinkData): Promise<{ ok: boolean; focused: boolean; windowId?: string; windowName?: string }> {
+    const sessionFile = link.childSessionFile;
+    const reopen = link.reopen;
+    if (!sessionFile || !existsSync(sessionFile) || !reopen) {
+      return { ok: false, focused: false };
+    }
+
+    const exec = this.deps.tmux;
+    const windowName = agentWindowName(link.agentId, link.agentType);
+    const existing = await findTmuxWindowByName(exec, windowName);
+    if (existing) {
+      await focusTmuxWindow(exec, existing.id);
+      return { ok: true, focused: true, windowId: existing.id, windowName };
+    }
+
+    const sessionResult = await exec(["display-message", "-p", "#{session_id}"]);
+    if (sessionResult.code !== 0) return { ok: false, focused: false };
+    const tmuxSession = sessionResult.stdout.trim();
+
+    // Fresh mailbox: launch specs and mailbox dirs are one-shot, never reused.
+    const mailboxDir = join(tmpdir(), "olive-agents", link.agentId, "reopen");
+    ensureMailboxDir(mailboxDir);
+
+    const spec: AgentLaunchSpec = {
+      version: 3,
+      agent: {
+        id: link.agentId,
+        type: link.agentType,
+        displayName: link.agentType,
+        description: link.description,
+      },
+      session: {
+        id: link.childSessionId,
+        name: link.childSessionName,
+        sessionDir: reopen.sessionDir,
+        openFile: sessionFile,
+      },
+      runtime: {
+        cwd: reopen.cwd,
+        packageDir: getPackageDir(),
+        model: reopen.model,
+        thinking: reopen.thinking,
+        tools: reopen.tools,
+        noExtensions: reopen.noExtensions,
+        extensionPaths: reopen.extensionPaths,
+        noSkills: reopen.noSkills,
+        ...(reopen.systemPrompt === undefined ? {} : { systemPrompt: reopen.systemPrompt }),
+        ...(reopen.promptPolicy ? { promptPolicy: reopen.promptPolicy } : {}),
+      },
+      run: { prompt: "", graceTurns: 5 }, // reopen attaches; never re-sends the task
+      bridge: { mailboxDir },
+    };
+
+    const specPath = join(mailboxDir, "reopen.json");
+    writeLaunchSpec(specPath, spec);
+    const command = this.deps.childCommand(specPath);
+
+    try {
+      const created = await createAgentWindow(exec, tmuxSession, {
+        name: windowName,
+        cwd: reopen.cwd,
+        command,
+      });
+      return { ok: true, focused: false, windowId: created.id, windowName };
+    } catch (err) {
+      console.error("[olive-agents] reopen of agent session failed:", err instanceof Error ? err.message : err);
+      return { ok: false, focused: false };
+    }
   }
 
   /** Remove a record (fleet cleanup). The Pi session file is preserved. */

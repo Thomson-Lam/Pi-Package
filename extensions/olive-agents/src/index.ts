@@ -10,15 +10,32 @@
  */
 
 import { existsSync, mkdirSync, readFileSync, unlinkSync } from "node:fs";
-import { join } from "node:path";
+import { basename, join } from "node:path";
 import { defineTool, type ExtensionAPI, type ExtensionCommandContext, type ExtensionContext, getAgentDir, getSettingsListTheme } from "@earendil-works/pi-coding-agent";
 import { Container, Key, matchesKey, type SettingItem, SettingsList, Spacer, Text } from "@earendil-works/pi-tui";
 import { clampThinkingLevel } from "@earendil-works/pi-ai";
 import { Type } from "typebox";
 import { AgentManager } from "./agent-manager.js";
 import { getDefaultMaxTurns, getGraceTurns, normalizeMaxTurns, SUBAGENT_TOOL_NAMES, setDefaultMaxTurns, setGraceTurns } from "./agent-runner.js";
-import { approveInvocation } from "./approval.js";
+import { approveInvocation, type ApprovalContextInput, type BuiltLedgerContext } from "./approval.js";
 import { getAgentConfig, getAllTypes, getAvailableTypes, isDefaultsDisabled, registerAgents, resolveType, setDefaultsDisabled } from "./agent-types.js";
+import {
+  CONTEXT_LINK_ENTRY,
+  type ContextLedgerNode,
+  type ContextLinkData,
+  type LedgerGraph,
+  buildContextPrompt,
+  getSessionLedgerNode,
+  loadLedgerGraph,
+  newLedgerNodeId,
+  plainEntries,
+  readSessionEntries,
+  resolveAncestorChain,
+  resolveNearestLedgerAncestors,
+  sessionDisplayName,
+  snapshotSelections,
+  summarizeSelections,
+} from "./context-ledger.js";
 import { type RpcHandle, registerRpcHandlers } from "./cross-extension-rpc.js";
 import { loadCustomAgents } from "./custom-agents.js";
 import { isModelInScope, readEnabledModels, resolveEnabledModels } from "./enabled-models.js";
@@ -44,7 +61,8 @@ import {
   type Theme,
 } from "./ui/format.js";
 import { FleetList, type FleetUICtx } from "./ui/fleet-list.js";
-import { execFromPi } from "./tmux-window.js";
+import { execFromPi, findWindowByName, focusWindow } from "./tmux-window.js";
+import { openContextTree } from "./ui/context-tree.js";
 import { addUsage, getLifetimeTotal, type LifetimeUsage } from "./usage.js";
 
 // ---- Shared helpers ----
@@ -127,6 +145,161 @@ function createActivityTracker(maxTurns?: number, onStreamUpdate?: () => void) {
  * host pi version and the selected model — pi clamps unsupported levels down.
  */
 const THINKING_LEVELS = ["off", "minimal", "low", "medium", "high", "xhigh", "max"] as const;
+
+// ---- Context-ledger workflow helpers (shared by Agent tool and /mag) ------
+
+/**
+ * Build the approval context input for the current session: selectable branch
+ * entries, nearest-first ancestor ledger nodes, and a summarizer bound to the
+ * CURRENT model so a model change in approval regenerates with the new model.
+ */
+function makeApprovalContextInput(
+  ctx: ExtensionCommandContext | ExtensionContext,
+  presetInherited?: ContextLedgerNode[],
+): ApprovalContextInput | undefined {
+  const sessionFile = ctx.sessionManager.getSessionFile();
+  let branch;
+  try {
+    branch = ctx.sessionManager.getBranch();
+  } catch {
+    return undefined;
+  }
+  if (!branch || branch.length === 0) return undefined;
+  // Inheritable candidates: /ot preset chain (root→leaf → nearest-first), else
+  // the current session's own ledger lineage.
+  const candidates = presetInherited?.length
+    ? [...presetInherited].reverse()
+    : sessionFile
+      ? resolveNearestLedgerAncestors(sessionFile)
+      : [];
+  return {
+    branch,
+    candidates,
+    ...(presetInherited?.length ? { presetInherited } : {}),
+    summarize: (branchEntries, selectedIds, model, thinking, customInstructions) =>
+      summarizeSelections(ctx.modelRegistry, {
+        branch: branchEntries,
+        selectedIds,
+        model,
+        thinking,
+        customInstructions,
+      }),
+    ...(ctx.sessionManager.getSessionFile()
+      ? {
+          openInheritTree: async (initialIds: string[]): Promise<ContextLedgerNode[] | undefined> => {
+            const file = ctx.sessionManager.getSessionFile()!;
+            const graph = loadLedgerGraph(file, readSessionEntries, sessionDisplayName);
+            const ancestorFiles = resolveAncestorChain(file).map((a) => a.sessionFile);
+            const own = getSessionLedgerNode(plainEntries(readSessionEntries(file)));
+            const selected = new Set(initialIds);
+            await openContextTree({
+              ctx,
+              graph,
+              ancestorFiles,
+              currentFile: file,
+              currentLedgerId: own?.id,
+              mode: "select",
+              selected,
+              focusOrOpen: async () => {},
+            });
+            return inheritedClosure(graph, selected);
+          },
+        }
+      : {}),
+  };
+}
+
+/**
+ * Union of each selected ledger node and its ancestors (via parentId), ordered
+ * root→leaf. This is the inherited chain the new agent's prompt embeds.
+ */
+function inheritedClosure(graph: LedgerGraph, ids: ReadonlySet<string>): ContextLedgerNode[] {
+  const nodes = new Map<string, ContextLedgerNode>();
+  const stack = [...ids];
+  const seen = new Set<string>();
+  while (stack.length) {
+    const id = stack.pop()!;
+    if (seen.has(id)) continue;
+    seen.add(id);
+    const n = graph.nodes.get(id);
+    if (!n) continue;
+    nodes.set(id, n);
+    if (n.parentId) stack.push(n.parentId);
+  }
+  const out: ContextLedgerNode[] = [];
+  const remaining = new Map(nodes);
+  while (remaining.size) {
+    const ready: string[] = [];
+    for (const [id, n] of remaining) {
+      if (!n.parentId || !remaining.has(n.parentId)) ready.push(id);
+    }
+    if (ready.length === 0) { // cycle guard — never expected
+      out.push(...remaining.values());
+      break;
+    }
+    for (const id of ready) {
+      const n = remaining.get(id)!;
+      out.push(n);
+      remaining.delete(id);
+    }
+  }
+  return out;
+}
+
+/** A human-legible label for the current session (named sessions win; the root
+ *  main session is unnamed, so fall back to its file basename without the ISO
+ *  timestamp prefix). */
+function sessionLabel(ctx: ExtensionCommandContext | ExtensionContext): string {
+  const name = ctx.sessionManager.getSessionName();
+  if (name) return name;
+  const file = ctx.sessionManager.getSessionFile();
+  if (file) {
+    const base = basename(file).replace(/\.jsonl$/, "");
+    const stripped = base.replace(/^\d{4}-\d{2}-\d{2}T\d{2}-\d{2}-\d{2}-\d{3}Z_/, "");
+    return stripped || base;
+  }
+  return "this session";
+}
+
+/**
+ * Turn an approved context into a launch-ready ledger node + the final child
+ * prompt. The prompt embeds the full inherited chain (ancestor nodes root→leaf
+ * plus the new node). Returns the unmodified prompt when no context was built
+ * (isolated launch — current behavior unchanged).
+ */
+function finalizeLaunchContext(
+  ctx: ExtensionCommandContext | ExtensionContext,
+  built: BuiltLedgerContext | undefined,
+  instructions: string,
+): { prompt: string; ledgerNode?: ContextLedgerNode } {
+  if (!built) return { prompt: instructions };
+
+  const sourceSessionFile = ctx.sessionManager.getSessionFile();
+  const sourceSessionName = sessionLabel(ctx);
+  // Inherited chain is carried on the built context (root→leaf), already
+  // resolved at selection time — no extra session-file reads here.
+  const inherited = built.inheritedNodes ?? [];
+  const parentId = inherited.length > 0 ? inherited[inherited.length - 1]!.id : undefined;
+
+  let branch;
+  try {
+    branch = ctx.sessionManager.getBranch();
+  } catch {
+    branch = [];
+  }
+  const node: ContextLedgerNode = {
+    version: 1,
+    id: newLedgerNodeId(),
+    parentId,
+    sourceSessionFile,
+    sourceSessionName,
+    createdAt: new Date().toISOString(),
+    ...(built.summary ? { summary: built.summary } : {}),
+    selections: snapshotSelections(branch, new Set(built.selectedIds)),
+  };
+
+  return { prompt: buildContextPrompt(instructions, inherited, node), ledgerNode: node };
+}
 
 /**
  * Salvaged partial output of a failed run, as a labeled suffix for the error
@@ -478,6 +651,15 @@ export default function (pi: ExtensionAPI) {
         },
       }, { deliverAs: "followUp", triggerTurn: true });
     },
+    // Persist the child-session link in the parent session so /ot can rebuild
+    // the context tree after a resume, and /ot can reopen the child session.
+    onLink: (link: ContextLinkData) => {
+      try {
+        pi.appendEntry(CONTEXT_LINK_ENTRY, link);
+      } catch (err) {
+        console.error("[olive-agents] failed to persist context link:", err instanceof Error ? err.message : err);
+      }
+    },
   });
 
   // Expose manager via Symbol.for() global registry for cross-package access.
@@ -549,6 +731,20 @@ export default function (pi: ExtensionAPI) {
         );
         return { cancel: true };
       }
+      // /ot-reopened sessions: same corruption guard, keyed by window name.
+      const windowName = reopenedWindows.get(target);
+      if (windowName) {
+        const live = await findWindowByName(execFromPi(pi), windowName);
+        if (live) {
+          await focusWindow(execFromPi(pi), live.id);
+          ctx.ui.notify(
+            "Session is open in an agent window. Switch cancelled — focused its tmux window instead.",
+            "info",
+          );
+          return { cancel: true };
+        }
+        reopenedWindows.delete(target);
+      }
     }
     manager.abortAll();
     manager.clearCompleted();
@@ -575,6 +771,11 @@ export default function (pi: ExtensionAPI) {
 
   // Passive compact overview below the editor.
   const fleet = new FleetList(manager);
+
+  // Agent sessions reopened from /ot (no manager record exists). Keyed by
+  // session file → tmux window name, so the session_before_switch guard can
+  // prevent opening a live agent JSONL in the parent TUI.
+  const reopenedWindows = new Map<string, string>();
 
   // ---- Join mode configuration ----
   let defaultJoinMode: JoinMode = 'smart';
@@ -1137,7 +1338,7 @@ The child starts fresh and receives only the self-contained task prompt.
         model: initialModel,
         thinking,
         runInBackground,
-      }));
+      }, makeApprovalContextInput(ctx)));
       if (approved.outcome === "feedback") {
         return textResult(`feedback: ${approved.feedback}`);
       }
@@ -1148,7 +1349,9 @@ The child starts fresh and receives only the self-contained task prompt.
         return textResult("Subagent launch cancelled. No session was created.");
       }
 
-      const prompt = approved.prompt;
+      // Context-ledger finalization: embeds any inherited chain + the new node
+      // into the child prompt, and produces the node the child persists.
+      const { prompt, ledgerNode } = finalizeLaunchContext(ctx, approved.context, approved.prompt);
       const effectiveModel = approved.model;
       model = effectiveModel;
       thinking = approved.thinking;
@@ -1186,6 +1389,7 @@ The child starts fresh and receives only the self-contained task prompt.
             promptPolicy: rawType?.toLowerCase() === "general-purpose" ? "native" : "inherit",
             isBackground: true,
             invocation: agentInvocation,
+            ...(ledgerNode ? { ledgerNode } : {}),
             ...bgCallbacks,
           });
         } catch (err) {
@@ -1269,6 +1473,7 @@ The child starts fresh and receives only the self-contained task prompt.
           thinkingLevel: thinking,
           promptPolicy: rawType?.toLowerCase() === "general-purpose" ? "native" : "inherit",
           invocation: agentInvocation,
+          ...(ledgerNode ? { ledgerNode } : {}),
           signal,
           ...fgCallbacks,
         });
@@ -1538,8 +1743,12 @@ The child starts fresh and receives only the self-contained task prompt.
     }
   }
 
-  /** Manually choose and launch a background agent through the normal approval flow. */
-  async function launchManualAgent(ctx: ExtensionCommandContext) {
+  /**
+   * Manually choose and launch a background agent through the normal approval
+   * flow. `presetInherited` (root→leaf, from /ot) pre-seeds the inherited
+   * ledger chain so a launch can branch off any point in the context tree.
+   */
+  async function launchManualAgent(ctx: ExtensionCommandContext, presetInherited?: ContextLedgerNode[]) {
     reloadCustomAgents();
     const available = getAvailableTypes();
     if (available.length === 0) {
@@ -1590,7 +1799,7 @@ The child starts fresh and receives only the self-contained task prompt.
       model: model!,
       thinking,
       runInBackground: true,
-    }));
+    }, makeApprovalContextInput(ctx, presetInherited)));
 
     if (approved.outcome === "feedback") {
       pi.sendUserMessage(`feedback: ${approved.feedback}`);
@@ -1602,6 +1811,7 @@ The child starts fresh and receives only the self-contained task prompt.
     }
     if (approved.outcome === "cancel") return;
 
+    const { prompt, ledgerNode } = finalizeLaunchContext(ctx, approved.context, approved.prompt);
     const effectiveMaxTurns = normalizeMaxTurns(resolvedConfig.maxTurns ?? getDefaultMaxTurns());
     const modelName = approved.model.id !== ctx.model?.id
       ? (approved.model.name ?? approved.model.id).replace(/^Claude\s+/i, "").toLowerCase()
@@ -1615,7 +1825,7 @@ The child starts fresh and receives only the self-contained task prompt.
 
     let id: string;
     try {
-      id = await manager.spawn(pi, ctx, subagentType, approved.prompt, {
+      id = await manager.spawn(pi, ctx, subagentType, prompt, {
         description,
         model: approved.model,
         maxTurns: effectiveMaxTurns,
@@ -1623,6 +1833,7 @@ The child starts fresh and receives only the self-contained task prompt.
         promptPolicy: subagentType.toLowerCase() === "general-purpose" ? "native" : "inherit",
         isBackground: true,
         invocation,
+        ...(ledgerNode ? { ledgerNode } : {}),
       });
     } catch (err) {
       ctx.ui.notify(err instanceof Error ? err.message : String(err), "warning");
@@ -2212,6 +2423,119 @@ ${systemPrompt}
     ctx.ui.notify(message, level);
   }
 
+  // ---- /ot context-tree command ----------------
+
+  /** Find the link descriptor that points at a given session file. */
+  function findLinkForSessionFile(links: ContextLinkData[], file: string): ContextLinkData | undefined {
+    for (const link of links) {
+      if (link.childSessionFile === file) return link;
+    }
+    return undefined;
+  }
+
+  /** Route the user to an agent session: active record, else persisted reopen. */
+  async function routeToSession(ctx: ExtensionContext, file: string, graphLinks: Map<string, ContextLinkData[]>): Promise<void> {
+    const record = manager.recordBySessionFile(file);
+    if (record) {
+      const ok = await manager.focusOrReopen(record.id);
+      if (!ok) ctx.ui.notify("Could not focus the agent window.", "warning");
+      return;
+    }
+    const link = findLinkForSessionFile(graphLinks.get(file) ?? [], file);
+    if (!link?.reopen) {
+      ctx.ui.notify("No reopen metadata for this session.", "warning");
+      return;
+    }
+    const result = await manager.reopenFromPersisted(link);
+    if (!result.ok) {
+      ctx.ui.notify("Could not reopen the agent session (session file missing?).", "error");
+      return;
+    }
+    if (result.focused) {
+      ctx.ui.notify("Focused the existing agent window.", "info");
+    } else {
+      if (result.windowName && link.childSessionFile) {
+        reopenedWindows.set(link.childSessionFile, result.windowName);
+      }
+      ctx.ui.notify("Opened the agent session in a new window.", "info");
+    }
+  }
+
+  async function showContextTree(ctx: ExtensionCommandContext): Promise<void> {
+    const currentFile = ctx.sessionManager.getSessionFile();
+    if (!currentFile) {
+      ctx.ui.notify("Context tree requires a persisted session (--no-session cannot rebuild it).", "warning");
+      return;
+    }
+
+    // The tree re-enters after each launch until the user closes it; the graph
+    // is refreshed per iteration so a newly launched child appears.
+    for (;;) {
+      const graph = loadLedgerGraph(currentFile, readSessionEntries, sessionDisplayName);
+      const ancestorFiles = resolveAncestorChain(currentFile).map((a) => a.sessionFile);
+      const own = getSessionLedgerNode(plainEntries(readSessionEntries(currentFile)));
+
+      // Map of session file → links pointing at it, for reopen routing.
+      const linksByChild = new Map<string, ContextLinkData[]>();
+      for (const session of graph.sessions.values()) {
+        for (const link of session.links) {
+          if (link.childSessionFile) {
+            const bucket = linksByChild.get(link.childSessionFile) ?? [];
+            bucket.push(link);
+            linksByChild.set(link.childSessionFile, bucket);
+          }
+        }
+      }
+
+      const command = await openContextTree({
+        ctx,
+        graph,
+        ancestorFiles,
+        currentFile,
+        currentLedgerId: own?.id,
+        focusOrOpen: async (row) => {
+          const file = row.sessionFile;
+          if (!file) {
+            ctx.ui.notify("No session file for this entry.", "warning");
+            return;
+          }
+          await routeToSession(ctx, file, linksByChild);
+        },
+      });
+      if (!command) return;
+      if (command.startsWith("launch:")) {
+        const targetFile = command.slice(7);
+        const chain = ledgerChainForSession(graph, targetFile);
+        if (chain.length === 0) {
+          ctx.ui.notify("No ledger node found for that entry — cannot launch with context.", "warning");
+          continue;
+        }
+        await launchManualAgent(ctx, chain);
+        // Loop: the tree re-opens with the new child visible.
+      }
+    }
+  }
+
+  /** Ledger chain (root→leaf) of a session's node, walked through the graph. */
+  function ledgerChainForSession(graph: LedgerGraph, sessionFile: string): ContextLedgerNode[] {
+    const session = graph.sessions.get(sessionFile);
+    const node = session?.ledgerNode;
+    if (!node) return [];
+    const chain: ContextLedgerNode[] = [];
+    const seen = new Set<string>();
+    let cur: ContextLedgerNode | undefined = node;
+    while (cur && !seen.has(cur.id)) {
+      seen.add(cur.id);
+      chain.unshift(cur);
+      cur = cur.parentId ? graph.nodes.get(cur.parentId) : undefined;
+    }
+    return chain;
+  }
+
+  pi.registerCommand("ot", {
+    description: "Inspect the context-ledger tree and route to agent sessions",
+    handler: async (_args, ctx) => { await showContextTree(ctx); },
+  });
   pi.registerCommand("agents", {
     description: "Manage agent definitions and settings",
     handler: async (_args, ctx) => { await showAgentsMenu(ctx); },

@@ -344,6 +344,17 @@ emitEvent(spec.bridge.mailboxDir, {
   sessionFile: sessionManager.getSessionFile(),
 });
 
+// Persist the context ledger node into THIS session before the task runs. Only
+// for fresh sessions (reopened sessions already have their ledger entry). The
+// entry is a pi custom entry: durable, but never part of the LLM context.
+if (!spec.session.openFile && spec.ledger?.node) {
+  try {
+    sessionManager.appendCustomEntry("olive-agent-context-ledger", { version: 1, node: spec.ledger.node });
+  } catch (err) {
+    console.error(`[olive-agent] failed to persist context ledger: ${err?.message ?? err}`);
+  }
+}
+
 const mode = new InteractiveMode(runtime, {
   initialMessage: spec.run.prompt || undefined,
   verbose: false,

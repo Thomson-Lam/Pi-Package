@@ -120,3 +120,20 @@ export function execFromPi(pi: Pick<ExtensionAPI, "exec">): TmuxExec {
 export function toWindowInfo(id: string, index: number, name: string): AgentWindowInfo {
   return { id, index, name, state: "starting" };
 }
+
+/**
+ * Find a live window by its (stable, automatic-rename-off) name. Returns the
+ * window when found, undefined otherwise. Used to dedupe /ot reopens against
+ * windows still alive in a previous/target tmux session listing.
+ */
+export async function findWindowByName(exec: TmuxExec, name: string): Promise<{ id: string; index: number; name: string } | undefined> {
+  const result = await exec(["list-windows", "-F", "#{window_id}\t#{window_index}\t#{window_name}"]);
+  if (result.code !== 0) return undefined;
+  for (const line of result.stdout.split("\n")) {
+    const [id, index, windowName] = line.split("\t");
+    if (windowName === name && id && index) {
+      return { id, index: Number(index), name };
+    }
+  }
+  return undefined;
+}

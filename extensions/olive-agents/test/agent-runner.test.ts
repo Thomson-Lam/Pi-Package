@@ -97,3 +97,31 @@ describe("prepareAgentLaunch", () => {
     expect(spec.run.graceTurns).toBe(3);
   });
 });
+
+describe("context ledger spec", () => {
+  it("embeds an optional ledger node and bumps the spec version", async () => {
+    const { spec } = await prepare();
+    expect(spec.version).toBe(3); // v3 adds the optional ledger field
+    expect(spec.ledger).toBeUndefined();
+
+    const { spec: ledgerSpec } = await prepareAgentLaunch({
+      pi: makePi(), ctx: makeCtx(), type: "Review",
+      prompt: "do the thing", description: "review",
+      options: { model: { provider: "test", id: "basic" }, thinking: "high" },
+      agentId: "agent-id", childSessionId: "child-session",
+      parentSessionFile: join(work, "parent.jsonl"), sessionDir: work,
+      mailboxDir: join(work, "mailbox"),
+      ledgerNode: {
+        version: 1, id: "ledger-1", parentId: "ledger-0",
+        sourceSessionName: "src", createdAt: "2025-01-01T00:00:00.000Z",
+        selections: [{ kind: "message", entryId: "e1", role: "user", label: "user · hi", text: "hi" }],
+      },
+    });
+    expect(ledgerSpec.ledger).toBeDefined();
+    expect(ledgerSpec.ledger!.node.id).toBe("ledger-1");
+    expect(ledgerSpec.ledger!.node.parentId).toBe("ledger-0");
+    // Fully serializable (no functions/objects that break JSON round-trip).
+    const parsed = JSON.parse(JSON.stringify(ledgerSpec)) as AgentLaunchSpec;
+    expect(parsed.ledger!.node.id).toBe("ledger-1");
+  });
+});

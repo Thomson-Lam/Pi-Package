@@ -7,6 +7,7 @@
  */
 
 import type { ModelThinkingLevel } from "@earendil-works/pi-ai";
+import type { ContextLedgerNode } from "./context-ledger.js";
 import type { LifetimeUsage } from "./usage.js";
 
 export type ThinkingLevel = ModelThinkingLevel;
@@ -55,7 +56,7 @@ export type JoinMode = 'async' | 'group' | 'smart';
  * through its own credential store.
  */
 export interface AgentLaunchSpec {
-  version: 2;
+  version: 3;
   agent: {
     id: string;
     type: string;
@@ -93,6 +94,8 @@ export interface AgentLaunchSpec {
   bridge: {
     mailboxDir: string;
   };
+  /** Context ledger carried by this launch; the child persists its node on first run. */
+  ledger?: { node: ContextLedgerNode };
 }
 
 /** Persistent Pi session identity of a child agent session. */

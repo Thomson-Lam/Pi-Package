@@ -12,6 +12,7 @@ import type { Model } from "@earendil-works/pi-ai";
 import type { ExtensionContext } from "@earendil-works/pi-coding-agent";
 import { type ExtensionAPI, getPackageDir } from "@earendil-works/pi-coding-agent";
 import { getAgentConfig, getConfig } from "./agent-types.js";
+import { type ContextLedgerNode, type ReopenDescriptor } from "./context-ledger.js";
 import { detectEnv } from "./env.js";
 import { buildAgentPrompt, type PromptExtras } from "./prompts.js";
 import { preloadSkills } from "./skill-loader.js";
@@ -74,6 +75,8 @@ export interface PrepareLaunchInput {
   parentSessionFile?: string;
   sessionDir?: string;
   mailboxDir: string;
+  /** Optional context ledger node accompanying this launch. */
+  ledgerNode?: ContextLedgerNode;
 }
 
 export interface PrepareLaunchResult {
@@ -145,7 +148,7 @@ export async function prepareAgentLaunch(input: PrepareLaunchInput): Promise<Pre
 
   const config2 = getConfig(type);
   const spec: AgentLaunchSpec = {
-    version: 2,
+    version: 3,
     agent: {
       id: input.agentId,
       type,
@@ -176,6 +179,7 @@ export async function prepareAgentLaunch(input: PrepareLaunchInput): Promise<Pre
       graceTurns: getGraceTurns(),
     },
     bridge: { mailboxDir: input.mailboxDir },
+    ...(input.ledgerNode ? { ledger: { node: input.ledgerNode } } : {}),
   };
 
   if (!input.parentSessionFile) {
@@ -190,4 +194,27 @@ export async function prepareAgentLaunch(input: PrepareLaunchInput): Promise<Pre
 /** Write a launch spec atomically. The child deletes it after reading. */
 export function writeLaunchSpec(path: string, spec: AgentLaunchSpec): void {
   writeJsonAtomic(path, spec);
+}
+
+/**
+ * Sanitized reopen descriptor derived from a launch spec, persisted in the
+ * parent-session link so /ot can reopen the child session in a fresh window
+ * after the original process has exited. Excludes mailbox paths, credentials,
+ * and the original run prompt.
+ */
+export function buildReopenDescriptor(spec: AgentLaunchSpec): ReopenDescriptor {
+  return {
+    type: spec.agent.type,
+    description: spec.agent.description,
+    cwd: spec.runtime.cwd,
+    model: spec.runtime.model,
+    thinking: spec.runtime.thinking,
+    tools: spec.runtime.tools,
+    noExtensions: spec.runtime.noExtensions,
+    extensionPaths: spec.runtime.extensionPaths,
+    noSkills: spec.runtime.noSkills,
+    systemPrompt: spec.runtime.systemPrompt,
+    promptPolicy: spec.runtime.promptPolicy,
+    sessionDir: spec.session.sessionDir,
+  };
 }

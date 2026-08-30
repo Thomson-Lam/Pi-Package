@@ -11,7 +11,7 @@ Components:
 - `extensions/ctx/index.ts` — forwards to `src/index.ts`, which registers `/ctx`, `/cnew`, `/cb`, `/reads`, `/can`, `/cana`, `/canu`.
 - `extensions/feedback-editor/index.ts` and `client.lua` — register `/fb` and `/fpr`, opening a right-side tmux Neovim pane and returning saved text to Pi's chat editor.
 - `extensions/muon/index.ts` — Muon entrypoint: persists mode/skill state, injects mode prompts, registers `/build`, `/spec`, `/off`, `/muon`, `/mus`, and the `--muon-mode` flag.
-- `extensions/olive-agents/index.ts` — forwards to `src/index.ts`, which registers `/agents`, `/agent-session`, `/mag`, the `alt+a` shortcut, and the `Agent` / `get_subagent_result` tools.
+- `extensions/olive-agents/index.ts` — forwards to `src/index.ts`, which registers `/agents`, `/agent-session`, `/mag`, `/ot`, the `alt+a` shortcut, and the `Agent` / `get_subagent_result` tools; persists the context ledger (selected messages/tools + non-mutating compaction output) for each launch and rebuilds the tree via `/ot` after resume.
 - `extensions/pi-telescope/index.ts` — registers Telescope commands, shortcuts, providers, and fuzzy `@` file completion.
 - `extensions/startup-command/index.ts` — registers the `--startup-command` flag to run a slash command after TUI startup.
 - `docs/` — gitignored handoff and plan notes (`handoff/`, `plans/`).
