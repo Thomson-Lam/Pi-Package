@@ -23,17 +23,14 @@ import {
   CONTEXT_LINK_ENTRY,
   type ContextLedgerNode,
   type ContextLinkData,
-  type LedgerGraph,
-  buildContextPrompt,
+  finalizeLedgerContext,
   getSessionLedgerNode,
   loadLedgerGraph,
-  newLedgerNodeId,
   plainEntries,
   readSessionEntries,
   resolveAncestorChain,
   resolveNearestLedgerAncestors,
   sessionDisplayName,
-  snapshotSelections,
   summarizeSelections,
 } from "./context-ledger.js";
 import { type RpcHandle, registerRpcHandlers } from "./cross-extension-rpc.js";
@@ -155,7 +152,6 @@ const THINKING_LEVELS = ["off", "minimal", "low", "medium", "high", "xhigh", "ma
  */
 function makeApprovalContextInput(
   ctx: ExtensionCommandContext | ExtensionContext,
-  presetInherited?: ContextLedgerNode[],
 ): ApprovalContextInput | undefined {
   const sessionFile = ctx.sessionManager.getSessionFile();
   let branch;
@@ -165,17 +161,10 @@ function makeApprovalContextInput(
     return undefined;
   }
   if (!branch || branch.length === 0) return undefined;
-  // Inheritable candidates: /ot preset chain (root→leaf → nearest-first), else
-  // the current session's own ledger lineage.
-  const candidates = presetInherited?.length
-    ? [...presetInherited].reverse()
-    : sessionFile
-      ? resolveNearestLedgerAncestors(sessionFile)
-      : [];
+  const candidates = sessionFile ? resolveNearestLedgerAncestors(sessionFile) : [];
   return {
     branch,
     candidates,
-    ...(presetInherited?.length ? { presetInherited } : {}),
     summarize: (branchEntries, selectedIds, model, thinking, customInstructions) =>
       summarizeSelections(ctx.modelRegistry, {
         branch: branchEntries,
@@ -186,65 +175,37 @@ function makeApprovalContextInput(
       }),
     ...(ctx.sessionManager.getSessionFile()
       ? {
-          openInheritTree: async (initialIds: string[]): Promise<ContextLedgerNode[] | undefined> => {
+          openInheritTree: async (initialId?: string): Promise<ContextLedgerNode[] | undefined> => {
             const file = ctx.sessionManager.getSessionFile()!;
             const graph = loadLedgerGraph(file, readSessionEntries, sessionDisplayName);
             const ancestorFiles = resolveAncestorChain(file).map((a) => a.sessionFile);
             const own = getSessionLedgerNode(plainEntries(readSessionEntries(file)));
-            const selected = new Set(initialIds);
-            await openContextTree({
+            const result = await openContextTree({
               ctx,
               graph,
               ancestorFiles,
               currentFile: file,
               currentLedgerId: own?.id,
               mode: "select",
-              selected,
+              initialSelectedId: initialId,
               focusOrOpen: async () => {},
             });
-            return inheritedClosure(graph, selected);
+            if (!result?.startsWith("inherit:")) return undefined;
+            const chain: ContextLedgerNode[] = [];
+            const seen = new Set<string>();
+            let node = graph.nodes.get(result.slice(8));
+            while (node && !seen.has(node.id)) {
+              seen.add(node.id);
+              chain.unshift(node);
+              node = node.parentId ? graph.nodes.get(node.parentId) : undefined;
+            }
+            return chain;
           },
         }
       : {}),
   };
 }
 
-/**
- * Union of each selected ledger node and its ancestors (via parentId), ordered
- * root→leaf. This is the inherited chain the new agent's prompt embeds.
- */
-function inheritedClosure(graph: LedgerGraph, ids: ReadonlySet<string>): ContextLedgerNode[] {
-  const nodes = new Map<string, ContextLedgerNode>();
-  const stack = [...ids];
-  const seen = new Set<string>();
-  while (stack.length) {
-    const id = stack.pop()!;
-    if (seen.has(id)) continue;
-    seen.add(id);
-    const n = graph.nodes.get(id);
-    if (!n) continue;
-    nodes.set(id, n);
-    if (n.parentId) stack.push(n.parentId);
-  }
-  const out: ContextLedgerNode[] = [];
-  const remaining = new Map(nodes);
-  while (remaining.size) {
-    const ready: string[] = [];
-    for (const [id, n] of remaining) {
-      if (!n.parentId || !remaining.has(n.parentId)) ready.push(id);
-    }
-    if (ready.length === 0) { // cycle guard — never expected
-      out.push(...remaining.values());
-      break;
-    }
-    for (const id of ready) {
-      const n = remaining.get(id)!;
-      out.push(n);
-      remaining.delete(id);
-    }
-  }
-  return out;
-}
 
 /** A human-legible label for the current session (named sessions win; the root
  *  main session is unnamed, so fall back to its file basename without the ISO
@@ -273,32 +234,19 @@ function finalizeLaunchContext(
   instructions: string,
 ): { prompt: string; ledgerNode?: ContextLedgerNode } {
   if (!built) return { prompt: instructions };
-
-  const sourceSessionFile = ctx.sessionManager.getSessionFile();
-  const sourceSessionName = sessionLabel(ctx);
-  // Inherited chain is carried on the built context (root→leaf), already
-  // resolved at selection time — no extra session-file reads here.
-  const inherited = built.inheritedNodes ?? [];
-  const parentId = inherited.length > 0 ? inherited[inherited.length - 1]!.id : undefined;
-
   let branch;
   try {
     branch = ctx.sessionManager.getBranch();
   } catch {
     branch = [];
   }
-  const node: ContextLedgerNode = {
-    version: 1,
-    id: newLedgerNodeId(),
-    parentId,
-    sourceSessionFile,
-    sourceSessionName,
-    createdAt: new Date().toISOString(),
-    ...(built.summary ? { summary: built.summary } : {}),
-    selections: snapshotSelections(branch, new Set(built.selectedIds)),
-  };
-
-  return { prompt: buildContextPrompt(instructions, inherited, node), ledgerNode: node };
+  return finalizeLedgerContext({
+    instructions,
+    built,
+    branch,
+    sourceSessionFile: ctx.sessionManager.getSessionFile(),
+    sourceSessionName: sessionLabel(ctx),
+  });
 }
 
 /**
@@ -1743,12 +1691,8 @@ The child starts fresh and receives only the self-contained task prompt.
     }
   }
 
-  /**
-   * Manually choose and launch a background agent through the normal approval
-   * flow. `presetInherited` (root→leaf, from /ot) pre-seeds the inherited
-   * ledger chain so a launch can branch off any point in the context tree.
-   */
-  async function launchManualAgent(ctx: ExtensionCommandContext, presetInherited?: ContextLedgerNode[]) {
+  /** Manually choose and launch a background agent through normal approval. */
+  async function launchManualAgent(ctx: ExtensionCommandContext) {
     reloadCustomAgents();
     const available = getAvailableTypes();
     if (available.length === 0) {
@@ -1799,7 +1743,7 @@ The child starts fresh and receives only the self-contained task prompt.
       model: model!,
       thinking,
       runInBackground: true,
-    }, makeApprovalContextInput(ctx, presetInherited)));
+    }, makeApprovalContextInput(ctx)));
 
     if (approved.outcome === "feedback") {
       pi.sendUserMessage(`feedback: ${approved.feedback}`);
@@ -2468,68 +2412,37 @@ ${systemPrompt}
       return;
     }
 
-    // The tree re-enters after each launch until the user closes it; the graph
-    // is refreshed per iteration so a newly launched child appears.
-    for (;;) {
-      const graph = loadLedgerGraph(currentFile, readSessionEntries, sessionDisplayName);
-      const ancestorFiles = resolveAncestorChain(currentFile).map((a) => a.sessionFile);
-      const own = getSessionLedgerNode(plainEntries(readSessionEntries(currentFile)));
+    const graph = loadLedgerGraph(currentFile, readSessionEntries, sessionDisplayName);
+    const ancestorFiles = resolveAncestorChain(currentFile).map((a) => a.sessionFile);
+    const own = getSessionLedgerNode(plainEntries(readSessionEntries(currentFile)));
 
-      // Map of session file → links pointing at it, for reopen routing.
-      const linksByChild = new Map<string, ContextLinkData[]>();
-      for (const session of graph.sessions.values()) {
-        for (const link of session.links) {
-          if (link.childSessionFile) {
-            const bucket = linksByChild.get(link.childSessionFile) ?? [];
-            bucket.push(link);
-            linksByChild.set(link.childSessionFile, bucket);
-          }
+    // Map of session file → links pointing at it, for reopen routing.
+    const linksByChild = new Map<string, ContextLinkData[]>();
+    for (const session of graph.sessions.values()) {
+      for (const link of session.links) {
+        if (link.childSessionFile) {
+          const bucket = linksByChild.get(link.childSessionFile) ?? [];
+          bucket.push(link);
+          linksByChild.set(link.childSessionFile, bucket);
         }
       }
+    }
 
-      const command = await openContextTree({
-        ctx,
-        graph,
-        ancestorFiles,
-        currentFile,
-        currentLedgerId: own?.id,
-        focusOrOpen: async (row) => {
-          const file = row.sessionFile;
-          if (!file) {
-            ctx.ui.notify("No session file for this entry.", "warning");
-            return;
-          }
-          await routeToSession(ctx, file, linksByChild);
-        },
-      });
-      if (!command) return;
-      if (command.startsWith("launch:")) {
-        const targetFile = command.slice(7);
-        const chain = ledgerChainForSession(graph, targetFile);
-        if (chain.length === 0) {
-          ctx.ui.notify("No ledger node found for that entry — cannot launch with context.", "warning");
-          continue;
+    await openContextTree({
+      ctx,
+      graph,
+      ancestorFiles,
+      currentFile,
+      currentLedgerId: own?.id,
+      focusOrOpen: async (row) => {
+        const file = row.sessionFile;
+        if (!file) {
+          ctx.ui.notify("No session file for this agent.", "warning");
+          return;
         }
-        await launchManualAgent(ctx, chain);
-        // Loop: the tree re-opens with the new child visible.
-      }
-    }
-  }
-
-  /** Ledger chain (root→leaf) of a session's node, walked through the graph. */
-  function ledgerChainForSession(graph: LedgerGraph, sessionFile: string): ContextLedgerNode[] {
-    const session = graph.sessions.get(sessionFile);
-    const node = session?.ledgerNode;
-    if (!node) return [];
-    const chain: ContextLedgerNode[] = [];
-    const seen = new Set<string>();
-    let cur: ContextLedgerNode | undefined = node;
-    while (cur && !seen.has(cur.id)) {
-      seen.add(cur.id);
-      chain.unshift(cur);
-      cur = cur.parentId ? graph.nodes.get(cur.parentId) : undefined;
-    }
-    return chain;
+        await routeToSession(ctx, file, linksByChild);
+      },
+    });
   }
 
   pi.registerCommand("ot", {

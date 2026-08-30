@@ -262,6 +262,62 @@ export function buildContextPrompt(instructions: string, chain: ContextLedgerNod
   return `# context\n${contextBlock}\n\n# instructions\n${instructions}`;
 }
 
+// ---- Finalization (what actually goes into the agent) ----------------------
+
+/** Context built by the human in the approval flow, ready to finalize. */
+export interface LedgerBuildInput {
+  selectedIds: string[];
+  summary?: string;
+  /** Included parent context, ROOT→LEAF (empty = new context root). */
+  inheritedNodes: ContextLedgerNode[];
+}
+
+export interface FinalizeLedgerContextInput {
+  instructions: string;
+  built?: LedgerBuildInput;
+  /** Current session branch entries; selections are snapshotted from these. */
+  branch: SessionEntry[];
+  sourceSessionFile?: string;
+  sourceSessionName: string;
+  /** Injectable for deterministic tests; production defaults to a UUID. */
+  nodeId?: string;
+  /** Injectable for deterministic tests; production defaults to now. */
+  createdAt?: string;
+}
+
+export interface FinalizedLedgerContext {
+  prompt: string;
+  ledgerNode?: ContextLedgerNode;
+}
+
+/**
+ * Turn an approved context into a launch-ready ledger node + the final child
+ * prompt. The prompt embeds the full inherited chain (ancestor nodes root→leaf
+ * plus the new node). Returns the original instructions and no node when no
+ * context was built (isolated launch). Pure: no session/ctx access.
+ */
+export function finalizeLedgerContext(input: FinalizeLedgerContextInput): FinalizedLedgerContext {
+  const { instructions, built, branch } = input;
+  if (!built) return { prompt: instructions };
+
+  // Inherited chain is carried on the built context (root→leaf), already
+  // resolved at selection time — no extra session-file reads here.
+  const inherited = built.inheritedNodes ?? [];
+  const parentId = inherited.length > 0 ? inherited[inherited.length - 1]!.id : undefined;
+  const node: ContextLedgerNode = {
+    version: 1,
+    id: input.nodeId ?? newLedgerNodeId(),
+    parentId,
+    sourceSessionFile: input.sourceSessionFile,
+    sourceSessionName: input.sourceSessionName,
+    createdAt: input.createdAt ?? new Date().toISOString(),
+    ...(built.summary ? { summary: built.summary } : {}),
+    selections: snapshotSelections(branch, new Set(built.selectedIds)),
+  };
+
+  return { prompt: buildContextPrompt(instructions, inherited, node), ledgerNode: node };
+}
+
 // ---- Session file reading ------------------------------------------------
 
 /** Parse a session JSONL file into entries (+ header). Returns [] on failure. */
@@ -428,13 +484,15 @@ export async function findSessionByHeaderId(
 
 // ---- Display rows (pure, testable) ----------------------------------------
 
-export type TreeRowKind = "session" | "ledger" | "isolated";
+export type TreeRowKind = "session" | "context";
 
 export interface TreeRow {
   id: string;
   kind: TreeRowKind;
   label: string;
   indent: number;
+  /** Tree connector prefix, for example `│   └── `. */
+  prefix: string;
   number: string;
   sessionFile?: string;
   node?: ContextLedgerNode;
@@ -443,17 +501,12 @@ export interface TreeRow {
 }
 
 /**
- * Build display rows for /ot rooted at `viewRoot` (a session file).
+ * Build the agent tree rooted at `viewRoot`.
  *
- * Placement follows LEDGER ancestry, not session links: a child session {
- * attaches under the session holding the ledger node its own node extends
- * (`node.parentId`); when it has no ledger node (or the parent node's session
- * is missing from the graph) it falls back to the launching session (session-
- * link parent), and finally to the root. This makes the skipped-parent case
- * (B3 launched by B2 but inheriting B1's ledger) sit level with B2 under B1.
- * Isolated children (no ledger node) render as `[isolated]` rows.
- *
- * Sibling ordering is deterministic: node createdAt+id, else link createdAt.
+ * A context node attaches to the session holding its parent context. A new
+ * context without a parent attaches to the session that created it. Sessions
+ * launched without context remain separate top-level roots, so the display
+ * never implies a context relationship that does not exist.
  */
 export function computeTreeRows(
   graph: LedgerGraph,
@@ -465,124 +518,98 @@ export function computeTreeRows(
   const root = graph.sessions.get(viewRoot);
   if (!root) return rows;
 
-  const pushSession = (s: LedgerGraphSession, indent: number, number: string): void => {
-    rows.push({
-      id: `session:${s.file}`,
-      kind: "session",
-      label: s.name ?? s.file,
-      indent,
-      number,
-      sessionFile: s.file,
-      isCurrent: s.file === currentFile,
-      parentFile: s.parentFile,
-    });
-  };
-
-  // Descendant-only set: sessions reachable from the view root via link
-  // edges. Ancestor sessions (loaded via the header walk for `h` navigation)
-  // must NEVER attach as children — treating them as attachable caused an
-  // A↔main mutual-attach cycle that rendered the same nodes at every depth.
   const reachable = new Set<string>();
-  {
-    const stack = [viewRoot];
-    while (stack.length) {
-      const f = stack.pop()!;
-      if (reachable.has(f)) continue;
-      reachable.add(f);
-      const sess = graph.sessions.get(f);
-      if (!sess) continue;
-      for (const link of sess.links) {
-        if (link.childSessionFile) stack.push(link.childSessionFile);
-      }
+  const stack = [viewRoot];
+  while (stack.length) {
+    const file = stack.pop()!;
+    if (reachable.has(file)) continue;
+    reachable.add(file);
+    for (const link of graph.sessions.get(file)?.links ?? []) {
+      if (link.childSessionFile) stack.push(link.childSessionFile);
     }
   }
 
-  const attachable = [...graph.sessions.values()].filter(
-    (s) => s.file !== viewRoot && reachable.has(s.file),
+  const sessions = [...reachable]
+    .map((file) => graph.sessions.get(file))
+    .filter((session): session is LedgerGraphSession => Boolean(session));
+  const byLedgerId = new Map<string, LedgerGraphSession>();
+  const launchedBy = new Map<string, LedgerGraphSession>();
+  for (const session of graph.sessions.values()) {
+    if (session.ledgerNode) byLedgerId.set(session.ledgerNode.id, session);
+    for (const link of session.links) {
+      if (link.childSessionFile) launchedBy.set(link.childSessionFile, session);
+    }
+  }
+
+  const attachParent = (child: LedgerGraphSession): LedgerGraphSession | undefined => {
+    const node = child.ledgerNode;
+    if (!node) return undefined;
+    const parent = node.parentId
+      ? byLedgerId.get(node.parentId)
+      : node.sourceSessionFile
+        ? graph.sessions.get(node.sourceSessionFile)
+        : launchedBy.get(child.file); // v1 entries created before sourceSessionFile was persisted
+    return parent && reachable.has(parent.file) && parent.file !== child.file ? parent : undefined;
+  };
+
+  const sortSessions = (items: LedgerGraphSession[]): LedgerGraphSession[] => items.sort((a, b) => {
+    const time = (a.ledgerNode?.createdAt ?? "").localeCompare(b.ledgerNode?.createdAt ?? "");
+    return time || a.file.localeCompare(b.file);
+  });
+  const childrenOf = (parent: LedgerGraphSession) => sortSessions(
+    sessions.filter((candidate) => candidate.file !== viewRoot && attachParent(candidate)?.file === parent.file),
   );
 
-  // Holder + launcher indexes span the WHOLE graph (root, descendants, and
-  // ancestors): a child's parentId may point at the view root's ledger or an
-  // ancestor's ledger, and the launch fallback must find the real launcher.
-  // Only the attachable set above constrains what renders as children.
-  const byLedgerNodeId = new Map<string, LedgerGraphSession>();
-  for (const s of graph.sessions.values()) if (s.ledgerNode) byLedgerNodeId.set(s.ledgerNode.id, s);
-  const launchedBy = new Map<string, LedgerGraphSession>();
-  for (const s of graph.sessions.values()) {
-    for (const link of s.links) {
-      if (link.childSessionFile) launchedBy.set(link.childSessionFile, s);
-    }
-  }
+  const forest = [
+    root,
+    ...sortSessions(sessions.filter((session) => session.file !== viewRoot && !attachParent(session))),
+  ];
+  const visited = new Set<string>();
 
-  /** The session a child attaches under (ledger parent > launching session). */
-  const attachParent = (child: LedgerGraphSession): LedgerGraphSession | undefined => {
-    const n = child.ledgerNode;
-    if (n?.parentId) {
-      const holder = byLedgerNodeId.get(n.parentId);
-      if (holder) return holder;
-    }
-    return launchedBy.get(child.file) ?? root;
-  };
-
-  const childrenOf = (s: LedgerGraphSession): LedgerGraphSession[] => {
-    const kids = attachable.filter((c) => c !== s && attachParent(c) === s);
-    kids.sort((a, b) => {
-      // Ledger children before isolated ones, so numbering is [1a][1b]… then [isolated].
-      const pa = a.ledgerNode ? 0 : 1;
-      const pb = b.ledgerNode ? 0 : 1;
-      if (pa !== pb) return pa - pb;
-      const aa = a.ledgerNode?.createdAt ?? "";
-      const bb = b.ledgerNode?.createdAt ?? "";
-      const cmp = aa.localeCompare(bb);
-      if (cmp !== 0) return cmp;
-      return (a.ledgerNode?.id ?? a.file).localeCompare(b.ledgerNode?.id ?? b.file);
+  const walk = (
+    session: LedgerGraphSession,
+    depth: number,
+    index: number,
+    siblingCount: number,
+    ancestorLast: boolean[],
+  ): void => {
+    if (visited.has(session.file) || depth > 32) return;
+    visited.add(session.file);
+    const isLast = index === siblingCount - 1;
+    const prefix = depth === 0
+      ? ""
+      : ancestorLast.slice(1).map((last) => last ? "    " : "│   ").join("") + (isLast ? "└── " : "├── ");
+    const node = session.ledgerNode;
+    rows.push({
+      id: node ? `context:${node.id}` : `session:${session.file}`,
+      kind: node ? "context" : "session",
+      label: session.name ?? session.file,
+      indent: depth,
+      prefix,
+      number: computeNumber(depth, index, siblingCount),
+      sessionFile: session.file,
+      node,
+      isCurrent: session.file === currentFile || node?.id === currentLedgerId,
+      parentFile: session.parentFile,
     });
-    return kids;
+
+    const children = childrenOf(session);
+    children.forEach((child, childIndex) => walk(
+      child,
+      depth + 1,
+      childIndex,
+      children.length,
+      [...ancestorLast, isLast],
+    ));
   };
 
-  const walk = (s: LedgerGraphSession, depth: number): void => {
-    if (depth > 32) return; // pathological cycle guard
-    childrenOf(s).forEach((child, idx) => {
-      if (child.ledgerNode) {
-        const label = child.name ?? child.file;
-        const node = child.ledgerNode;
-        rows.push({
-          id: `node:${node.id}`,
-          kind: "ledger",
-          label: `${label}${node.selections.length ? ` · ${node.selections.length} selected` : ""}`,
-          indent: depth,
-          number: computeNumber(depth, idx),
-          sessionFile: child.file,
-          node,
-          isCurrent: node.id === currentLedgerId,
-        });
-        walk(child, depth + 1);
-      } else {
-        rows.push({
-          id: `isolated:${child.file}`,
-          kind: "isolated",
-          label: child.name ?? child.file,
-          indent: depth,
-          number: "[isolated]",
-          sessionFile: child.file,
-        });
-        walk(child, depth + 1);
-      }
-    });
-  };
-
-  pushSession(root, 0, "[0]");
-  walk(root, 1);
+  forest.forEach((session, index) => walk(session, 0, index, forest.length, []));
   return rows;
 }
 
-/**
- * Display numbering: depth-1 parallel children get letters ([1a],[1b]),
- * deeper levels get plain indices ([2], [3], …).
- */
-function computeNumber(depth: number, idx: number): string {
-  if (depth === 1) return `[1${String.fromCharCode(97 + idx)}]`;
-  return `[${depth}]`;
+/** Letters are added only when agents are parallel at the same depth. */
+function computeNumber(depth: number, index: number, siblingCount: number): string {
+  return `[${depth}${siblingCount > 1 ? String.fromCharCode(97 + index) : ""}]`;
 }
 // ---- Non-mutating compaction output ---------------------------------------
 

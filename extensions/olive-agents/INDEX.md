@@ -9,7 +9,7 @@ Components:
 - `src/agent-types.ts` — embedded default + user-defined agent registry.
 - `src/approval.ts` — mandatory per-launch review/approval, with optional context-ledger building.
 - `src/child-host.mjs` — plain-ESM host booting each agent as a native Pi session in its own tmux window; persists the received ledger node into the child session.
-- `src/context-ledger.ts` — durable context model: message/tool extraction, snapshotting, prompt serialization, ancestor-chain resolution, /ot graph loading and tree placement (nested / parallel / skipped-parent / isolated).
+- `src/context-ledger.ts` — durable context model: message extraction, snapshotting, prompt serialization, parent-context resolution, /ot graph loading, and agent-tree placement.
 - `src/cross-extension-rpc.ts` — ping/spawn/stop RPC over `pi.events`.
 - `src/event-mailbox.ts` — filesystem mailbox between parent and child sessions.
 - `src/group-join.ts` — grouped completion notifications for background agents.
@@ -27,8 +27,8 @@ Components:
 Notes:
 - The context ledger persists into pi session JSONL files only (`olive-agent-context-link` in the parent session, `olive-agent-context-ledger` in the child session); nothing is written to the project workspace.
 - Non-mutating compaction output uses pi's native summarizer without appending a compaction entry to the current session.
-- Context-building flow: selection TUI → inherit prior context? y/n (only when a prior ledger exists; Yes opens the /ot tree in select mode) → compact full conversation? y/n → launch.
-- `/ot` actions per ledger row: "Launch agent with this context" (reuses the whole ledger+compaction flow pre-seeded with that node's chain), view context, focus/open session.
+- Context-building flow: select messages → include existing context? (choose one agent; its parent chain follows automatically) → compact full conversation? → launch.
+- `/ot` renders agent sessions using context relationships only. Each row can show its passed context or focus/reopen the session; agents launched without context remain separate roots.
 - /ot rebuilds the tree from persisted entries after /resume; `--no-session` cannot rebuild.
 
 Related:

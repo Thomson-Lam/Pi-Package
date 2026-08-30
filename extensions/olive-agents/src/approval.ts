@@ -23,7 +23,7 @@ export interface ApprovalRequest {
 export interface BuiltLedgerContext {
   selectedIds: string[];
   summary?: string;
-  /** Inherited prior ledger nodes, ROOT→LEAF (empty = independent subtree). */
+  /** Included parent context, ROOT→LEAF (empty = new context root). */
   inheritedNodes: ContextLedgerNode[];
 }
 
@@ -31,24 +31,10 @@ export interface BuiltLedgerContext {
 export interface ApprovalContextInput {
   /** Current session branch entries (selectable rows are derived from these). */
   branch: SessionEntry[];
-  /**
-   * Inheritable prior ledger nodes, NEAREST first. Empty when there is nothing
-   * to inherit — the inherit question is then skipped entirely (dead UI would
-   * be noise; the approval summary surfaces "prior ledger available" instead).
-   */
+  /** Existing parent contexts, NEAREST first. Empty skips the question. */
   candidates: ContextLedgerNode[];
-  /**
-   * Root→leaf ledger chain pre-selected for inheritance (used by /ot
-   * "Launch agent with this context"). The inherit question is skipped and
-   * the tree defaults these on.
-   */
-  presetInherited?: ContextLedgerNode[];
-  /**
-   * Opens the /ot context tree in select mode and resolves the inherited
-   * ledger node chain (root→leaf) that the new context extends. Resolves []
-   * when nothing was kept, undefined when the tree could not be opened.
-   */
-  openInheritTree?(initialIds: string[]): Promise<ContextLedgerNode[] | undefined>;
+  /** Choose one existing context; its parent chain is returned root→leaf. */
+  openInheritTree?(initialId?: string): Promise<ContextLedgerNode[] | undefined>;
   summarize(
     branch: SessionEntry[],
     selectedIds: string[],
@@ -244,15 +230,15 @@ async function selectSubagentModel(
 function buildSummary(request: ApprovalRequest, built?: BuiltLedgerContext, inheritable = false): string {
   const parts: string[] = [];
   if (built?.inheritedNodes.length) {
-    parts.push(`inherit ${built.inheritedNodes.length} upstream node${built.inheritedNodes.length === 1 ? "" : "s"}`);
+    parts.push(`include ${built.inheritedNodes.length} parent context${built.inheritedNodes.length === 1 ? "" : "s"}`);
   }
   if (built?.selectedIds.length) {
     parts.push(`${built.selectedIds.length} message${built.selectedIds.length === 1 ? "" : "s"} selected`);
   }
   if (built?.summary) parts.push("full-conversation compacted");
   if (built && parts.length === 0) parts.push("nothing selected");
-  let contextLine = parts.length > 0 ? `Context: ${parts.join(" · ")}` : "Context: isolated (fresh child task only)";
-  if (!built && inheritable) contextLine += " · prior ledger available (Build context ledger to inherit)";
+  let contextLine = parts.length > 0 ? `Context: ${parts.join(" · ")}` : "Context: fresh child task only";
+  if (!built && inheritable) contextLine += " · existing context available";
   return [
     `Approve subagent: ${request.description}`,
     "",
@@ -311,19 +297,13 @@ export async function approveInvocation(
   if (ctx.mode !== "tui") return { outcome: "cancel" };
 
   const request = { ...initial };
-  /**
-   * Context built so far; survives loop iterations. For /ot-launched agents the
-   * inherited chain is pre-seeded so launching without the builder still
-   * carries the picked node's context.
-   */
-  let built: BuiltLedgerContext | undefined = contextInput?.presetInherited?.length
-    ? { selectedIds: [], summary: undefined, inheritedNodes: contextInput.presetInherited }
-    : undefined;
+  /** Context built so far; survives approval-menu iterations. */
+  let built: BuiltLedgerContext | undefined;
 
   for (;;) {
     const actions = [
       "Review / edit task prompt",
-      ...(contextInput ? ["Build context ledger"] : []),
+      ...(contextInput ? ["Build context"] : []),
       "Launch",
       `Change model (${modelId(request.model)})`,
       `Change reasoning (${request.thinking})`,
@@ -345,30 +325,24 @@ export async function approveInvocation(
       if (prompt?.trim()) request.prompt = prompt;
       continue;
     }
-    if (action === "Build context ledger") {
+    if (action === "Build context") {
       const builtSelection = await buildContextUI({
         ctx,
         branch: contextInput!.branch,
       });
       if (!builtSelection) continue; // cancelled / nothing selected
 
-      // Step 2: inherit prior ledger context? y/n — only asked when something
-      // can actually be inherited (no dead UI); pre-answered Yes by an /ot
-      // launch preset. Yes pulls up the /ot tree in select mode.
+      // Step 2: optionally choose one existing context. Its parent chain is
+      // included automatically; unrelated branches are never merged.
       let inheritedNodes: ContextLedgerNode[] = [];
       if (contextInput!.candidates.length > 0) {
-        const wantInherit = contextInput!.presetInherited?.length
-          ? true
-          : (await ctx.ui.select(
-              "Inherit prior ledger context?",
-              ["Yes", "No"],
-            )) === "Yes";
+        const wantInherit = (await ctx.ui.select(
+          "Include existing context?",
+          ["Yes", "No"],
+        )) === "Yes";
         if (wantInherit && contextInput!.openInheritTree) {
-          const initial = contextInput!.presetInherited?.length
-            ? contextInput!.presetInherited.map((n) => n.id)
-            : [contextInput!.candidates[0]!.id]; // nearest ledger default
-          const inherited = await contextInput!.openInheritTree(initial);
-          if (inherited) inheritedNodes = inherited; // root→leaf; [] = none kept
+          const inherited = await contextInput!.openInheritTree(contextInput!.candidates[0]?.id);
+          if (inherited) inheritedNodes = inherited;
         }
       }
 

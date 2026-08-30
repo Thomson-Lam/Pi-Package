@@ -9,9 +9,9 @@
  * the FULL conversation, not the selected rows.
  *
  * Keys: j/k move · space select · enter toggle expanded preview · alt-p/n
- * preview scroll · esc done. After this TUI the approval flow asks two native
- * questions: inherit prior ledger context? (y/n, then a toggle tree) and
- * compact the full conversation? (y/n). Nothing here mutates the session.
+ * preview scroll · esc done. After this TUI the approval flow can ask the user
+ * to choose one existing context, then whether to compact the conversation.
+ * Nothing here mutates the session.
  */
 
 import type { ExtensionContext } from "@earendil-works/pi-coding-agent";
@@ -174,7 +174,7 @@ export async function buildContextUI(
       const count = selectedCount();
       const size = count > 0 ? ` · ~${Math.max(1, Math.round(selectedBytes() / 1024))}KB` : "";
       const selText = count === 0 ? dim("no items selected") : theme.fg("success", `${count} selected${size}`);
-      const status = `${selText}   ${dim("next: inherit? → compact?")}`;
+      const status = `${selText}   ${dim("next: existing context? → compact?")}`;
       lines.push(bdr("│") + " " + truncateToWidth(status, innerWidth - 2) + " " + bdr("│"));
 
       // ── Separator ──
@@ -195,7 +195,9 @@ export async function buildContextUI(
           const cursorMark = isCursor ? acc("›") : " ";
           const check = isSel ? theme.fg("success", "●") : dim("·");
           const label = item.label;
-          leftCell = `${cursorMark}${check} ${truncateToWidth(isCursor ? theme.bold(label) : label, listWidth - 4, "…")}`;
+          // Prefix is cursorMark + check + separating space (3 visible chars);
+          // subtract it so a truncated label still fits the padded cell width.
+          leftCell = `${cursorMark}${check} ${truncateToWidth(isCursor ? theme.bold(label) : label, listWidth - 5, "…")}`;
         }
         leftCell = " " + padRight(leftCell, listWidth - 2) + " ";
 
@@ -218,7 +220,7 @@ export async function buildContextUI(
         acc("j/k") + dim(" move"),
         acc("space") + dim(" select"),
         acc("enter") + dim(" preview"),
-        acc("esc") + dim(" done → inherit?"),
+        acc("esc") + dim(" done → existing context?"),
       ].join(dim("  ·  "));
       lines.push(bdr("│") + " " + truncateToWidth(hints, innerWidth - 2) + " " + bdr("│"));
 

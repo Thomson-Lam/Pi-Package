@@ -61,7 +61,7 @@ describe("approval with context ledger", () => {
 
   it("flow: select → inherit Yes (tree) → compact No → launch", async () => {
     const ui = {
-      select: selectQueue(["Build context ledger", "Yes", "No"]),
+      select: selectQueue(["Build context", "Yes", "No"]),
       custom: customQueue([{ selectedIds: ["e1"] }]),
     };
     const openInheritTree = vi.fn(async () => [candidates[0]]);
@@ -79,13 +79,13 @@ describe("approval with context ledger", () => {
       summary: undefined,
       inheritedNodes: [candidates[0]],
     });
-    expect(openInheritTree).toHaveBeenCalledWith(["L0"]); // nearest-ledger default
+    expect(openInheritTree).toHaveBeenCalledWith("L0");
     expect(summarize).not.toHaveBeenCalled();
   });
 
   it("inherit tree returning an empty chain drops the inherited context", async () => {
     const ui = {
-      select: selectQueue(["Build context ledger", "Yes", "No"]),
+      select: selectQueue(["Build context", "Yes", "No"]),
       custom: customQueue([{ selectedIds: ["e1"] }]),
     };
     const openInheritTree = vi.fn(async () => []);
@@ -103,7 +103,7 @@ describe("approval with context ledger", () => {
 
   it("no candidates: the inherit question and tree are skipped entirely", async () => {
     const ui = {
-      select: selectQueue(["Build context ledger", "No"]), // no inherit select slot
+      select: selectQueue(["Build context", "No"]), // no inherit select slot
       custom: customQueue([{ selectedIds: ["e1"] }]),
     };
     const openInheritTree = vi.fn(async () => [candidates[0]]);
@@ -122,7 +122,7 @@ describe("approval with context ledger", () => {
   it("compact: Yes summarizes the FULL conversation through the loader surface", async () => {
     // select queue: builder, inherit ? No, compact ? Yes → loader follows.
     const ui = {
-      select: selectQueue(["Build context ledger", "No", "Yes"]),
+      select: selectQueue(["Build context", "No", "Yes"]),
       custom: customQueue([
         { selectedIds: ["e1"] }, // selection TUI
         async (factory: any) => new Promise((resolve) => factory(null, null, null, resolve)), // loader
@@ -144,46 +144,12 @@ describe("approval with context ledger", () => {
     expect(summarize).toHaveBeenCalledTimes(1);
   });
 
-  it("preset + builder: inherit pre-answered, tree receives the preset chain", async () => {
-    // select: builder, then compact ? No → Launch fallback (no inherit select).
-    const ui = {
-      select: selectQueue(["Build context ledger", "No"]),
-      custom: customQueue([{ selectedIds: ["e1"] }]),
-    };
-    const openInheritTree = vi.fn(async () => [candidates[0]]);
-    const result = await approveInvocation(
-      { mode: "tui", ui } as unknown as ExtensionContext,
-      registry,
-      request,
-      { branch, candidates, presetInherited: [candidates[0]], summarize: () => Promise.resolve("s"), openInheritTree },
-    );
-    expect(result.outcome).toBe("launch");
-    if (result.outcome !== "launch") return;
-    expect(result.context?.selectedIds).toEqual(["e1"]);
-    expect(result.context?.inheritedNodes).toEqual([candidates[0]]);
-    expect(openInheritTree).toHaveBeenCalledWith(["L0"]);
-  });
-
-  it("preset inherited chain seeds the launch without the builder", async () => {
-    const ui = { select: selectQueue(["Launch"]), custom: customQueue([]) };
-    const result = await approveInvocation(
-      { mode: "tui", ui } as unknown as ExtensionContext,
-      registry,
-      request,
-      { branch, candidates, presetInherited: [candidates[0]], summarize: () => Promise.resolve("s") },
-    );
-    expect(result.outcome).toBe("launch");
-    if (result.outcome !== "launch") return;
-    expect(result.context?.inheritedNodes).toEqual([candidates[0]]);
-    expect(result.context?.selectedIds).toEqual([]);
-  });
-
-it("isolated approval (no context input) keeps the fresh-task summary", async () => {
+  it("approval without context keeps the fresh-task summary", async () => {
     let title = "";
     await approveInvocation({
       mode: "tui",
       ui: { select: async (value: string) => { title = value; return "Cancel"; } },
     } as unknown as ExtensionContext, registry, request);
-    expect(title).toContain("isolated (fresh child task only)");
+    expect(title).toContain("fresh child task only");
   });
 });
