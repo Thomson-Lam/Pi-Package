@@ -86,6 +86,10 @@ export interface ContextLinkData {
   /** Node id this child's context extends (the source agent's own node). */
   parentLedgerId?: string;
   createdAt: string;
+  /** Durable bridge used to reattach parent tracking after parent-session resume. */
+  mailboxDir?: string;
+  /** Original parent behavior; restored sessions notify only after explicit return. */
+  isBackground?: boolean;
   /** Sanitized launch metadata — enough to reopen the session in a fresh window. */
   reopen?: ReopenDescriptor;
 }
@@ -104,6 +108,8 @@ export interface ReopenDescriptor {
   systemPrompt?: string;
   promptPolicy?: "native" | "inherit";
   sessionDir?: string;
+  /** Retained ceiling used when reopening an idle child session. Older links may omit it. */
+  maxTurns?: number;
 }
 
 // ---- Reading custom entries from session entries -------------------------

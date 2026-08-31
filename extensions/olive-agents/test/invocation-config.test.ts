@@ -10,14 +10,14 @@ function makeConfig(overrides: Partial<AgentConfig> = {}): AgentConfig {
 }
 
 describe("resolveAgentInvocationConfig", () => {
-  it("prefers configured model, thinking, and turn limit", () => {
+  it("prefers configured model and thinking, but parent turn limit", () => {
     const resolved = resolveAgentInvocationConfig(makeConfig({
       model: "provider/config-model", thinking: "high", maxTurns: 42,
     }), { model: "provider/param-model", thinking: "minimal", max_turns: 1 });
     expect(resolved.modelInput).toBe("provider/config-model");
     expect(resolved.modelFromParams).toBe(false);
     expect(resolved.thinking).toBe("high");
-    expect(resolved.maxTurns).toBe(42);
+    expect(resolved.maxTurns).toBe(1);
   });
 
   it("uses tool-call values when no agent config is available", () => {
@@ -31,7 +31,7 @@ describe("resolveAgentInvocationConfig", () => {
     expect(resolved.runInBackground).toBe(true);
   });
 
-  it("defaults run mode to foreground", () => {
+  it("defaults parent behavior to detach", () => {
     expect(resolveAgentInvocationConfig(makeConfig(), {}).runInBackground).toBe(false);
   });
 });
@@ -42,7 +42,7 @@ describe("resolveJoinMode", () => {
     expect(resolveJoinMode("async", true)).toBe("async");
   });
 
-  it("ignores join mode for foreground agents", () => {
+  it("ignores join mode for detached agents", () => {
     expect(resolveJoinMode("smart", false)).toBeUndefined();
     expect(resolveJoinMode("group", false)).toBeUndefined();
   });

@@ -67,12 +67,6 @@ export interface SubagentsSettings {
    * next pi session.
    */
   toolDescriptionMode?: ToolDescriptionMode;
-  /**
-   * When true, an agent's tmux window is closed as soon as its run settles
-   * (unless the user is actively viewing that window). The Pi session file is
-   * unaffected — the window can be reopened on demand. Defaults to true.
-   */
-  closeWindowOnComplete?: boolean;
 }
 
 export type ToolDescriptionMode = "full" | "compact" | "custom";
@@ -86,7 +80,6 @@ export interface SettingsAppliers {
   setScopeModels: (enabled: boolean) => void;
   setDisableDefaultAgents: (b: boolean) => void;
   setToolDescriptionMode: (mode: ToolDescriptionMode) => void;
-  setCloseWindowOnComplete: (b: boolean) => void;
 }
 
 /** Emit callback — a subset of `pi.events.emit` to keep helpers testable. */
@@ -139,9 +132,6 @@ function sanitize(raw: unknown): SubagentsSettings {
   }
   if (typeof r.toolDescriptionMode === "string" && VALID_TOOL_DESCRIPTION_MODES.has(r.toolDescriptionMode)) {
     out.toolDescriptionMode = r.toolDescriptionMode as ToolDescriptionMode;
-  }
-  if (typeof r.closeWindowOnComplete === "boolean") {
-    out.closeWindowOnComplete = r.closeWindowOnComplete;
   }
   return out;
 }
@@ -245,7 +235,6 @@ export function applySettings(s: SubagentsSettings, appliers: SettingsAppliers):
   if (typeof s.scopeModels === "boolean") appliers.setScopeModels(s.scopeModels);
   if (typeof s.disableDefaultAgents === "boolean") appliers.setDisableDefaultAgents(s.disableDefaultAgents);
   if (s.toolDescriptionMode) appliers.setToolDescriptionMode(s.toolDescriptionMode);
-  if (typeof s.closeWindowOnComplete === "boolean") appliers.setCloseWindowOnComplete(s.closeWindowOnComplete);
 }
 
 /**

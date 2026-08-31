@@ -16,7 +16,7 @@ import { Container, Key, matchesKey, type SettingItem, SettingsList, Spacer, Tex
 import { clampThinkingLevel } from "@earendil-works/pi-ai";
 import { Type } from "typebox";
 import { AgentManager } from "./agent-manager.js";
-import { getDefaultMaxTurns, getGraceTurns, normalizeMaxTurns, SUBAGENT_TOOL_NAMES, setDefaultMaxTurns, setGraceTurns } from "./agent-runner.js";
+import { getDefaultMaxTurns, getGraceTurns, normalizeMaxTurns, SUBAGENT_TOOL_NAMES, setDefaultMaxTurns, setGraceTurns, validateMaxTurns } from "./agent-runner.js";
 import { approveInvocation, type ApprovalContextInput, type BuiltLedgerContext } from "./approval.js";
 import { getAgentConfig, getAllTypes, getAvailableTypes, isDefaultsDisabled, registerAgents, resolveType, setDefaultsDisabled } from "./agent-types.js";
 import {
@@ -25,6 +25,7 @@ import {
   type ContextLinkData,
   finalizeLedgerContext,
   getSessionLedgerNode,
+  getSessionLinks,
   loadLedgerGraph,
   plainEntries,
   readSessionEntries,
@@ -47,7 +48,6 @@ import {
   type AgentActivity,
   type AgentDetails,
   buildInvocationTags,
-  describeActivity,
   fgPreservingNestedStyles,
   formatDuration,
   formatMs,
@@ -60,13 +60,13 @@ import {
 import { FleetList, type FleetUICtx } from "./ui/fleet-list.js";
 import { execFromPi, findWindowByName, focusWindow } from "./tmux-window.js";
 import { openContextTree } from "./ui/context-tree.js";
-import { addUsage, getLifetimeTotal, type LifetimeUsage } from "./usage.js";
+import { getLifetimeTotal, type LifetimeUsage } from "./usage.js";
 
 // ---- Shared helpers ----
 
 /** Tool execute return value for a text response. */
-function textResult(msg: string, details?: AgentDetails) {
-  return { content: [{ type: "text" as const, text: msg }], details: details as any };
+function textResult(msg: string, details?: AgentDetails, terminate = false) {
+  return { content: [{ type: "text" as const, text: msg }], details: details as any, ...(terminate ? { terminate: true } : {}) };
 }
 
 export function renderRunningAgentStatus(
@@ -85,53 +85,6 @@ export function renderRunningAgentStatus(
 function formatLifetimeTokens(o: { lifetimeUsage: LifetimeUsage }): string {
   const t = getLifetimeTotal(o.lifetimeUsage);
   return t > 0 ? formatTokens(t) : "";
-}
-
-/**
- * Create an AgentActivity state and spawn callbacks for tracking tool usage.
- * Used by both foreground and background paths to avoid duplication.
- */
-function createActivityTracker(maxTurns?: number, onStreamUpdate?: () => void) {
-  const state: AgentActivity = {
-    activeTools: new Map(),
-    toolUses: 0,
-    turnCount: 1,
-    maxTurns,
-    responseText: "",
-    session: undefined,
-    lifetimeUsage: { input: 0, output: 0, cacheWrite: 0 },
-  };
-
-  const callbacks = {
-    onToolActivity: (activity: { type: "start" | "end"; toolName: string }) => {
-      if (activity.type === "start") {
-        state.activeTools.set(activity.toolName + "_" + Date.now(), activity.toolName);
-      } else {
-        for (const [key, name] of state.activeTools) {
-          if (name === activity.toolName) { state.activeTools.delete(key); break; }
-        }
-        state.toolUses++;
-      }
-      onStreamUpdate?.();
-    },
-    onTextDelta: (_delta: string, fullText: string) => {
-      state.responseText = fullText;
-      onStreamUpdate?.();
-    },
-    onTurnEnd: (turnCount: number) => {
-      state.turnCount = turnCount;
-      onStreamUpdate?.();
-    },
-    onSessionCreated: (session: any) => {
-      state.session = session;
-    },
-    onAssistantUsage: (usage: { input: number; output: number; cacheWrite: number }) => {
-      addUsage(state.lifetimeUsage, usage);
-      onStreamUpdate?.();
-    },
-  };
-
-  return { state, callbacks };
 }
 
 /**
@@ -306,7 +259,7 @@ function formatTaskNotification(record: AgentRecord, resultMaxLen: number): stri
 /** Build AgentDetails from a base + record-specific fields. */
 function buildDetails(
   base: Pick<AgentDetails, "displayName" | "description" | "subagentType" | "modelName" | "tags">,
-  record: { toolUses: number; startedAt: number; completedAt?: number; status: string; error?: string; id?: string; session?: any; lifetimeUsage: LifetimeUsage },
+  record: { toolUses: number; turnCount?: number; maxTurns?: number; startedAt: number; completedAt?: number; status: string; error?: string; id?: string; session?: any; lifetimeUsage: LifetimeUsage },
   activity?: AgentActivity,
   overrides?: Partial<AgentDetails>,
 ): AgentDetails {
@@ -314,8 +267,8 @@ function buildDetails(
     ...base,
     toolUses: record.toolUses,
     tokens: formatLifetimeTokens(record),
-    turnCount: activity?.turnCount,
-    maxTurns: activity?.maxTurns,
+    turnCount: activity?.turnCount ?? record.turnCount,
+    maxTurns: activity?.maxTurns ?? record.maxTurns,
     durationMs: (record.completedAt ?? Date.now()) - record.startedAt,
     status: record.status as AgentDetails["status"],
     agentId: record.id,
@@ -333,8 +286,8 @@ function buildNotificationDetails(record: AgentRecord, resultMaxLen: number, act
     description: record.description,
     status: record.status,
     toolUses: record.toolUses,
-    turnCount: activity?.turnCount ?? 0,
-    maxTurns: activity?.maxTurns,
+    turnCount: activity?.turnCount ?? record.turnCount,
+    maxTurns: activity?.maxTurns ?? record.maxTurns,
     totalTokens,
     durationMs: record.completedAt ? record.completedAt - record.startedAt : 0,
     sessionFile: record.childSession?.sessionFile,
@@ -649,6 +602,16 @@ export default function (pi: ExtensionAPI) {
   pi.on("session_start", async (_event, ctx) => {
     currentCtx = ctx;
     fleet.setUICtx(ctx.ui as unknown as FleetUICtx);
+    // Reattach mailbox watchers before handling new work. Child windows outlive
+    // the parent, so a pending decision or /or release may have happened while
+    // this parent Pi window was closed.
+    const latestLinks = new Map<string, ContextLinkData>();
+    for (const link of getSessionLinks(ctx.sessionManager.getEntries())) {
+      latestLinks.set(link.agentId, link); // later ready entries replace launching entries
+    }
+    for (const link of latestLinks.values()) {
+      try { await manager.restoreFromPersisted(link); } catch { /* stale links are ignored */ }
+    }
     // A double-bind must not leak RPC listeners.
     if (!rpcHandle) {
       rpcHandle = registerRpcHandlers({
@@ -698,8 +661,8 @@ export default function (pi: ExtensionAPI) {
     manager.clearCompleted();
   });
 
-  // On shutdown, abort all agents immediately and clean up.
-  // If the session is going down, there's nothing left to consume agent results.
+  // On shutdown, detach local tracking without stopping child hosts. Each child
+  // owns its tmux window and must survive the parent Pi window closing.
   pi.on("session_shutdown", async () => {
     rpcHandle?.unsubSpawn();
     rpcHandle?.unsubStop();
@@ -711,7 +674,6 @@ export default function (pi: ExtensionAPI) {
     if (ownsManagerRegistry && (globalThis as any)[MANAGER_KEY] === registryEntry) {
       delete (globalThis as any)[MANAGER_KEY];
     }
-    manager.abortAll();
     nudges.clear();
     fleet.dispose();
     manager.dispose();
@@ -760,15 +722,6 @@ export default function (pi: ExtensionAPI) {
   let toolDescriptionMode: ToolDescriptionMode = "full";
   function getToolDescriptionMode(): ToolDescriptionMode { return toolDescriptionMode; }
   function setToolDescriptionMode(mode: ToolDescriptionMode): void { toolDescriptionMode = mode; }
-
-  // Close an agent's tmux window as soon as its run settles (unless the user
-  // is viewing it). The Pi session file is unaffected — reopen is on demand.
-  let closeWindowOnComplete = true;
-  function getCloseWindowOnComplete(): boolean { return closeWindowOnComplete; }
-  function setCloseWindowOnComplete(b: boolean): void {
-    closeWindowOnComplete = b;
-    manager.setCloseWindowOnComplete(b);
-  }
 
   // ---- Batch tracking for smart join mode ----
   // Collects background agent IDs spawned in the current turn for smart grouping.
@@ -866,7 +819,6 @@ export default function (pi: ExtensionAPI) {
       setScopeModels: setScopeModelsEnabled,
       setDisableDefaultAgents: setDisableDefaultAgents,
       setToolDescriptionMode: setToolDescriptionMode,
-      setCloseWindowOnComplete: setCloseWindowOnComplete,
     },
     (event, payload) => pi.events.emit(event, payload),
   );
@@ -901,7 +853,7 @@ Custom agents: .pi/agents/<name>.md (project) or ${getAgentDir()}/agents/<name>.
 
 Notes:
 - description: 3-5 words (shown in UI). Prompts must be self-contained — the agent has not seen this conversation.
-- Parallel work: one message, multiple Agent calls, run_in_background: true on each. You are notified when background agents finish — never poll or sleep.
+- Parent behavior: run_in_background false/omitted detaches from the child and ends the parent loop; true lets the parent continue working. Either mode notifies the parent after the human returns the child result.
 - The result is not shown to the user — summarize it for them. Verify an agent's claimed code changes before reporting work done.
 - resume continues a previous agent by ID.
 - The child uses the parent working directory, tools, and extensions.`;
@@ -922,11 +874,11 @@ If the target is already known, use a direct tool — \`read\` for a known path,
 ## Usage notes
 
 - Always include a short (3-5 word) description summarizing what the agent will do (shown in UI).
-- When you launch multiple agents for independent work, send them in a single message with multiple tool uses, with run_in_background: true on each, so they run concurrently. If the user specifies that they want agents run "in parallel", you MUST send a single message with multiple tool calls. Foreground calls run sequentially — only one executes at a time.
-- When the agent is done, it returns a single message back to you. The result is not visible to the user — to show the user, send a text message with a concise summary.
+- When you launch multiple agents for independent work, send them in a single message with multiple tool uses, with run_in_background: true on each, so they run concurrently. If the user specifies that they want agents run "in parallel", you MUST send a single message with multiple tool calls.
+- Every fresh run requires max_turns, a positive work-turn limit. Natural completion and the turn ceiling wait for the human to choose Continue, Return, or Feedback; only Return releases the result.
 - Trust but verify: an agent's summary describes what it intended to do, not necessarily what it did. When an agent writes or edits code, check the actual changes before reporting work as done.
-- Use run_in_background for work you don't need immediately. You will be notified when it completes — do NOT poll or sleep waiting for it. Continue with other work or respond to the user instead.
-- Foreground vs background: use foreground (default) when you need the agent's results before you can proceed. Use background when you have genuinely independent work to do in parallel.
+- Leave run_in_background false or omit it to detach from the child: the Agent tool returns immediately and terminates the current parent loop. The parent accepts the next user prompt while the child continues.
+- Set run_in_background true only when the parent should continue its current loop after launch. Both modes notify the parent after the human returns the child result.
 - Use resume with an agent ID to continue a previous agent's work. A new (non-resume) Agent call starts a fresh agent with no memory of prior runs, so the prompt must be self-contained.
 - Clearly tell the agent whether you expect it to write code or just to do research (search, file reads, etc.), since it is not aware of the user's intent.
 - If an agent's description says it should be used proactively, try to use it without the user having to ask for it first.
@@ -1031,15 +983,13 @@ The child starts fresh and receives only the self-contained task prompt.
           description: `Thinking level: ${THINKING_LEVELS.join(", ")}. Overrides agent default.`,
         }),
       ),
-      max_turns: Type.Optional(
-        Type.Number({
-          description: "Maximum number of agentic turns before stopping. Omit for unlimited (default).",
-          minimum: 1,
-        }),
-      ),
+      max_turns: Type.Integer({
+        description: "Required positive work-turn ceiling. Every fresh run and every resume requires a new limit. Reconciliation reporting is separate and does not count as a work turn.",
+        minimum: 1,
+      }),
       run_in_background: Type.Optional(
         Type.Boolean({
-          description: "Set to true to run in background. Returns agent ID immediately. You will be notified on completion.",
+          description: "Set true to let the current parent loop continue after launch. False/omitted detaches from the child, returns immediately, and terminates the current parent loop. Both modes notify the parent when the child result is returned.",
         }),
       ),
       resume: Type.Optional(
@@ -1084,9 +1034,10 @@ The child starts fresh and receives only the self-contained task prompt.
         return renderRunningAgentStatus(frame, s, details.activity ?? "thinking…", theme);
       }
 
-      // ---- Background agent launched ----
-      if (details.status === "background") {
-        return new Text(theme.fg("dim", `  ⎿  Running in background (ID: ${details.agentId})`), 0, 0);
+      // ---- Agent launched without waiting ----
+      if (details.status === "background" || details.status === "detached") {
+        const label = details.status === "detached" ? "Detached from child" : "Running in background";
+        return new Text(theme.fg("dim", `  ⎿  ${label} (ID: ${details.agentId})`), 0, 0);
       }
 
       // ---- Completed / Steered ----
@@ -1139,7 +1090,7 @@ The child starts fresh and receives only the self-contained task prompt.
 
     // ---- Execute ----
 
-    execute: async (toolCallId, params, signal, onUpdate, ctx) => {
+    execute: async (toolCallId, params, signal, _onUpdate, ctx) => {
       fleet.setUICtx(ctx.ui as unknown as FleetUICtx);
 
       // Reload custom agents so new project/global .md files are picked up without restart
@@ -1207,8 +1158,11 @@ The child starts fresh and receives only the self-contained task prompt.
         initialModel,
         resolvedConfig.thinking ?? pi.getThinkingLevel(),
       ) as ThinkingLevel;
-      const runInBackground = resolvedConfig.runInBackground;
-      const effectiveMaxTurns = normalizeMaxTurns(resolvedConfig.maxTurns ?? getDefaultMaxTurns());
+      // Agent tool calls cannot inherit an unlimited/default budget: the
+      // parent must provide a fresh positive integer on every run.
+      try { validateMaxTurns(params.max_turns); } catch (err) { return textResult(err instanceof Error ? err.message : String(err)); }
+      const requestedMaxTurns = params.max_turns as number;
+      let runInBackground = resolvedConfig.runInBackground;
 
       // Resume existing agent. A resume is a new delegated task and therefore
       // receives its own approval, while retaining the subagent's prior session.
@@ -1232,7 +1186,8 @@ The child starts fresh and receives only the self-contained task prompt.
           prompt: params.prompt,
           model: resumeModel,
           thinking: existing.launchSpec?.runtime.thinking ?? pi.getThinkingLevel(),
-          runInBackground: false,
+          maxTurns: requestedMaxTurns,
+          runInBackground,
         }));
         if (resumeApproval.outcome === "feedback") {
           return textResult(`feedback: ${resumeApproval.feedback}`);
@@ -1251,7 +1206,8 @@ The child starts fresh and receives only the self-contained task prompt.
           ...existing.invocation,
           modelName: resumeModelName,
           thinking: resumeApproval.thinking,
-          runInBackground: false,
+          maxTurns: resumeApproval.maxTurns,
+          runInBackground: resumeApproval.runInBackground,
         };
         const { tags: resumeTags } = buildInvocationTags(resumeInvocation);
         const resumeDetailBase = {
@@ -1261,10 +1217,15 @@ The child starts fresh and receives only the self-contained task prompt.
           modelName: resumeModelName,
           tags: resumeTags.length > 0 ? resumeTags : undefined,
         };
+        // Every resumed child is notification-backed. Parent behavior controls
+        // only whether this parent loop continues after the launch.
+        existing.isBackground = true;
         const record = await manager.resume(params.resume, resumeApproval.prompt, signal, {
           model: resumeApproval.model,
           thinking: resumeApproval.thinking,
-          resultConsumed: true,
+          maxTurns: resumeApproval.maxTurns,
+          resultConsumed: false,
+          wait: false,
         });
         if (!record) {
           return textResult(`Failed to resume agent "${params.resume}".`);
@@ -1273,9 +1234,13 @@ The child starts fresh and receives only the self-contained task prompt.
         if (record.status === "error") {
           return textResult(`Agent failed: ${record.error}${partialOutputSuffix(record)}`, buildDetails(resumeDetailBase, record));
         }
+        const detached = !resumeApproval.runInBackground;
         return textResult(
-          record.result?.trim() || "No output.",
-          buildDetails(resumeDetailBase, record),
+          detached
+            ? `Agent resumed and detached from the parent.\nAgent ID: ${record.id}\nThe parent loop has ended; the child continues in its tmux window.`
+            : `Agent resumed in background.\nAgent ID: ${record.id}\nUse get_subagent_result to retrieve full results.`,
+          buildDetails(resumeDetailBase, record, undefined, { status: detached ? "detached" : "background" }),
+          detached,
         );
       }
 
@@ -1285,6 +1250,7 @@ The child starts fresh and receives only the self-contained task prompt.
         prompt: params.prompt,
         model: initialModel,
         thinking,
+        maxTurns: requestedMaxTurns,
         runInBackground,
       }, makeApprovalContextInput(ctx)));
       if (approved.outcome === "feedback") {
@@ -1303,6 +1269,8 @@ The child starts fresh and receives only the self-contained task prompt.
       const effectiveModel = approved.model;
       model = effectiveModel;
       thinking = approved.thinking;
+      runInBackground = approved.runInBackground;
+      const effectiveMaxTurns = approved.maxTurns;
       const parentModelId = ctx.model?.id;
       const effectiveModelId = effectiveModel.id;
       const modelName = effectiveModelId !== parentModelId
@@ -1311,7 +1279,7 @@ The child starts fresh and receives only the self-contained task prompt.
       const agentInvocation: AgentInvocation = {
         modelName,
         thinking,
-        maxTurns: normalizeMaxTurns(resolvedConfig.maxTurns),
+        maxTurns: effectiveMaxTurns,
         runInBackground,
       };
       const { tags: agentTags } = buildInvocationTags(agentInvocation);
@@ -1323,138 +1291,68 @@ The child starts fresh and receives only the self-contained task prompt.
         tags: agentTags.length > 0 ? agentTags : undefined,
       };
 
-      // Background execution
-      if (runInBackground) {
-        const { state: bgState, callbacks: bgCallbacks } = createActivityTracker(effectiveMaxTurns);
-
-        let id: string;
-        try {
-          id = await manager.spawn(pi, ctx, subagentType, prompt, {
-            description: params.description,
-            model,
-            maxTurns: effectiveMaxTurns,
-            thinkingLevel: thinking,
-            promptPolicy: rawType?.toLowerCase() === "general-purpose" ? "native" : "inherit",
-            isBackground: true,
-            invocation: agentInvocation,
-            ...(ledgerNode ? { ledgerNode } : {}),
-            ...bgCallbacks,
-          });
-        } catch (err) {
-          return textResult(err instanceof Error ? err.message : String(err));
-        }
-
-        // Record the join mode + tool call id synchronously after spawn.
-        const joinMode = resolveJoinMode(defaultJoinMode, true);
-        const record = manager.getRecord(id);
-        if (record && joinMode) {
-          record.joinMode = joinMode;
-          record.toolCallId = toolCallId;
-        }
-
-        if (joinMode == null || joinMode === 'async') {
-          // Foreground/no join mode or explicit async — not part of any batch
-        } else {
-          // smart or group — add to current batch
-          currentBatchAgents.push({ id, joinMode });
-          // Debounce: reset timer on each new agent so parallel tool calls
-          // dispatched across multiple event loop ticks are captured together
-          if (batchFinalizeTimer) clearTimeout(batchFinalizeTimer);
-          batchFinalizeTimer = setTimeout(finalizeBatch, 100);
-        }
-
-        // Emit created event
-        pi.events.emit("subagents:created", {
-          id,
-          type: subagentType,
-          description: params.description,
-          isBackground: true,
-        });
-
-        const isQueued = record?.status === "queued";
-        return textResult(
-          `Agent ${isQueued ? "queued" : "started"} in background.\n` +
-          `Agent ID: ${id}\n` +
-          `Type: ${displayName}\n` +
-          `Description: ${params.description}\n` +
-          (record?.childSession?.sessionFile ? `Session file: ${record.childSession.sessionFile}\n` : "") +
-          (isQueued ? `Position: queued (max ${manager.getMaxConcurrent()} concurrent)\n` : "") +
-          `\nYou will be notified when this agent completes.\n` +
-          `Use get_subagent_result to retrieve full results.\n` +
-          `Do not duplicate this agent's work.`,
-          { ...detailBase, toolUses: 0, tokens: "", durationMs: 0, status: "background" as const, agentId: id },
-        );
-      }
-
-      // Foreground (synchronous) execution — stream progress via onUpdate
-      const startedAt = Date.now();
-
-      const streamUpdate = () => {
-        const details: AgentDetails = {
-          ...detailBase,
-          toolUses: fgState.toolUses,
-          tokens: formatLifetimeTokens(fgState),
-          turnCount: fgState.turnCount,
-          maxTurns: fgState.maxTurns,
-          durationMs: Date.now() - startedAt,
-          status: "running",
-          activity: describeActivity(fgState.activeTools, fgState.responseText),
-          spinnerFrame: 0,
-        };
-        onUpdate?.({
-          content: [{ type: "text", text: `${fgState.toolUses} tool uses...` }],
-          details: details as any,
-        });
-      };
-
-      const { state: fgState, callbacks: fgCallbacks } = createActivityTracker(effectiveMaxTurns, streamUpdate);
-
-      // Initial stable progress render; later updates are event-driven.
-      streamUpdate();
-
-      let record: AgentRecord;
+      // Both parent behaviors launch a notification-backed child and return
+      // immediately. "Detach" additionally terminates this parent agent loop;
+      // background mode lets the same loop continue.
+      const detached = !runInBackground;
+      let id: string;
       try {
-        const fgResult = await manager.spawnAndWait(pi, ctx, subagentType, prompt, {
+        id = await manager.spawn(pi, ctx, subagentType, prompt, {
           description: params.description,
           model,
           maxTurns: effectiveMaxTurns,
           thinkingLevel: thinking,
           promptPolicy: rawType?.toLowerCase() === "general-purpose" ? "native" : "inherit",
+          isBackground: true,
           invocation: agentInvocation,
           ...(ledgerNode ? { ledgerNode } : {}),
-          signal,
-          ...fgCallbacks,
         });
-        record = fgResult.record;
-        record.originalPrompt = params.prompt;
-        record.effectivePrompt = prompt;
       } catch (err) {
         return textResult(err instanceof Error ? err.message : String(err));
       }
 
-      // Get final token count
-      const tokenText = formatLifetimeTokens(fgState);
+      // Only continue-working launches participate in same-turn group joins.
+      const joinMode = resolveJoinMode(defaultJoinMode, runInBackground);
+      const record = manager.getRecord(id);
+      if (record) {
+        record.toolCallId = toolCallId;
+        if (joinMode) record.joinMode = joinMode;
+      }
 
-      const details = buildDetails(detailBase, record, fgState, { tokens: tokenText });
+      if (joinMode && joinMode !== "async") {
+        currentBatchAgents.push({ id, joinMode });
+        if (batchFinalizeTimer) clearTimeout(batchFinalizeTimer);
+        batchFinalizeTimer = setTimeout(finalizeBatch, 100);
+      }
 
-      // "general-purpose" may itself be unregistered (defaults disabled, no
-      // user override) — getConfig then uses the hardcoded fallback config.
+      pi.events.emit("subagents:created", {
+        id,
+        type: subagentType,
+        description: params.description,
+        isBackground: runInBackground,
+      });
+
+      const isQueued = record?.status === "queued";
       const fallbackNote = fellBack
         ? `Note: Unknown agent type "${rawType}" — using ${resolveType("general-purpose") ? "general-purpose" : "the fallback agent config"}.\n\n`
         : "";
-
-      if (record.status === "error") {
-        // Error headline + any partial output the run produced before failing.
-        return textResult(`${fallbackNote}Agent failed: ${record.error}${partialOutputSuffix(record)}`, details);
-      }
-
-      const durationMs = (record.completedAt ?? Date.now()) - record.startedAt;
-      const statsParts = [`${record.toolUses} tool uses`];
-      if (tokenText) statsParts.push(tokenText);
+      const launchMode = detached ? "detached from the parent" : "in background";
       return textResult(
-        `${fallbackNote}Agent completed in ${formatMs(durationMs)} (${statsParts.join(", ")})${getStatusNote(record.status)}.\n\n` +
-        (record.result?.trim() || "No output."),
-        details,
+        fallbackNote +
+        `Agent ${isQueued ? "queued" : "started"} ${launchMode}.\n` +
+        `Agent ID: ${id}\n` +
+        `Type: ${displayName}\n` +
+        `Description: ${params.description}\n` +
+        (record?.childSession?.sessionFile ? `Session file: ${record.childSession.sessionFile}\n` : "") +
+        (isQueued ? `Position: queued (max ${manager.getMaxConcurrent()} concurrent)\n` : "") +
+        (detached
+          ? `\nThe current parent loop has ended. The parent can accept the next user prompt while the child continues.\n`
+          : `\nThe current parent loop may continue while the child runs.\n`) +
+        `The parent will be notified after the child result is returned.\n` +
+        `Use get_subagent_result to inspect status without waiting.\n` +
+        `Do not duplicate this agent's work.`,
+        { ...detailBase, toolUses: 0, tokens: "", durationMs: 0, status: detached ? "detached" : "background", agentId: id },
+        detached,
       );
     },
   }));
@@ -1465,15 +1363,15 @@ The child starts fresh and receives only the self-contained task prompt.
     name: SUBAGENT_TOOL_NAMES.GET_RESULT,
     label: "Get Agent Result",
     description:
-      "Check status and retrieve results from a background agent. Use the agent ID returned by Agent with run_in_background.",
-    promptSnippet: "Check status and retrieve results from a background agent",
+      "Check status and retrieve results from a detached or background agent. Use the agent ID returned by Agent.",
+    promptSnippet: "Check status and retrieve results from a detached or background agent",
     parameters: Type.Object({
       agent_id: Type.String({
         description: "The agent ID to check.",
       }),
       wait: Type.Optional(
         Type.Boolean({
-          description: "If true, wait for the agent to complete before returning. Default: false.",
+          description: "If true, wait until the child result is explicitly returned. This can block at the human decision gate. Default: false.",
         }),
       ),
       verbose: Type.Optional(
@@ -1494,9 +1392,11 @@ The child starts fresh and receives only the self-contained task prompt.
       // Setting the flag here prevents a redundant follow-up notification.
       // Queued agents have no promise yet (it's created when the queue starts
       // them), so poll until they leave the queue, then await like a running one.
-      if (params.wait && (record.status === "running" || record.status === "queued")) {
-        manager.consumeResult(params.agent_id);
-        cancelNudge(params.agent_id);
+      if (params.wait && (record.status === "running" || record.status === "queued" || record.status === "awaiting_decision")) {
+        if (record.status === "running" || record.status === "queued") {
+          manager.consumeResult(params.agent_id);
+          cancelNudge(params.agent_id);
+        }
         while (record.status === "queued") {
           await new Promise((r) => setTimeout(r, 250));
         }
@@ -1518,8 +1418,10 @@ The child starts fresh and receives only the self-contained task prompt.
         `Type: ${displayName} | Status: ${record.status}${getStatusNote(record.status)} | ${statsParts.join(" | ")}\n` +
         `Description: ${record.description}\n\n`;
 
-      if (record.status === "running") {
+      if (record.status === "running" || record.status === "queued") {
         output += "Agent is still running. Use wait: true or check back later.";
+      } else if (record.status === "awaiting_decision") {
+        output += "Status: awaiting human decision\nThe child has produced a response, but it has not been returned.\nOpen its tmux window with Alt+A.";
       } else if (record.status === "error") {
         output += `Error: ${record.error}${partialOutputSuffix(record)}`;
       } else {
@@ -1527,7 +1429,7 @@ The child starts fresh and receives only the self-contained task prompt.
       }
 
       // Mark result as consumed — suppresses the completion notification
-      if (record.status !== "running" && record.status !== "queued") {
+      if (record.status !== "running" && record.status !== "queued" && record.status !== "awaiting_decision") {
         manager.consumeResult(params.agent_id);
         cancelNudge(params.agent_id);
       }
@@ -1706,6 +1608,9 @@ The child starts fresh and receives only the self-contained task prompt.
     const enteredPrompt = await ctx.ui.editor(`Task for ${getDisplayName(subagentType)}`, "");
     const originalPrompt = enteredPrompt?.trim();
     if (!originalPrompt) return;
+    const limitText = await ctx.ui.input("Work-turn limit");
+    const maxTurns = Number(limitText);
+    try { validateMaxTurns(maxTurns); } catch { ctx.ui.notify("Work-turn limit must be a positive integer.", "warning"); return; }
 
     const config = getAgentConfig(subagentType);
     const resolvedConfig = resolveAgentInvocationConfig(config, { run_in_background: true });
@@ -1742,6 +1647,7 @@ The child starts fresh and receives only the self-contained task prompt.
       prompt: originalPrompt,
       model: model!,
       thinking,
+      maxTurns,
       runInBackground: true,
     }, makeApprovalContextInput(ctx)));
 
@@ -1756,25 +1662,28 @@ The child starts fresh and receives only the self-contained task prompt.
     if (approved.outcome === "cancel") return;
 
     const { prompt, ledgerNode } = finalizeLaunchContext(ctx, approved.context, approved.prompt);
-    const effectiveMaxTurns = normalizeMaxTurns(resolvedConfig.maxTurns ?? getDefaultMaxTurns());
+    const effectiveMaxTurns = approved.maxTurns;
     const modelName = approved.model.id !== ctx.model?.id
       ? (approved.model.name ?? approved.model.id).replace(/^Claude\s+/i, "").toLowerCase()
       : undefined;
     const invocation: AgentInvocation = {
       modelName,
       thinking: approved.thinking,
-      maxTurns: normalizeMaxTurns(resolvedConfig.maxTurns),
-      runInBackground: true,
+      maxTurns: effectiveMaxTurns,
+      runInBackground: approved.runInBackground,
     };
 
     let id: string;
+    const manualPromptPolicy: "native" | "inherit" = subagentType.toLowerCase() === "general-purpose" ? "native" : "inherit";
     try {
       id = await manager.spawn(pi, ctx, subagentType, prompt, {
         description,
         model: approved.model,
         maxTurns: effectiveMaxTurns,
         thinkingLevel: approved.thinking,
-        promptPolicy: subagentType.toLowerCase() === "general-purpose" ? "native" : "inherit",
+        promptPolicy: manualPromptPolicy,
+        // Manual launches also detach immediately and report through the
+        // normal completion notification path.
         isBackground: true,
         invocation,
         ...(ledgerNode ? { ledgerNode } : {}),
@@ -1785,17 +1694,12 @@ The child starts fresh and receives only the self-contained task prompt.
     }
 
     const record = manager.getRecord(id);
-    if (record) {
-      record.joinMode = "async";
-    }
-    pi.events.emit("subagents:created", {
-      id,
-      type: subagentType,
-      description,
-      isBackground: true,
-    });
+    if (record) record.joinMode = "async";
+    pi.events.emit("subagents:created", { id, type: subagentType, description, isBackground: approved.runInBackground });
     fleet.setUICtx(ctx.ui as unknown as FleetUICtx);
-    ctx.ui.notify(`Started ${getDisplayName(subagentType)} in background (${id}).`, "info");
+    ctx.ui.notify(approved.runInBackground
+      ? `Started ${getDisplayName(subagentType)} in background (${id}).`
+      : `Started ${getDisplayName(subagentType)} and detached (${id}).`, "info");
   }
 
   /** Alt+A picker: select a fleet row and focus/reopen its tmux window. */
@@ -1814,7 +1718,7 @@ The child starts fresh and receives only the self-contained task prompt.
           let hintLine: string[] = [hint];
           return {
             render: (w: number) => {
-              hintLine = [theme.fg("dim", "↑/↓ select agent · Enter focus tmux window · d dismiss · Esc close")];
+              hintLine = [theme.fg("dim", "↑/↓ select agent · Enter focus/reopen · d dismiss · Esc close")];
               return hintLine;
             },
             invalidate: () => {},
@@ -1824,11 +1728,30 @@ The child starts fresh and receives only the self-contained task prompt.
               if (matchesKey(data, "enter")) { done(fleet.selectedRecord()?.id); return; }
               if (matchesKey(data, "d")) {
                 const rec = fleet.selectedRecord();
-                if (rec) {
-                  const removed = manager.dismiss(rec.id);
-                  if (removed && fleet.selectableRecords().length === 0) { done(undefined); return; }
-                  if (removed) fleet.moveSelection(0);
+                if (!rec) return;
+                if (rec.status === "awaiting_decision") {
+                  ctx.ui.notify("This agent is waiting for a decision. Open its window and choose Continue, Return, or Feedback.", "info");
+                  return;
                 }
+                // Only finished agents are dismissible here. Running/queued
+                // rows are handled by focusing their window or waiting for
+                // the launch queue.
+                if (rec.status === "running" || rec.status === "queued") {
+                  ctx.ui.notify("Only finished agents can be dismissed — focus its window to stop it.", "info");
+                  return;
+                }
+                const id = rec.id;
+                void manager.dismiss(id).then((outcome) => {
+                  if (outcome === "failed") {
+                    ctx.ui.notify("Could not close the agent window.", "warning");
+                    return;
+                  }
+                  if (outcome !== "active") {
+                    // dismissed / missing — the record is gone; refresh the cursor.
+                    if (fleet.selectableRecords().length === 0) { done(undefined); return; }
+                    fleet.moveSelection(0);
+                  }
+                });
                 return;
               }
               if (matchesKey(data, "escape") || matchesKey(data, "q")) { done(undefined); return; }
@@ -2058,9 +1981,9 @@ The file format is a markdown file with YAML frontmatter and a system prompt bod
 description: <one-line description shown in UI>
 model: <optional model as "provider/modelId", e.g. "anthropic/claude-haiku-4-5". Omit to inherit parent model>
 thinking: <optional thinking level: ${THINKING_LEVELS.join(", ")}. Omit to inherit>
-max_turns: <optional max agentic turns. 0 or omit for unlimited (default)>
+max_turns: <required positive integer work-turn ceiling; every resume requires a new limit>
 skills: <true (inherit all), false (none), or comma-separated skill names to preload into prompt. Default: true>
-run_in_background: <true to run in background by default. Default: false>
+run_in_background: <true to let the current parent loop continue; false detaches and ends that loop>
 memory: <"user" (global), "project" (per-project), or "local" (gitignored per-project) for persistent memory. Omit for none>
 ---
 
@@ -2164,7 +2087,6 @@ ${systemPrompt}
       scopeModels: isScopeModelsEnabled(),
       disableDefaultAgents: isDefaultsDisabled(),
       toolDescriptionMode: getToolDescriptionMode(),
-      closeWindowOnComplete: getCloseWindowOnComplete(),
     };
   }
 
@@ -2226,13 +2148,6 @@ ${systemPrompt}
           currentValue: getToolDescriptionMode(),
           values: ["full", "compact", "custom"],
         },
-        {
-          id: "closeWindowOnComplete",
-          label: "Close completed windows",
-          description: "Close an agent's tmux window when its run completes (kept open while you are viewing it; session stays in /resume)",
-          currentValue: getCloseWindowOnComplete() ? "on" : "off",
-          values: ["on", "off"],
-        },
       ];
     }
 
@@ -2272,10 +2187,6 @@ ${systemPrompt}
       } else if (id === "toolDescriptionMode") {
         setToolDescriptionMode(value as ToolDescriptionMode);
         notifyApplied(ctx, `Tool description set to ${value}. Takes effect on next pi session.`);
-      } else if (id === "closeWindowOnComplete") {
-        const enabled = value === "on";
-        setCloseWindowOnComplete(enabled);
-        notifyApplied(ctx, `Close completed windows ${enabled ? "enabled" : "disabled"}`);
       }
     }
 

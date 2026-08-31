@@ -13,6 +13,8 @@ import {
   ensureMailboxDir,
   readPendingCommands,
   removeMailboxDir,
+  readPendingDecision,
+  writePendingDecision,
   watchChildEvents,
   writeParentCommand,
 } from "../src/event-mailbox.js";
@@ -107,9 +109,23 @@ describe("child events", () => {
   });
 });
 
+describe("pending decisions", () => {
+  it("round-trips durable decision state atomically", () => {
+    const state = { runNumber: 2, reason: "turn_limit" as const, result: "status", turnCount: 4, maxTurns: 4, toolUses: 2, requestedAt: Date.now() };
+    writePendingDecision(dir, state);
+    expect(readPendingDecision(dir)).toEqual(state);
+  });
+
+  it("returns undefined for malformed decision state", () => {
+    ensureMailboxDir(dir);
+    writeFileSync(join(dir, "pending-decision.json"), "not json", "utf-8");
+    expect(readPendingDecision(dir)).toBeUndefined();
+  });
+});
+
 describe("parent commands", () => {
   it("writes and reads commands in order", () => {
-    writeParentCommand(dir, { type: "follow_up", message: "continue" });
+    writeParentCommand(dir, { type: "follow_up", message: "continue", maxTurns: 3 });
     writeParentCommand(dir, { type: "abort" });
     const cmds = readPendingCommands(dir);
     expect(cmds.map((c) => c.type)).toEqual(["follow_up", "abort"]);

@@ -88,8 +88,10 @@ export interface AgentLaunchSpec {
   };
   run: {
     prompt: string;
-    maxTurns?: number;
-    graceTurns: number;
+    /** Required ceiling for normal work turns. Reopen specs retain it but do not start a run. */
+    maxTurns: number;
+    /** Deprecated compatibility field; never used for ceiling handling. */
+    graceTurns?: number;
   };
   bridge: {
     mailboxDir: string;
@@ -119,11 +121,22 @@ export interface AgentWindowInfo {
   state: "starting" | "alive" | "closed";
 }
 
+export interface AgentDecision {
+  reason: "completed" | "turn_limit" | "aborted";
+  requestedAt: number;
+  result?: string;
+  turnCount: number;
+  toolUses: number;
+  maxTurns: number;
+}
+
 export interface AgentRecord {
   id: string;
   type: SubagentType;
   description: string;
-  status: "queued" | "running" | "completed" | "steered" | "aborted" | "stopped" | "error";
+  status: "queued" | "running" | "awaiting_decision" | "completed" | "steered" | "aborted" | "stopped" | "error";
+  /** Child output held for the human gate; never exposed as record.result. */
+  decision?: AgentDecision;
   result?: string;
   error?: string;
   toolUses: number;
@@ -179,11 +192,9 @@ export interface AgentRecord {
   /** Number of times this agent's session has compacted. */
   compactionCount: number;
   /**
-   * Whether this agent was spawned to run in the background. Tri-state, set at
-   * spawn from `SpawnOptions.isBackground`: `true` = background, `false` =
-   * foreground (has an inline Agent tool-result surface), `undefined` = the
-   * caller never declared it (e.g. a cross-extension RPC spawn, which is detached
-   * and has no inline surface).
+   * Whether completion is notification-backed. Agent tool launches set this
+   * true for both parent behaviors; `runInBackground` separately controls
+   * whether the current parent loop continues or terminates after launch.
    */
   isBackground?: boolean;
   /** Resolved spawn params, captured for UI display. Fixed at spawn time. */

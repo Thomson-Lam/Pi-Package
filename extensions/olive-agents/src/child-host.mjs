@@ -20,6 +20,7 @@
 import { chmodSync, readFileSync, renameSync, rmSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { pathToFileURL } from "node:url";
+import { keepChildExtension } from "./child-extension-filter.mjs";
 import { registerPromptPolicy } from "./prompt-policy.mjs";
 
 // ---- Mailbox helpers (self-contained; keep in sync with event-mailbox.ts) ----
@@ -80,16 +81,25 @@ if (!model) {
 }
 
 let nativeSystemPrompt;
+let bridgeContext;
 
 const bridgeFactory = (pi) => {
   // Restore the native prompt after other extensions have processed the hook.
   registerPromptPolicy(pi, spec.runtime.promptPolicy, () => nativeSystemPrompt);
 
-  // Human steering detection: interactive input while the agent is streaming.
+  pi.on("session_start", (_event, ctx) => { bridgeContext = ctx; });
+  pi.registerCommand("or", {
+    description: "Return the pending child result to the parent",
+    handler: async (_args, ctx) => { await returnPending("human_return", ctx); },
+  });
+  // Human steering detection and implicit continuation after Escape.
   pi.on("input", (event) => {
-    if (event?.source === "interactive" && event.streamingBehavior) {
-      const text = typeof event.text === "string" ? event.text : "";
-      if (text.trim()) emitEvent(spec.bridge.mailboxDir, { type: "human_steer", text: text.slice(0, 500) });
+    const text = typeof event?.text === "string" ? event.text : "";
+    if (pendingDecision && !decisionGateActive && event?.source === "interactive" && text.trim() && text.trim() !== "/or") {
+      clearPendingForContinuation();
+    }
+    if (event?.source === "interactive" && event.streamingBehavior && text.trim()) {
+      emitEvent(spec.bridge.mailboxDir, { type: "human_steer", runNumber, text: text.slice(0, 500) });
     }
   });
 };
@@ -106,7 +116,12 @@ const createRuntime = async ({ cwd, agentDir, sessionManager: sm }) => {
         ? undefined
         : (base) => ({
             ...base,
-            extensions: base.extensions.filter((extension) => spec.runtime.extensionPaths.includes(extension.path)),
+            // The allow-list contains parent extension file paths, but the
+            // child-return bridge is an inline extension. Preserve it or /or
+            // is filtered out before the child session is bound.
+            extensions: base.extensions.filter((extension) =>
+              keepChildExtension(extension.path, spec.runtime.extensionPaths)
+            ),
           }),
       noSkills: spec.runtime.noSkills,
       noPromptTemplates: true,
@@ -147,13 +162,22 @@ let inRun = false;
 let runNumber = 0;
 let turnCount = 0;
 let toolUses = 0;
-let softLimitReached = false;
-let limitAborted = false;
 let parentAborted = false;
 let compactions = 0;
-
-const maxTurns = spec.run.maxTurns;
-const graceTurns = spec.run.graceTurns;
+let currentMaxTurns = spec.run.maxTurns;
+let ceilingTriggered = false;
+let reconciliationRun = false;
+let pendingDecision = null;
+let decisionGateActive = false;
+let decisionReturned = false;
+let originalTools = session.getActiveToolNames();
+const pendingDecisionPath = join(spec.bridge.mailboxDir, "pending-decision.json");
+const releasedDecisionPath = join(spec.bridge.mailboxDir, "released-decision.json");
+try { pendingDecision = JSON.parse(readFileSync(pendingDecisionPath, "utf-8")); } catch {}
+if (pendingDecision?.runNumber) {
+  runNumber = pendingDecision.runNumber;
+  currentMaxTurns = pendingDecision.maxTurns;
+}
 
 function targetOf(args) {
   if (!args || typeof args !== "object") return undefined;
@@ -183,11 +207,120 @@ function assistantText(msg) {
 
 function settledStatus() {
   if (parentAborted) return "stopped";
-  if (limitAborted) return "aborted";
   const last = lastAssistant(session);
   if (last?.stopReason === "error") return "error";
-  if (last?.stopReason === "aborted") return "stopped"; // human escape
-  return softLimitReached ? "steered" : "completed";
+  if (last?.stopReason === "aborted") return "stopped";
+  return "completed";
+}
+
+function usageOf(s) {
+  try {
+    const t = s.getSessionStats?.()?.tokens;
+    return t ? { input: t.input ?? 0, output: t.output ?? 0, cacheWrite: t.cacheWrite ?? 0 } : undefined;
+  } catch { return undefined; }
+}
+
+function clearPendingForContinuation() {
+  pendingDecision = null;
+  decisionReturned = false;
+  ceilingTriggered = false;
+  reconciliationRun = false;
+  parentAborted = false;
+  try { rmSync(pendingDecisionPath, { force: true }); } catch {}
+  try { rmSync(releasedDecisionPath, { force: true }); } catch {}
+  try { session.setActiveToolsByName(originalTools); } catch {}
+}
+
+async function returnPending(releaseReason, ctx = bridgeContext) {
+  if (inRun || session.isStreaming) {
+    ctx?.ui?.notify?.("Wait for the current response before returning.", "warning");
+    return false;
+  }
+  if (!pendingDecision || decisionReturned) {
+    ctx?.ui?.notify?.(decisionReturned ? "This result was already returned to the parent." : "No child result is waiting to be returned.", "info");
+    return false;
+  }
+  const decision = pendingDecision;
+  const status = decision.reason === "aborted" ? "stopped" : "completed";
+  try {
+    // Persist before emitting: a resumed parent can distinguish an already
+    // returned child from one that is still active.
+    writeJsonAtomic(releasedDecisionPath, { ...decision, status, releasedAt: Date.now() });
+    emitEvent(spec.bridge.mailboxDir, {
+      type: "run_settled", runNumber: decision.runNumber, status,
+      result: decision.result, turnCount: decision.turnCount, toolUses: decision.toolUses,
+      compactions: decision.compactions, usage: decision.usage,
+      releaseReason, decisionReason: decision.reason,
+    });
+  } catch (err) {
+    ctx?.ui?.notify?.(`Could not return the child result: ${err?.message ?? err}`, "error");
+    return false;
+  }
+  decisionReturned = true;
+  pendingDecision = null;
+  try { rmSync(pendingDecisionPath, { force: true }); } catch {}
+  ctx?.ui?.notify?.("Child result returned to the parent.", "info");
+  return true;
+}
+
+async function waitForBridgeContext() {
+  for (let attempt = 0; attempt < 100 && !bridgeContext; attempt++) {
+    await new Promise((resolve) => setTimeout(resolve, 50));
+  }
+  return bridgeContext;
+}
+
+async function showDecisionGate(decision) {
+  if (decisionGateActive || decisionReturned || !decision) return;
+  decisionGateActive = true;
+  pendingDecision = decision;
+  try { writeJsonAtomic(pendingDecisionPath, decision); } catch {}
+  emitEvent(spec.bridge.mailboxDir, { type: "decision_required", ...decision });
+  const title = decision.reason === "turn_limit" ? "Turn limit reached" : "Agent response ready";
+  let continuationPrompt;
+  try {
+    const ctx = await waitForBridgeContext();
+    if (!ctx?.ui?.select) throw new Error("child TUI context is unavailable");
+    const choice = await ctx.ui.select(title, ["Continue", "Return to parent", "Feedback"]);
+    if (choice === "Continue") {
+      clearPendingForContinuation();
+      continuationPrompt = "Continue.";
+    } else if (choice === "Feedback") {
+      const feedback = await ctx.ui.editor?.("Feedback for agent", "");
+      if (feedback?.trim()) {
+        clearPendingForContinuation();
+        continuationPrompt = feedback;
+      }
+    } else if (choice === "Return to parent") {
+      await returnPending("human_return");
+    } else {
+      ctx.ui.notify?.("Decision remains pending. Use /or to return, or enter another prompt to continue.", "info");
+    }
+  } catch (err) {
+    bridgeContext?.ui?.notify?.(`Decision UI failed: ${err?.message ?? err}. Use /or to return.`, "warning");
+  } finally {
+    decisionGateActive = false;
+  }
+  // Start only after this selector fully closes. Otherwise a fast next run can
+  // settle while decisionGateActive is still true and lose its next selector.
+  if (continuationPrompt) {
+    try {
+      await session.prompt(continuationPrompt);
+    } catch (err) {
+      bridgeContext?.ui?.notify?.(`Could not continue the agent: ${err?.message ?? err}`, "warning");
+      await showDecisionGate(decision);
+    }
+  }
+}
+
+async function requestReconciliation(s) {
+  reconciliationRun = true;
+  try {
+    await s.prompt("The work-turn limit has been reached. Do not continue executing the task. Report current status for the human: work completed, remaining work, blockers, and the next action you would take.");
+  } catch {
+    reconciliationRun = false;
+    await showDecisionGate({ runNumber, reason: "turn_limit", result: "No status response was produced. Review the session before deciding.", turnCount, maxTurns: currentMaxTurns, toolUses, requestedAt: Date.now(), compactions, usage: usageOf(s) });
+  }
 }
 
 function subscribeTo(s) {
@@ -196,81 +329,69 @@ function subscribeTo(s) {
       case "agent_start":
         if (!inRun) {
           inRun = true;
-          runNumber++;
-          turnCount = 0;
-          toolUses = 0;
-          softLimitReached = false;
-          limitAborted = false;
-          parentAborted = false;
-          emitEvent(spec.bridge.mailboxDir, { type: "run_started", runNumber });
-        }
-        break;
-
-      case "turn_end": {
-        turnCount = event.turnIndex != null ? event.turnIndex + 1 : turnCount + 1;
-        emitEvent(spec.bridge.mailboxDir, { type: "turn_finished", turnCount });
-        // Turn-limit enforcement (mirrors the old in-process runner).
-        if (maxTurns != null) {
-          if (!softLimitReached && turnCount >= maxTurns) {
-            softLimitReached = true;
-            s.steer("You have reached your turn limit. Wrap up immediately — provide your final answer now.")
-              .catch(() => {});
-          } else if (softLimitReached && turnCount >= maxTurns + graceTurns) {
-            limitAborted = true;
-            s.abort();
+          if (!reconciliationRun) {
+            runNumber++;
+            turnCount = 0;
+            toolUses = 0;
+            parentAborted = false;
+            emitEvent(spec.bridge.mailboxDir, { type: "run_started", runNumber, maxTurns: currentMaxTurns });
           }
         }
         break;
+      case "turn_end": {
+        if (reconciliationRun) break;
+        // Count only turns in this delegated run; the native session's turn
+        // index may span resumed runs.
+        turnCount += 1;
+        emitEvent(spec.bridge.mailboxDir, { type: "turn_finished", runNumber, turnCount });
+        if (turnCount >= currentMaxTurns && !ceilingTriggered) {
+          ceilingTriggered = true;
+          try { s.setActiveToolsByName([]); } catch {}
+          void s.abort();
+        }
+        break;
       }
-
       case "tool_execution_start":
-        emitEvent(spec.bridge.mailboxDir, {
-          type: "tool_started",
-          toolName: event.toolName,
-          target: targetOf(event.args),
-        });
+        emitEvent(spec.bridge.mailboxDir, { type: "tool_started", runNumber, toolName: event.toolName, target: targetOf(event.args) });
         break;
-
       case "tool_execution_end":
-        toolUses++;
-        emitEvent(spec.bridge.mailboxDir, { type: "tool_finished", toolName: event.toolName });
+        if (!reconciliationRun) toolUses++;
+        emitEvent(spec.bridge.mailboxDir, { type: "tool_finished", runNumber, toolName: event.toolName });
         break;
-
       case "compaction_end":
         if (!event.aborted && event.result) compactions++;
         break;
-
       case "agent_settled": {
         if (!inRun) break;
         inRun = false;
         const status = settledStatus();
-        const last = lastAssistant(session);
-        const result = assistantText(last);
-        const error =
-          status === "error"
-            ? (last?.errorMessage?.trim?.() || "provider error with no output")
-            : status === "stopped"
-              ? "stopped by the user"
-              : status === "aborted"
-                ? "hit the turn limit before completion"
-                : undefined;
-        let usage;
-        try {
-          const stats = s.getSessionStats?.();
-          const t = stats?.tokens;
-          if (t) usage = { input: t.input ?? 0, output: t.output ?? 0, cacheWrite: t.cacheWrite ?? 0 };
-        } catch { /* stats are best effort */ }
-        emitEvent(spec.bridge.mailboxDir, {
-          type: "run_settled",
-          runNumber,
-          status,
-          result: result || undefined,
-          error,
-          turnCount,
-          toolUses,
-          compactions,
-          usage,
-        });
+        const result = assistantText(lastAssistant(session));
+        if (reconciliationRun) {
+          reconciliationRun = false;
+          void showDecisionGate({ runNumber, reason: "turn_limit", result: result || "No status response was produced. Review the session before deciding.", turnCount, maxTurns: currentMaxTurns, toolUses, requestedAt: Date.now(), compactions, usage: usageOf(s) });
+          break;
+        }
+        if (ceilingTriggered) {
+          void requestReconciliation(s);
+          break;
+        }
+        if (status === "completed") {
+          void showDecisionGate({ runNumber, reason: "completed", result: result || undefined, turnCount, maxTurns: currentMaxTurns, toolUses, requestedAt: Date.now(), compactions, usage: usageOf(s) });
+        } else if (status === "stopped") {
+          // Escape/abort never releases to the parent. Keep partial output
+          // durable so /or can explicitly return it later.
+          const decision = { runNumber, reason: "aborted", result: result || undefined, turnCount, maxTurns: currentMaxTurns, toolUses, requestedAt: Date.now(), compactions, usage: usageOf(s) };
+          pendingDecision = decision;
+          try { writeJsonAtomic(pendingDecisionPath, decision); } catch {}
+          emitEvent(spec.bridge.mailboxDir, { type: "decision_required", ...decision });
+          bridgeContext?.ui?.notify?.("Agent stopped. Nothing was returned to the parent. Use /or to return the partial result, or enter a prompt to continue.", "info");
+        } else if (status === "error") {
+          // Unrecoverable failure: surface it so the parent cannot wait forever.
+          emitEvent(spec.bridge.mailboxDir, { type: "run_settled", runNumber, status, result: result || undefined, error: "provider error with no output", turnCount, toolUses, compactions, usage: usageOf(s), releaseReason: "error" });
+        }
+        // "stopped" (parent abort command or a human Escape in the child) is
+        // NOT a release: the parent must receive nothing until the human
+        // chooses Return to parent, /or, Continue, or Feedback.
         break;
       }
     }
@@ -305,6 +426,12 @@ async function processCommands() {
     try {
       switch (cmd.type) {
         case "follow_up":
+          if (!Number.isInteger(cmd.maxTurns) || cmd.maxTurns < 1) {
+            bridgeContext?.ui?.notify?.("Resume rejected: max_turns must be a positive integer.", "error");
+            break;
+          }
+          currentMaxTurns = cmd.maxTurns;
+          clearPendingForContinuation();
           if (session.isStreaming) await session.followUp(cmd.message);
           else await session.prompt(cmd.message);
           break;
@@ -361,7 +488,18 @@ const mode = new InteractiveMode(runtime, {
 });
 
 try {
-  await mode.run();
+  const modeRun = mode.run();
+  // Reopening a child must restore the pending decision without resending the
+  // original task. The selector is native Pi UI and the durable state survives
+  // an accidental tmux window close.
+  if (pendingDecision) setTimeout(() => {
+    if (pendingDecision.reason === "aborted") {
+      bridgeContext?.ui?.notify?.("Agent stopped. Nothing was returned to the parent. Use /or to return the partial result, or enter a prompt to continue.", "info");
+    } else {
+      void showDecisionGate(pendingDecision);
+    }
+  }, 500);
+  await modeRun;
 } catch (err) {
   console.error(`[olive-agent] interactive mode failed: ${err?.message ?? err}`);
   // Surface as an error settlement so the parent does not wait forever.
@@ -373,6 +511,7 @@ try {
     turnCount,
     toolUses,
     compactions,
+    releaseReason: "error",
   });
 } finally {
   clearInterval(commandTimer);

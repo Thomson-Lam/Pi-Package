@@ -7,7 +7,7 @@ const model = { provider: "test", id: "basic", name: "Basic", reasoning: false }
 const registry = { getAll: () => [model], getAvailable: () => [model] };
 const request = {
   agentType: "Review", description: "Inspect code", prompt: "task", model,
-  thinking: "off" as const, runInBackground: false,
+  thinking: "off" as const, maxTurns: 10, runInBackground: false,
 };
 
 function ctx(selection: string) {
@@ -38,8 +38,19 @@ describe("subagent approval", () => {
 
   it("launches the reviewed task without context fields", async () => {
     await expect(approveInvocation(ctx("Launch"), registry, request)).resolves.toEqual({
-      outcome: "launch", prompt: "task", model, thinking: "off",
+      outcome: "launch", prompt: "task", model, thinking: "off", maxTurns: 10, runInBackground: false,
     });
+  });
+
+  it("offers detach instead of blocking the parent on the child", async () => {
+    let title = "";
+    const answers = ["Change parent behavior (Detach from child)", "Continue working", "Launch"];
+    const result = await approveInvocation({
+      mode: "tui",
+      ui: { select: async (value: string) => { title = value; return answers.shift(); } },
+    } as unknown as ExtensionContext, registry, request);
+    expect(title).not.toContain("Wait for child");
+    expect(result).toMatchObject({ outcome: "launch", maxTurns: 10, runInBackground: true });
   });
 });
 

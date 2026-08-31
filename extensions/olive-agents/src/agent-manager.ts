@@ -5,22 +5,22 @@
  *
  *   - prepares launch specs and creates tmux windows (concurrency-queued)
  *   - watches each child's mailbox for lifecycle/tool events
- *   - forwards commands (follow_up / abort / shutdown) to the child
+ *   - forwards follow-up and explicit abort commands to the child
  *   - tracks per-record status, activity, usage and window state
  *
  * Foreground spawns bypass the concurrency queue and await run_settled.
  */
 
 import { randomUUID } from "node:crypto";
-import { existsSync } from "node:fs";
+import { existsSync, readdirSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import type { Model } from "@earendil-works/pi-ai";
 import type { ExtensionAPI, ExtensionContext } from "@earendil-works/pi-coding-agent";
 import { getPackageDir } from "@earendil-works/pi-coding-agent";
-import { type AgentLaunchSpec, buildReopenDescriptor, normalizeMaxTurns, prepareAgentLaunch, writeLaunchSpec } from "./agent-runner.js";
+import { type AgentLaunchSpec, buildReopenDescriptor, prepareAgentLaunch, validateMaxTurns, writeLaunchSpec } from "./agent-runner.js";
 import { type ContextLedgerNode, type ContextLinkData } from "./context-ledger.js";
-import { type ChildEvent, ensureMailboxDir, removeMailboxDir, watchChildEvents, writeParentCommand } from "./event-mailbox.js";
+import { type ChildEvent, ensureMailboxDir, readPendingDecision, removeMailboxDir, watchChildEvents, writeParentCommand } from "./event-mailbox.js";
 import { createAgentWindow, execFromPi, findWindowByName as findTmuxWindowByName, focusWindow as focusTmuxWindow, killWindow as killTmuxWindow, shellQuote, windowAlive as tmuxWindowAlive, type TmuxExec } from "./tmux-window.js";
 import { agentSessionName, agentWindowName } from "./names.js";
 import { type AgentRecord, type SubagentType, type ThinkingLevel } from "./types.js";
@@ -78,6 +78,12 @@ const STARTUP_WATCHDOG_MS = 30_000;
 /** Window liveness poll interval while a record has a window. */
 const WINDOW_POLL_MS = 15_000;
 
+function isDecisionPending(record: AgentRecord): boolean { return record.status === "awaiting_decision"; }
+function isActiveRecord(record: AgentRecord): boolean {
+  return record.status === "queued" || record.status === "running" || isDecisionPending(record);
+}
+function isTerminalRecord(record: AgentRecord): boolean { return !isActiveRecord(record); }
+
 /** Human-readable tool action label. */
 function actionFor(toolName: string): string {
   switch (toolName) {
@@ -116,8 +122,6 @@ export class AgentManager {
   private settled = new Map<string, { promise: Promise<AgentRecord>; resolve: (r: AgentRecord) => void }>();
   private readyTimers = new Map<string, ReturnType<typeof setTimeout>>();
   private disposed = false;
-  /** Close an agent's tmux window as soon as its run settles (unless focused). */
-  closeWindowOnComplete = true;
 
   constructor(
     onComplete?: OnAgentComplete,
@@ -145,10 +149,6 @@ export class AgentManager {
     if (cb.onLink) this.onLink = cb.onLink;
   }
 
-  /** Toggle window auto-close on run completion. */
-  setCloseWindowOnComplete(b: boolean): void {
-    this.closeWindowOnComplete = b;
-  }
 
   subscribe(listener: (event: AgentManagerEvent) => void): () => void {
     this.listeners.add(listener);
@@ -163,7 +163,7 @@ export class AgentManager {
 
   markReviewed(id: string): boolean {
     const record = this.agents.get(id);
-    if (!record || record.status === "running" || record.status === "queued") return false;
+    if (!record || isActiveRecord(record)) return false;
     record.reviewedAt = Date.now();
     record.updatedAt = record.reviewedAt;
     this.emit({ type: "reviewed", record });
@@ -172,7 +172,7 @@ export class AgentManager {
 
   removeTerminal(id: string): boolean {
     const record = this.agents.get(id);
-    if (!record || record.status === "running" || record.status === "queued") return false;
+    if (!record || isActiveRecord(record)) return false;
     this.removeRecord(id, record);
     return true;
   }
@@ -198,6 +198,7 @@ export class AgentManager {
     prompt: string,
     options: SpawnOptions,
   ): Promise<string> {
+    validateMaxTurns(options.maxTurns);
     const id = randomUUID().slice(0, 17);
     const record: AgentRecord = {
       id,
@@ -213,7 +214,7 @@ export class AgentManager {
       updatedAt: Date.now(),
       runNumber: 0,
       turnCount: 0,
-      maxTurns: normalizeMaxTurns(options.maxTurns),
+      maxTurns: typeof options.maxTurns === "number" ? options.maxTurns : undefined,
       isBackground: options.isBackground,
       invocation: options.invocation,
     };
@@ -239,6 +240,7 @@ export class AgentManager {
     id: string,
     { pi, ctx, type, prompt, options }: { pi: ExtensionAPI; ctx: ExtensionContext; type: SubagentType; prompt: string; options: SpawnOptions },
   ): Promise<void> {
+    validateMaxTurns(options.maxTurns);
     const record = this.agents.get(id);
     if (!record || this.disposed) return;
 
@@ -302,6 +304,8 @@ export class AgentManager {
           ledgerNodeId: spec.ledger?.node.id,
           parentLedgerId: spec.ledger?.node.parentId,
           createdAt: new Date().toISOString(),
+          mailboxDir,
+          isBackground: options.isBackground,
           reopen: buildReopenDescriptor(spec),
         });
       } catch {
@@ -356,9 +360,9 @@ export class AgentManager {
     readyTimer.unref?.();
     this.readyTimers.set(id, readyTimer);
 
-    // Window liveness poll (detects kill-window / manual closes). Also
-    // retries the auto-close for terminal records — convergence net if the
-    // settle-time close hit a transient tmux failure.
+    // Window liveness poll (observes kill-window / manual closes). Never
+    // closes a window itself — windows persist until the human dismisses them
+    // (via the toolbar or by exiting the child Pi session).
     const poll = setInterval(() => {
       const rec = this.agents.get(id);
       if (!rec?.window || rec.window.state === "closed") return;
@@ -370,11 +374,6 @@ export class AgentManager {
           r.updatedAt = Date.now();
           this.emit({ type: "updated", record: r });
           this.maybeAutoClear(r);
-          return;
-        }
-        // Terminal record whose window is still open — retry the auto-close.
-        if (r.status !== "running" && r.status !== "queued") {
-          void this.maybeCloseWindow(r);
         }
       });
     }, WINDOW_POLL_MS);
@@ -409,6 +408,8 @@ export class AgentManager {
               ledgerNodeId: linkSpec.ledger?.node.id,
               parentLedgerId: linkSpec.ledger?.node.parentId,
               createdAt: new Date().toISOString(),
+              mailboxDir: record.mailboxDir,
+              isBackground: record.isBackground,
               reopen: buildReopenDescriptor(linkSpec),
             });
           } catch {
@@ -423,8 +424,11 @@ export class AgentManager {
       }
 
       case "run_started": {
+        if (event.runNumber <= record.runNumber) break;
         record.status = "running";
         record.runNumber = event.runNumber;
+        if (typeof event.maxTurns === "number") record.maxTurns = event.maxTurns;
+        record.decision = undefined;
         record.turnCount = 0;
         record.toolUses = 0;
         record.result = undefined;
@@ -439,6 +443,7 @@ export class AgentManager {
       }
 
       case "tool_started": {
+        if (event.runNumber != null && event.runNumber !== record.runNumber) break;
         record.latestActivity = {
           toolName: event.toolName,
           action: actionFor(event.toolName),
@@ -452,6 +457,7 @@ export class AgentManager {
       }
 
       case "tool_finished": {
+        if (event.runNumber != null && event.runNumber !== record.runNumber) break;
         record.toolUses++;
         if (record.latestActivity?.toolName === event.toolName) {
           record.latestActivity.completedAt = Date.now();
@@ -463,6 +469,7 @@ export class AgentManager {
       }
 
       case "turn_finished": {
+        if (event.runNumber != null && event.runNumber !== record.runNumber) break;
         record.turnCount = event.turnCount;
         record.updatedAt = Date.now();
         this.emit({ type: "updated", record });
@@ -471,6 +478,7 @@ export class AgentManager {
       }
 
       case "human_steer": {
+        if (event.runNumber != null && event.runNumber !== record.runNumber) break;
         record.feedback = { kind: "steer", text: event.text, state: "delivered", updatedAt: Date.now() };
         record.updatedAt = Date.now();
         this.emit({ type: "updated", record });
@@ -478,13 +486,44 @@ export class AgentManager {
         break;
       }
 
+      case "decision_required": {
+        if (!Number.isInteger(event.maxTurns) || event.maxTurns < 1) break;
+        if (event.runNumber < record.runNumber || (event.runNumber === record.runNumber && record.status !== "running")) break;
+        record.runNumber = event.runNumber;
+        record.status = "awaiting_decision";
+        record.decision = {
+          reason: event.reason,
+          requestedAt: event.requestedAt,
+          result: event.result,
+          turnCount: event.turnCount,
+          toolUses: event.toolUses,
+          maxTurns: event.maxTurns,
+        };
+        record.result = undefined;
+        record.error = undefined;
+        record.completedAt = undefined;
+        record.reviewedAt = undefined;
+        record.turnCount = event.turnCount;
+        record.toolUses = event.toolUses;
+        record.maxTurns = event.maxTurns;
+        if (event.compactions != null) record.compactionCount = event.compactions;
+        if (event.usage) record.lifetimeUsage = { ...event.usage };
+        record.updatedAt = Date.now();
+        this.emit({ type: "updated", record });
+        break;
+      }
+
       case "run_settled": {
+        if (event.runNumber < record.runNumber || (event.runNumber === record.runNumber && record.status !== "awaiting_decision" && record.completedAt)) break;
         this.applySettled(record, event);
         break;
       }
 
       case "process_exit": {
         if (record.window) record.window.state = "closed";
+        // Process exit is not a result release. Keep active/decision state so
+        // the human can reopen the retained session; only run_settled may
+        // resolve a foreground waiter or notify a background parent.
         record.updatedAt = Date.now();
         this.emit({ type: "updated", record });
         this.maybeAutoClear(record);
@@ -500,6 +539,7 @@ export class AgentManager {
     if (record.status !== "stopped") {
       record.status = event.status === "steered" ? "steered" : event.status;
     }
+    record.decision = undefined;
     record.result = event.result;
     if (event.error) record.error = event.error;
     record.completedAt = Date.now();
@@ -533,45 +573,8 @@ export class AgentManager {
       void this.drainQueue();
     }
     this.emit({ type: "completed", record });
-    void this.maybeCloseWindow(record);
-  }
-
-  /**
-   * Close an agent's tmux window once its run settles — unless the user is
-   * actively viewing that window, or a follow-up is queued for it. The Pi
-   * session file is unaffected; the window can be reopened on demand.
-   */
-  private async maybeCloseWindow(record: AgentRecord): Promise<void> {
-    try {
-      await this.maybeCloseWindowInner(record);
-    } catch (err) {
-      console.error(`[pi-subagents] auto-close of window ${record.window?.id ?? "?"} failed:`, err instanceof Error ? err.message : err);
-    }
-  }
-
-  private async maybeCloseWindowInner(record: AgentRecord): Promise<void> {
-    if (!this.closeWindowOnComplete) return;
-    if (!record.window || record.window.state === "closed") return;
-    // A queued parent follow-up is about to use the window — leave it alone.
-    if (record.feedback?.kind === "follow-up" && record.feedback.state === "queued") return;
-
-    const exec = this.deps.tmux;
-    if (!(await tmuxWindowAlive(exec, record.window.id))) {
-      record.window.state = "closed";
-      record.updatedAt = Date.now();
-      this.emit({ type: "updated", record });
-      this.maybeAutoClear(record);
-      return;
-    }
-    // Keep the window open while the user is looking at it.
-    const focused = await exec(["display-message", "-p", "#{window_id}"]);
-    if (focused.code === 0 && focused.stdout.trim() === record.window.id) return;
-
-    await killTmuxWindow(exec, record.window.id);
-    record.window.state = "closed";
-    record.updatedAt = Date.now();
-    this.emit({ type: "updated", record });
-    this.maybeAutoClear(record);
+    // The tmux window stays open for human dismissal — result settlement has
+    // no tmux side effect.
   }
 
   /**
@@ -588,28 +591,53 @@ export class AgentManager {
   }
 
   private maybeAutoClear(record: AgentRecord): void {
-    const terminal =
-      record.status === "completed" || record.status === "steered" ||
-      record.status === "aborted" || record.status === "stopped" || record.status === "error";
-    if (!terminal || !record.resultConsumed) return;
+    if (!isTerminalRecord(record) || !record.resultConsumed) return;
     if (record.window && record.window.state !== "closed") return;
     this.removeRecord(record.id, record);
   }
 
   /**
    * Dismiss a terminal record: close its window (if still open) and forget it.
-   * The Pi session file is preserved. Returns false for unknown/active records.
+   * The Pi session file is preserved. Windows are independent — only this
+   * record's window is touched. The record (and mailbox) is removed only when
+   * the window is confirmed gone, so a failed kill leaves the toolbar row for
+   * retry. Returns "dismissed" on success, "missing" when the window was
+   * already gone, "active" for unknown/running/queued records, "failed" when
+   * tmux refused the kill and the window still exists.
    */
-  dismiss(id: string): boolean {
+  async dismiss(id: string): Promise<"dismissed" | "missing" | "active" | "failed"> {
     const record = this.agents.get(id);
-    if (!record) return false;
-    if (record.status === "running" || record.status === "queued") return false;
+    if (!record) return "active";
+    if (isActiveRecord(record)) return "active";
+
     if (record.window && record.window.state !== "closed") {
-      void killTmuxWindow(this.deps.tmux, record.window.id);
+      if (!(await tmuxWindowAlive(this.deps.tmux, record.window.id))) {
+        record.window.state = "closed";
+        record.updatedAt = Date.now();
+        this.emit({ type: "updated", record });
+        this.removeRecord(id, record);
+        return "missing";
+      }
+      const killed = await killTmuxWindow(this.deps.tmux, record.window.id);
+      if (!killed) {
+        // Confirm the window really is still alive before reporting failure.
+        if (await tmuxWindowAlive(this.deps.tmux, record.window.id)) {
+          return "failed";
+        }
+      }
       record.window.state = "closed";
+      record.updatedAt = Date.now();
+      this.emit({ type: "updated", record });
+
+      // Wait for tmux to actually reap the window (kill-window is async-ish in
+      // practice); a quick liveness re-probe keeps the record until it's gone.
+      for (let attempt = 0; attempt < 3; attempt++) {
+        if (!(await tmuxWindowAlive(this.deps.tmux, record.window.id))) break;
+        await new Promise((r) => setTimeout(r, 150));
+      }
     }
     this.removeRecord(id, record);
-    return true;
+    return "dismissed";
   }
 
   /** Fail a launch that never became ready. */
@@ -643,6 +671,7 @@ export class AgentManager {
       } catch (err) {
         const message = err instanceof Error ? err.message : String(err);
         const record = this.agents.get(next.id);
+        if (!record) continue;
         record.status = "error";
         record.error = message;
         record.completedAt = Date.now();
@@ -700,10 +729,11 @@ export class AgentManager {
     id: string,
     prompt: string,
     _signal?: AbortSignal,
-    options: { model?: Model<any>; thinking?: ThinkingLevel; resultConsumed?: boolean } = {},
+    options: { model?: Model<any>; thinking?: ThinkingLevel; maxTurns?: number; resultConsumed?: boolean; wait?: boolean } = {},
   ): Promise<AgentRecord | undefined> {
+    validateMaxTurns(options.maxTurns);
     const record = this.agents.get(id);
-    if (!record || record.status === "running" || record.status === "queued") return undefined;
+    if (!record || record.status === "running" || record.status === "queued" || record.status === "awaiting_decision") return undefined;
     if (!record.mailboxDir || !record.launchSpec) return undefined;
 
     // Ensure a live window (reopen the session if the window was closed).
@@ -720,12 +750,19 @@ export class AgentManager {
     // Arm the waiter BEFORE sending the command so a fast child cannot race.
     const wait = this.awaitSettled(id);
     record.effectivePrompt = prompt;
+    record.maxTurns = options.maxTurns;
+    record.status = "running";
+    record.decision = undefined;
+    record.result = undefined;
+    record.error = undefined;
+    record.completedAt = undefined;
     record.resultConsumed = options.resultConsumed ?? false;
     record.feedback = { kind: "follow-up", text: prompt, state: "queued", updatedAt: Date.now() };
     record.updatedAt = Date.now();
     this.emit({ type: "updated", record });
 
-    writeParentCommand(record.mailboxDir, { type: "follow_up", message: prompt });
+    writeParentCommand(record.mailboxDir, { type: "follow_up", message: prompt, maxTurns: options.maxTurns });
+    if (options.wait === false) return record;
     await wait;
     return this.agents.get(id);
   }
@@ -767,16 +804,18 @@ export class AgentManager {
       return true;
     }
 
-    if (record.status !== "running") return false;
-    record.status = "stopped";
-    record.completedAt = Date.now();
-    record.updatedAt = Date.now();
-    record.reviewedAt = undefined;
-    record.stopReason = "stopped by user";
-    this.emit({ type: "updated", record });
-    if (record.mailboxDir) {
-      writeParentCommand(record.mailboxDir, { type: "abort" });
+    if (record.status === "awaiting_decision") {
+      // The run is already stopped at a human gate. Preserve its held result;
+      // Escape or parent cancellation must not turn it into a parent response.
+      return true;
     }
+    if (record.status !== "running") return false;
+    // Request a child-side abort, but do not settle locally. The child records
+    // an aborted pending decision, and only a later /or emits run_settled.
+    record.stopReason = "stop requested";
+    record.updatedAt = Date.now();
+    this.emit({ type: "updated", record });
+    if (record.mailboxDir) writeParentCommand(record.mailboxDir, { type: "abort" });
     return true;
   }
 
@@ -840,6 +879,62 @@ export class AgentManager {
     return true;
   }
 
+  /** Reattach a live/pending child after the parent Pi session was resumed. */
+  async restoreFromPersisted(link: ContextLinkData): Promise<boolean> {
+    const reopen = link.reopen;
+    const mailboxDir = link.mailboxDir;
+    if (!reopen || !mailboxDir || !existsSync(mailboxDir) || this.agents.has(link.agentId)) return false;
+    // A released marker means the child already returned while this parent was
+    // absent; its event remains in the mailbox and must be consumed once so the
+    // resumed parent receives the normal completion notification.
+    const pending = readPendingDecision(mailboxDir);
+    const released = existsSync(join(mailboxDir, "released-decision.json"));
+    let hasQueuedEvents = false;
+    try { hasQueuedEvents = readdirSync(join(mailboxDir, "events")).some((name) => name.endsWith(".json")); } catch {}
+    // If an earlier parent already consumed the release, do not resurrect the
+    // completed child merely because its tmux review window is still open.
+    if (released && !hasQueuedEvents) return false;
+    const windowName = agentWindowName(link.agentId, link.agentType);
+    const live = await findTmuxWindowByName(this.deps.tmux, windowName);
+    if (!pending && !released && !live) return false;
+
+    const spec: AgentLaunchSpec = {
+      version: 3,
+      agent: { id: link.agentId, type: link.agentType, displayName: link.agentType, description: link.description },
+      session: { id: link.childSessionId, name: link.childSessionName, sessionDir: reopen.sessionDir, openFile: link.childSessionFile },
+      runtime: {
+        cwd: reopen.cwd, packageDir: getPackageDir(), model: reopen.model,
+        thinking: reopen.thinking, tools: reopen.tools, noExtensions: reopen.noExtensions,
+        extensionPaths: reopen.extensionPaths, noSkills: reopen.noSkills,
+        ...(reopen.systemPrompt === undefined ? {} : { systemPrompt: reopen.systemPrompt }),
+        ...(reopen.promptPolicy ? { promptPolicy: reopen.promptPolicy } : {}),
+      },
+      run: { prompt: "", maxTurns: pending?.maxTurns ?? reopen.maxTurns ?? 1 },
+      bridge: { mailboxDir },
+    };
+    const startedAt = Date.parse(link.createdAt) || Date.now();
+    const record: AgentRecord = {
+      id: link.agentId, type: link.agentType, description: link.description,
+      status: pending ? "awaiting_decision" : "running", decision: pending ? { ...pending } : undefined,
+      toolUses: pending?.toolUses ?? 0, startedAt, lifetimeUsage: pending?.usage ? { ...pending.usage } : { input: 0, output: 0, cacheWrite: 0 },
+      compactionCount: pending?.compactions ?? 0, originalPrompt: "", effectivePrompt: "", updatedAt: Date.now(),
+      runNumber: pending?.runNumber ?? 0, turnCount: pending?.turnCount ?? 0, maxTurns: pending?.maxTurns ?? reopen.maxTurns,
+      // The original foreground tool call cannot survive a closed parent
+      // process. Treat restored records as notification-backed until release.
+      isBackground: true, childSession: { sessionId: link.childSessionId, sessionName: link.childSessionName, sessionFile: link.childSessionFile },
+      mailboxDir, launchSpec: spec,
+      ...(live ? { window: { id: live.id, index: live.index, name: live.name, state: "alive" as const } } : {}),
+    };
+    this.agents.set(record.id, record);
+    this.runningBackground++;
+    this.emit({ type: "created", record });
+    const watcher = watchChildEvents(mailboxDir, (events) => {
+      for (const event of events) this.handleChildEvent(record.id, event, { description: record.description });
+    });
+    this.watchers.set(record.id, watcher);
+    return true;
+  }
+
   /**
    * Reopen a persisted agent session from its link metadata (used by /ot when
    * no manager record exists, e.g. after the parent was resumed). Finds an
@@ -896,7 +991,7 @@ export class AgentManager {
         ...(reopen.systemPrompt === undefined ? {} : { systemPrompt: reopen.systemPrompt }),
         ...(reopen.promptPolicy ? { promptPolicy: reopen.promptPolicy } : {}),
       },
-      run: { prompt: "", graceTurns: 5 }, // reopen attaches; never re-sends the task
+      run: { prompt: "", maxTurns: reopen.maxTurns ?? 1 }, // reopen attaches; never re-sends the task
       bridge: { mailboxDir },
     };
 
@@ -940,7 +1035,7 @@ export class AgentManager {
    */
   clearCompleted(skipUnconsumed = false): void {
     for (const [id, record] of this.agents) {
-      if (record.status === "running" || record.status === "queued") continue;
+      if (isActiveRecord(record)) continue;
       if (skipUnconsumed && !record.resultConsumed) continue;
       this.removeRecord(id, record);
     }
@@ -949,30 +1044,15 @@ export class AgentManager {
   /** Whether any agents are still running or queued. */
   hasRunning(): boolean {
     return [...this.agents.values()].some(
-      (r) => r.status === "running" || r.status === "queued",
+      (r) => isActiveRecord(r),
     );
   }
 
-  /** Abort all running and queued agents immediately (session shutdown). */
+  /** Abort all active agents immediately (explicit parent stop). */
   abortAll(): number {
+    const ids = [...this.agents.values()].filter(isActiveRecord).map((record) => record.id);
     let count = 0;
-    for (const queued of this.queue) {
-      const record = this.agents.get(queued.id);
-      if (record) {
-        record.status = "stopped";
-        record.completedAt = Date.now();
-        count++;
-      }
-    }
-    this.queue = [];
-    for (const record of this.agents.values()) {
-      if (record.status === "running") {
-        record.status = "stopped";
-        record.completedAt = Date.now();
-        if (record.mailboxDir) writeParentCommand(record.mailboxDir, { type: "abort" });
-        count++;
-      }
-    }
+    for (const id of ids) if (this.abort(id)) count++;
     return count;
   }
 
@@ -984,14 +1064,15 @@ export class AgentManager {
     }
   }
 
+  /**
+   * Detach this manager from its children. A parent Pi shutdown must not stop
+   * child hosts: their tmux windows and mailbox command loops remain usable
+   * after the parent window is gone.
+   */
   dispose(): void {
     this.disposed = true;
     this.queue = [];
-    for (const [id, record] of [...this.agents]) {
-      // Ask live children to shut down, then stop tracking.
-      if (record.window?.state !== "closed" && record.mailboxDir) {
-        writeParentCommand(record.mailboxDir, { type: "shutdown" });
-      }
+    for (const id of this.agents.keys()) {
       this.stopWatchers(id);
     }
     this.agents.clear();

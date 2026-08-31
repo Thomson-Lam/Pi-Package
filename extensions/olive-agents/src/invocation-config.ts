@@ -21,7 +21,9 @@ export function resolveAgentInvocationConfig(
     modelInput: agentConfig?.model ?? params.model,
     modelFromParams: agentConfig?.model == null && params.model != null,
     thinking: (agentConfig?.thinking ?? params.thinking) as ThinkingLevel | undefined,
-    maxTurns: agentConfig?.maxTurns ?? params.max_turns,
+    // The parent tool call owns the work-turn budget. Agent frontmatter is
+    // retained for manual/non-tool callers, but cannot override this value.
+    maxTurns: params.max_turns,
     runInBackground: agentConfig?.runInBackground ?? params.run_in_background ?? false,
   };
 }

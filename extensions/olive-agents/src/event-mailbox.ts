@@ -18,13 +18,28 @@
 import { chmodSync, existsSync, mkdirSync, readdirSync, readFileSync, renameSync, rmSync, watch, writeFileSync } from "node:fs";
 import { join } from "node:path";
 
+export interface LifetimeUsageReport { input: number; output: number; cacheWrite: number }
+
+export interface PendingDecisionState {
+  runNumber: number;
+  reason: "completed" | "turn_limit" | "aborted";
+  result?: string;
+  turnCount: number;
+  maxTurns: number;
+  toolUses: number;
+  requestedAt: number;
+  compactions?: number;
+  usage?: LifetimeUsageReport;
+}
+
 export interface ChildEventMap {
   ready: { sessionId: string; sessionFile?: string };
-  run_started: { runNumber: number };
-  tool_started: { toolName: string; target?: string };
-  tool_finished: { toolName: string };
-  turn_finished: { turnCount: number };
-  human_steer: { text: string };
+  run_started: { runNumber: number; maxTurns?: number };
+  tool_started: { runNumber?: number; toolName: string; target?: string };
+  tool_finished: { runNumber?: number; toolName: string };
+  turn_finished: { runNumber?: number; turnCount: number };
+  human_steer: { runNumber?: number; text: string };
+  decision_required: PendingDecisionState;
   run_settled: {
     runNumber: number;
     status: "completed" | "steered" | "aborted" | "stopped" | "error";
@@ -33,16 +48,20 @@ export interface ChildEventMap {
     turnCount: number;
     toolUses: number;
     compactions?: number;
+    /** Explicit release or an unrecoverable stop/error. */
+    releaseReason?: "human_return" | "error";
+    decisionReason?: "completed" | "turn_limit" | "aborted";
     /** Session token totals as reported by the child (resets at compaction, like pi's footer). */
-    usage?: { input: number; output: number; cacheWrite: number };
+    usage?: LifetimeUsageReport;
   };
   process_exit: {};
 }
 
+
 export type ChildEvent = { [K in keyof ChildEventMap]: { type: K } & ChildEventMap[K] }[keyof ChildEventMap];
 
 export interface ParentCommandMap {
-  follow_up: { message: string };
+  follow_up: { message: string; maxTurns: number };
   abort: {};
   shutdown: {};
 }
@@ -93,6 +112,25 @@ export function writeParentCommand(mailboxDir: string, command: ParentCommand): 
   const file = join(mailboxDir, "commands", `${nextSeq()}-${command.type}.json`);
   writeJsonAtomic(file, command);
   return file;
+}
+
+const PENDING_DECISION_FILE = "pending-decision.json";
+
+export function writePendingDecision(mailboxDir: string, state: PendingDecisionState): void {
+  ensureMailboxDir(mailboxDir);
+  writeJsonAtomic(join(mailboxDir, PENDING_DECISION_FILE), state);
+}
+
+export function readPendingDecision(mailboxDir: string): PendingDecisionState | undefined {
+  try {
+    const value = JSON.parse(readFileSync(join(mailboxDir, PENDING_DECISION_FILE), "utf-8")) as PendingDecisionState;
+    if (!value || typeof value.runNumber !== "number" || !["completed", "turn_limit", "aborted"].includes(value.reason)) return undefined;
+    return value;
+  } catch { return undefined; }
+}
+
+export function clearPendingDecision(mailboxDir: string): void {
+  try { rmSync(join(mailboxDir, PENDING_DECISION_FILE), { force: true }); } catch { /* best effort */ }
 }
 
 /** Read all pending commands (oldest first). Does not delete them. */

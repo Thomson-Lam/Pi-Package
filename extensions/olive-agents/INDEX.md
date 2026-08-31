@@ -9,6 +9,7 @@ Components:
 - `src/agent-types.ts` — embedded default + user-defined agent registry.
 - `src/approval.ts` — mandatory per-launch review/approval, with optional context-ledger building.
 - `src/child-host.mjs` — plain-ESM host booting each agent as a native Pi session in its own tmux window; persists the received ledger node into the child session.
+- `src/child-extension-filter.mjs` — preserves the inline child-return bridge (`/or`) alongside the inherited parent-extension allow-list.
 - `src/context-ledger.ts` — durable context model: message extraction, snapshotting, prompt serialization, parent-context resolution, /ot graph loading, and agent-tree placement.
 - `src/cross-extension-rpc.ts` — ping/spawn/stop RPC over `pi.events`.
 - `src/event-mailbox.ts` — filesystem mailbox between parent and child sessions.

@@ -54,11 +54,17 @@ describe("settings persistence", () => {
   });
 
   it("applies only retained fields", () => {
-    const a = { setMaxConcurrent: vi.fn(), setDefaultMaxTurns: vi.fn(), setGraceTurns: vi.fn(), setDefaultJoinMode: vi.fn(), setScopeModels: vi.fn(), setDisableDefaultAgents: vi.fn(), setToolDescriptionMode: vi.fn(), setCloseWindowOnComplete: vi.fn() };
-    applySettings({ maxConcurrent: 4, scopeModels: true, closeWindowOnComplete: false }, a);
+    const a = { setMaxConcurrent: vi.fn(), setDefaultMaxTurns: vi.fn(), setGraceTurns: vi.fn(), setDefaultJoinMode: vi.fn(), setScopeModels: vi.fn(), setDisableDefaultAgents: vi.fn(), setToolDescriptionMode: vi.fn() };
+    applySettings({ maxConcurrent: 4, scopeModels: true }, a);
     expect(a.setMaxConcurrent).toHaveBeenCalledWith(4);
     expect(a.setScopeModels).toHaveBeenCalledWith(true);
-    expect(a.setCloseWindowOnComplete).toHaveBeenCalledWith(false);
+    expect(a.setToolDescriptionMode).not.toHaveBeenCalled();
+  });
+
+  it("ignores the retired closeWindowOnComplete field", () => {
+    mkdirSync(join(projectDir, ".pi"), { recursive: true });
+    writeFileSync(join(projectDir, ".pi", "olive-agents.json"), JSON.stringify({ closeWindowOnComplete: true, maxConcurrent: 2 }));
+    expect(loadSettings(projectDir)).toEqual({ maxConcurrent: 2 });
   });
 
   it("writeTarget reports global when nothing exists and project when it does", () => {

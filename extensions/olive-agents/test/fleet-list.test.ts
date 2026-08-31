@@ -52,6 +52,14 @@ describe("passive FleetList", () => {
     const rows = Array.from({ length: 8 }, (_, i) => record({ id: String(i), description: `task ${i}` }));
     expect(harness(rows).render().join("\n")).toMatch(/\+\d+ more/);
   });
+  it("prioritizes decision rows and renders the persistent alert", () => {
+    const waiting = record({ id: "wait", description: "waiting task", status: "awaiting_decision", decision: { reason: "turn_limit", requestedAt: Date.now() - 42000, result: "status", turnCount: 10, toolUses: 2, maxTurns: 10 }, maxTurns: 10, turnCount: 10, window: { id: "@3", index: 3, name: "agent", state: "closed" } });
+    const running = record({ id: "run", description: "running task", status: "running", updatedAt: Date.now() + 1000 });
+    const output = harness([running, waiting]).render().join("\\n");
+    expect(output.indexOf("needs input")).toBeGreaterThanOrEqual(0);
+    expect(output.indexOf("waiting task")).toBeLessThan(output.indexOf("running task"));
+    expect(output).toContain("Enter to reopen");
+  });
 });
 
 describe("fleet selection mode", () => {

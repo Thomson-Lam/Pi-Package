@@ -33,13 +33,19 @@ export const SUBAGENT_TOOL_NAMES = {
   GET_RESULT: "get_subagent_result",
 } as const;
 
-/** Default max turns. undefined = unlimited (no turn limit). */
+/** Legacy default used only by manual compatibility callers. Agent tool launches must supply maxTurns. */
 let defaultMaxTurns: number | undefined;
 
-/** Normalize max turns. undefined or 0 = unlimited, otherwise minimum 1. */
+/** Normalize legacy configuration values. Fresh Agent launches use validateMaxTurns instead. */
 export function normalizeMaxTurns(n: number | undefined): number | undefined {
   if (n == null || n === 0) return undefined;
   return Math.max(1, n);
+}
+
+export function validateMaxTurns(n: unknown): asserts n is number {
+  if (typeof n !== "number" || !Number.isFinite(n) || !Number.isInteger(n) || n < 1) {
+    throw new Error("max_turns is required and must be a positive integer.");
+  }
 }
 
 /** Get the default max turns value. undefined = unlimited. */
@@ -92,6 +98,8 @@ export interface PrepareLaunchResult {
  */
 export async function prepareAgentLaunch(input: PrepareLaunchInput): Promise<PrepareLaunchResult> {
   const { pi, ctx, type, prompt, options } = input;
+  validateMaxTurns(options.maxTurns);
+  const maxTurns = options.maxTurns;
   const config = getConfig(type);
   const agentConfig = getAgentConfig(type);
   const warnings: string[] = [];
@@ -175,8 +183,7 @@ export async function prepareAgentLaunch(input: PrepareLaunchInput): Promise<Pre
     },
     run: {
       prompt: effectivePrompt,
-      maxTurns: normalizeMaxTurns(options.maxTurns ?? getDefaultMaxTurns()),
-      graceTurns: getGraceTurns(),
+      maxTurns,
     },
     bridge: { mailboxDir: input.mailboxDir },
     ...(input.ledgerNode ? { ledger: { node: input.ledgerNode } } : {}),
@@ -216,5 +223,6 @@ export function buildReopenDescriptor(spec: AgentLaunchSpec): ReopenDescriptor {
     systemPrompt: spec.runtime.systemPrompt,
     promptPolicy: spec.runtime.promptPolicy,
     sessionDir: spec.session.sessionDir,
+    maxTurns: spec.run.maxTurns,
   };
 }

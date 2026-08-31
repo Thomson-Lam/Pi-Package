@@ -67,14 +67,14 @@ export interface AgentDetails {
   toolUses: number;
   tokens: string;
   durationMs: number;
-  status: "queued" | "running" | "completed" | "steered" | "aborted" | "stopped" | "error" | "background";
+  status: "queued" | "running" | "awaiting_decision" | "completed" | "steered" | "aborted" | "stopped" | "error" | "background" | "detached";
   /** Human-readable description of what the agent is currently doing. */
   activity?: string;
   /** Current spinner frame index (for animated running indicator). */
   spinnerFrame?: number;
   /** Short model name if different from parent (e.g. "haiku", "sonnet"). */
   modelName?: string;
-  /** Notable invocation tags (e.g. ["thinking: high", "background"]). */
+  /** Notable invocation tags (e.g. ["thinking: high", "detached"]). */
   tags?: string[];
   /** Current turn count. */
   turnCount?: number;
@@ -157,7 +157,7 @@ export function buildInvocationTags(
   const tags: string[] = [];
   if (!invocation) return { tags };
   if (invocation.thinking) tags.push(`thinking: ${invocation.thinking}`);
-  if (invocation.runInBackground) tags.push("background");
+  tags.push(invocation.runInBackground ? "background" : "detached");
   if (invocation.maxTurns != null) tags.push(`max turns: ${invocation.maxTurns}`);
   return { modelName: invocation.modelName, tags };
 }

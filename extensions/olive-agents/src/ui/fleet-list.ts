@@ -29,11 +29,20 @@ export function formatFleetTokens(count: number): string {
   return String(count);
 }
 
-function terminal(record: AgentRecord): boolean {
-  return record.status !== "running" && record.status !== "queued";
+export function needsDecision(record: AgentRecord): boolean {
+  return record.status === "awaiting_decision";
+}
+
+export function isActive(record: AgentRecord): boolean {
+  return record.status === "queued" || record.status === "running" || needsDecision(record);
+}
+
+export function isTerminal(record: AgentRecord): boolean {
+  return !isActive(record);
 }
 
 function icon(record: AgentRecord): string {
+  if (record.status === "awaiting_decision") return "◆";
   if (record.status === "running") return "●";
   if (record.status === "queued") return "◌";
   if (record.status === "completed" || record.status === "steered") return "✓";
@@ -74,11 +83,10 @@ export class FleetList {
   /** Records eligible for the fleet: running/queued or terminal-unreviewed. */
   records(): AgentRecord[] {
     return this.manager.listAgents()
-      .filter(r => !terminal(r) || r.reviewedAt == null)
+      .filter(r => !isTerminal(r) || r.reviewedAt == null)
       .sort((a, b) => {
-        const aa = terminal(a) ? 1 : 0;
-        const bb = terminal(b) ? 1 : 0;
-        return aa - bb || b.updatedAt - a.updatedAt;
+        const rank = (r: AgentRecord) => needsDecision(r) ? 0 : r.status === "running" ? 1 : r.status === "queued" ? 2 : 3;
+        return rank(a) - rank(b) || b.updatedAt - a.updatedAt;
       });
   }
 
@@ -92,7 +100,7 @@ export class FleetList {
       this.stopTimer();
       return;
     }
-    if (records.some(r => r.status === "running" || r.status === "queued")) this.startTimer();
+    if (records.some(isActive)) this.startTimer();
     else this.stopTimer();
     if (!this.registered) {
       this.ui.setWidget(FLEET_KEY, (tui, theme) => {
@@ -118,19 +126,26 @@ export class FleetList {
   /** Render the fleet rows (shared by the widget and the selection picker). */
   renderRows(theme: Theme, selectedId?: string, width = 120): string[] {
     const all = this.records();
+    const decisions = all.filter(needsDecision);
     const lines: string[] = [];
+    if (decisions.length > 0) {
+      lines.push(truncateToWidth(theme.fg("warning", `⚠ ${decisions.length} agent${decisions.length === 1 ? "" : "s"} need${decisions.length === 1 ? "s" : ""} input · Alt+A open`), width));
+    }
+    const availableRows = Math.max(0, Math.floor((MAX_LINES - lines.length) / 2));
     let shown = 0;
     for (const record of all) {
-      if (lines.length + 2 > MAX_LINES) break;
-      const elapsed = formatFleetElapsed((record.completedAt ?? Date.now()) - record.startedAt);
+      if (shown >= availableRows) break;
+      const waiting = needsDecision(record);
+      const elapsed = waiting
+        ? formatFleetElapsed(Date.now() - (record.decision?.requestedAt ?? record.updatedAt))
+        : formatFleetElapsed((record.completedAt ?? Date.now()) - record.startedAt);
       const total = formatFleetTokens(getLifetimeTotal(record.lifetimeUsage));
       const windowPart = record.window
         ? `tmux ${record.window.state === "closed" ? `${record.window.index} (closed)` : record.window.index}`
         : record.status === "queued" ? "queued" : undefined;
-      const metrics = [windowPart, elapsed, total !== "0" ? `${total} tok` : undefined,
-        record.maxTurns ? `${record.turnCount}/${record.maxTurns} turns` : record.turnCount ? `${record.turnCount} turns` : undefined,
-      ].filter(Boolean).join(" · ");
-      const color = record.status === "running" ? "accent" : terminal(record) && record.status !== "completed" ? "warning" : "dim";
+      const turns = record.maxTurns ? `${record.turnCount}/${record.maxTurns} turns` : record.turnCount ? `${record.turnCount} turns` : undefined;
+      const metrics = [windowPart, turns, waiting ? `waiting ${elapsed}` : elapsed, total !== "0" ? `${total} tok` : undefined].filter(Boolean).join(" · ");
+      const color = waiting ? "warning" : record.status === "running" ? "accent" : isTerminal(record) && record.status !== "completed" ? "warning" : "dim";
       const isSelected = record.id === selectedId;
       const cursor = isSelected ? theme.fg("accent", "› ") : "  ";
       const name = zellijName(record.id);
@@ -138,14 +153,19 @@ export class FleetList {
       const typeTag = theme.fg("dim", `(${agentTypeSlug(record.type)})`);
       const left = `${cursor}${theme.fg(color, icon(record))} ${nameStyled} ${typeTag}  ${record.description}`;
       lines.push(align(left, theme.fg("dim", metrics), width));
-      const activity = record.status === "queued" ? "queued"
+      const activity = waiting
+        ? (record.window?.state === "closed" ? "Enter to reopen" : record.decision?.reason === "aborted" ? "stopped — /or returns partial result" : record.decision?.reason === "turn_limit" ? "turn limit reached — Continue / Return / Feedback" : "response ready — Continue / Return / Feedback")
+        : record.status === "queued" ? "queued"
         : record.latestActivity ? `${record.latestActivity.action}${record.latestActivity.target ? ` ${record.latestActivity.target}` : ""}`
-        : terminal(record) ? record.error ?? record.stopReason ?? "review required"
+        : isTerminal(record) ? record.error ?? record.stopReason ?? "review required"
         : record.window?.state === "starting" ? "starting…" : "thinking";
       lines.push(truncateToWidth(`  ${theme.fg("dim", `↳ ${activity}`)}`, width));
       shown++;
     }
-    if (shown < all.length) lines.push(truncateToWidth(theme.fg("dim", `+${all.length - shown} more`), width));
+    if (shown < all.length) {
+      const hiddenDecisions = Math.max(0, decisions.length - all.slice(0, shown).filter(needsDecision).length);
+      lines.push(truncateToWidth(theme.fg("dim", hiddenDecisions > 0 ? `+${hiddenDecisions} more agents need input` : `+${all.length - shown} more`), width));
+    }
     return lines;
   }
 
@@ -158,9 +178,8 @@ export class FleetList {
   /** Selectable records for the picker (all records, running first). */
   selectableRecords(): AgentRecord[] {
     return this.manager.listAgents().sort((a, b) => {
-      const aa = terminal(a) ? 1 : 0;
-      const bb = terminal(b) ? 1 : 0;
-      return aa - bb || b.updatedAt - a.updatedAt;
+      const rank = (r: AgentRecord) => needsDecision(r) ? 0 : r.status === "running" ? 1 : r.status === "queued" ? 2 : 3;
+      return rank(a) - rank(b) || b.updatedAt - a.updatedAt;
     });
   }
 

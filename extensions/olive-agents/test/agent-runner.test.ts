@@ -89,12 +89,10 @@ describe("prepareAgentLaunch", () => {
     expect(spec.runtime.extensionPaths).toEqual(["/project/custom.ts", "/project/inactive.ts"]);
   });
 
-  it("applies max-turn defaults", async () => {
+  it("rejects a missing fresh-run limit", async () => {
     setDefaultMaxTurns(20);
     setGraceTurns(3);
-    const { spec } = await prepare({ model: { provider: "test", id: "basic" }, thinking: "high" });
-    expect(spec.run.maxTurns).toBe(20);
-    expect(spec.run.graceTurns).toBe(3);
+    await expect(prepare({ model: { provider: "test", id: "basic" }, thinking: "high" })).rejects.toThrow("positive integer");
   });
 });
 
@@ -107,7 +105,7 @@ describe("context ledger spec", () => {
     const { spec: ledgerSpec } = await prepareAgentLaunch({
       pi: makePi(), ctx: makeCtx(), type: "Review",
       prompt: "do the thing", description: "review",
-      options: { model: { provider: "test", id: "basic" }, thinking: "high" },
+      options: { model: { provider: "test", id: "basic" }, thinking: "high", maxTurns: 10 },
       agentId: "agent-id", childSessionId: "child-session",
       parentSessionFile: join(work, "parent.jsonl"), sessionDir: work,
       mailboxDir: join(work, "mailbox"),

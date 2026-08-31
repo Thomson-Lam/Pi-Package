@@ -9,6 +9,7 @@ import {
   ModelRuntime,
   SessionManager,
 } from "@earendil-works/pi-coding-agent";
+import { CHILD_BRIDGE_EXTENSION_PATH, keepChildExtension } from "../src/child-extension-filter.mjs";
 import { registerPromptPolicy } from "../src/prompt-policy.mjs";
 
 const workspaces: string[] = [];
@@ -64,6 +65,36 @@ async function inspectPrompt(policy: "native" | "inherit") {
 }
 
 describe("child prompt policy", () => {
+  it("preserves the inline /or bridge through the parent-extension allow-list", async () => {
+    const cwd = mkdtempSync(resolve(tmpdir(), "olive-child-bridge-"));
+    workspaces.push(cwd);
+    const agentDir = mkdtempSync(resolve(tmpdir(), "olive-child-bridge-agent-"));
+    workspaces.push(agentDir);
+    const modelRuntime = await ModelRuntime.create({ refreshOnCreate: false });
+    const services = await createAgentSessionServices({
+      cwd,
+      agentDir,
+      modelRuntime,
+      resourceLoaderOptions: {
+        extensionFactories: [{
+          name: "olive-agent-bridge",
+          factory: (pi: any) => pi.registerCommand("or", { handler: async () => {} }),
+        }],
+        extensionsOverride: (base) => ({
+          ...base,
+          extensions: base.extensions.filter((extension) => keepChildExtension(extension.path, [])),
+        }),
+        noContextFiles: true,
+        noPromptTemplates: true,
+      },
+    });
+
+    const bridge = services.resourceLoader.getExtensions().extensions.find(
+      (extension) => extension.path === CHILD_BRIDGE_EXTENSION_PATH,
+    );
+    expect(bridge?.commands.has("or")).toBe(true);
+  });
+
   it("keeps all extensions while restoring the native Pi prompt", async () => {
     const { nativePrompt, receivedPrompt } = await inspectPrompt("native");
     expect(receivedPrompt).toBe(nativePrompt);
