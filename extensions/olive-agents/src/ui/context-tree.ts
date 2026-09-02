@@ -196,7 +196,11 @@ export async function openContextTree(input: ContextTreeInput): Promise<string |
             const detail = contextLines(row);
             state = { kind: "context", ...detail, scroll: 0 };
           } else if (action === "Start new agent" && input.startNewAgent) {
-            void input.startNewAgent(row).finally(() => { state = { kind: "browse" }; rerender(); });
+            // Close this capturing overlay before opening the selector/editor flow.
+            // Otherwise the nested UI is mounted behind the still-focused overlay
+            // and cannot receive keyboard input.
+            done();
+            void input.startNewAgent(row);
           } else if (action === "Open agent session") {
             void focusOrOpen(row).finally(() => { state = { kind: "browse" }; rerender(); });
           }

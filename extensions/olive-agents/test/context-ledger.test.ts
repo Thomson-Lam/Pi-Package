@@ -374,6 +374,7 @@ interface CapturedComponent {
   render(width?: number): string[];
   input(data: string): void;
   resolve(): unknown;
+  isSettled(): boolean;
 }
 
 /** ANSI-free theme: styles pass text through unchanged so renders are plain. */
@@ -389,10 +390,14 @@ function fakeTuiTheme() {
 function captureCustom<R>(open: (ctx: any) => Promise<R>): CapturedComponent {
   let component: { render(width: number): string[]; handleInput(data: string): void } | undefined;
   let resolved: R | undefined;
+  let settled = false;
   const ctx: any = {
     ui: {
       custom: (factory: (tui: any, theme: any, kb: any, done: (value: R) => void) => any) => {
-        component = factory({ requestRender: () => {} }, fakeTuiTheme(), {}, (value: R) => { resolved = value; });
+        component = factory({ requestRender: () => {} }, fakeTuiTheme(), {}, (value: R) => {
+          settled = true;
+          resolved = value;
+        });
         return new Promise<R>(() => { /* left open: we drive the component directly */ });
       },
       notify: () => {},
@@ -410,6 +415,7 @@ function captureCustom<R>(open: (ctx: any) => Promise<R>): CapturedComponent {
       component.handleInput(data);
     },
     resolve: () => resolved,
+    isSettled: () => settled,
   };
 }
 
@@ -962,6 +968,7 @@ describe("context tree + TUI rendering (scenario gallery)", () => {
     ot.input(ENTER);
     expect(ot.startCalls).toHaveLength(1);
     expect(ot.startCalls[0]).toMatchObject({ node: finalized.ledgerNode });
+    expect(ot.isSettled()).toBe(true);
   });
 
   it("context selection TUI: live list, selection state, preview, tool noise excluded", async () => {
