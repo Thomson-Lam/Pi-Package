@@ -9,7 +9,6 @@ import type { Theme } from "./format.js";
 
 const FLEET_KEY = "fleet";
 const MAX_LINES = 10;
-const TICK_MS = 1000;
 
 export type FleetUICtx = {
   setWidget(
@@ -18,10 +17,6 @@ export type FleetUICtx = {
     options?: { placement?: "aboveEditor" | "belowEditor" },
   ): void;
 };
-
-export function formatFleetElapsed(ms: number): string {
-  return `${Math.max(0, Math.round(ms / 1000))}s`;
-}
 
 export function formatFleetTokens(count: number): string {
   if (count >= 1_000_000) return `${(count / 1_000_000).toFixed(1)}M`;
@@ -60,7 +55,6 @@ export class FleetList {
   private ui?: FleetUICtx;
   private tui?: any;
   private registered = false;
-  private timer?: ReturnType<typeof setInterval>;
   private unsubscribe: () => void;
   /** Selected record id while in selection mode (or when a picker is open). */
   selectedId?: string;
@@ -97,11 +91,8 @@ export class FleetList {
       if (this.registered) this.ui.setWidget(FLEET_KEY, undefined);
       this.registered = false;
       this.tui = undefined;
-      this.stopTimer();
       return;
     }
-    if (records.some(isActive)) this.startTimer();
-    else this.stopTimer();
     if (!this.registered) {
       this.ui.setWidget(FLEET_KEY, (tui, theme) => {
         this.tui = tui;
@@ -111,55 +102,33 @@ export class FleetList {
     } else this.tui?.requestRender();
   }
 
-  private startTimer(): void {
-    if (!this.timer) {
-      this.timer = setInterval(() => this.tui?.requestRender(), TICK_MS);
-      this.timer.unref?.();
-    }
-  }
-
-  private stopTimer(): void {
-    if (this.timer) clearInterval(this.timer);
-    this.timer = undefined;
-  }
-
   /** Render the fleet rows (shared by the widget and the selection picker). */
   renderRows(theme: Theme, selectedId?: string, width = 120): string[] {
     const all = this.records();
     const decisions = all.filter(needsDecision);
     const lines: string[] = [];
     if (decisions.length > 0) {
-      lines.push(truncateToWidth(theme.fg("warning", `⚠ ${decisions.length} agent${decisions.length === 1 ? "" : "s"} need${decisions.length === 1 ? "s" : ""} input · Alt+A open`), width));
+      lines.push(truncateToWidth(theme.fg("dim", "Alt+A open"), width));
     }
-    const availableRows = Math.max(0, Math.floor((MAX_LINES - lines.length) / 2));
+    const availableRows = Math.max(0, MAX_LINES - lines.length);
     let shown = 0;
     for (const record of all) {
       if (shown >= availableRows) break;
       const waiting = needsDecision(record);
-      const elapsed = waiting
-        ? formatFleetElapsed(Date.now() - (record.decision?.requestedAt ?? record.updatedAt))
-        : formatFleetElapsed((record.completedAt ?? Date.now()) - record.startedAt);
       const total = formatFleetTokens(getLifetimeTotal(record.lifetimeUsage));
       const windowPart = record.window
         ? `tmux ${record.window.state === "closed" ? `${record.window.index} (closed)` : record.window.index}`
         : record.status === "queued" ? "queued" : undefined;
       const turns = record.maxTurns ? `${record.turnCount}/${record.maxTurns} turns` : record.turnCount ? `${record.turnCount} turns` : undefined;
-      const metrics = [windowPart, turns, waiting ? `waiting ${elapsed}` : elapsed, total !== "0" ? `${total} tok` : undefined].filter(Boolean).join(" · ");
+      const metrics = [windowPart, turns, total !== "0" ? `${total} tok` : undefined].filter(Boolean).join(" · ");
       const color = waiting ? "warning" : record.status === "running" ? "accent" : isTerminal(record) && record.status !== "completed" ? "warning" : "dim";
       const isSelected = record.id === selectedId;
       const cursor = isSelected ? theme.fg("accent", "› ") : "  ";
       const name = zellijName(record.id);
-      const nameStyled = isSelected ? theme.fg("accent", name) : theme.fg("muted", name);
+      const nameStyled = waiting ? theme.fg("warning", name) : isSelected ? theme.fg("accent", name) : theme.fg("muted", name);
       const typeTag = theme.fg("dim", `(${agentTypeSlug(record.type)})`);
       const left = `${cursor}${theme.fg(color, icon(record))} ${nameStyled} ${typeTag}  ${record.description}`;
       lines.push(align(left, theme.fg("dim", metrics), width));
-      const activity = waiting
-        ? (record.window?.state === "closed" ? "Enter to reopen" : record.decision?.reason === "aborted" ? "stopped — /or returns partial result" : record.decision?.reason === "turn_limit" ? "turn limit reached — Continue / Return / Feedback" : "response ready — Continue / Return / Feedback")
-        : record.status === "queued" ? "queued"
-        : record.latestActivity ? `${record.latestActivity.action}${record.latestActivity.target ? ` ${record.latestActivity.target}` : ""}`
-        : isTerminal(record) ? record.error ?? record.stopReason ?? "review required"
-        : record.window?.state === "starting" ? "starting…" : "thinking";
-      lines.push(truncateToWidth(`  ${theme.fg("dim", `↳ ${activity}`)}`, width));
       shown++;
     }
     if (shown < all.length) {
@@ -210,7 +179,6 @@ export class FleetList {
   }
 
   dispose(): void {
-    this.stopTimer();
     this.unsubscribe();
     if (this.ui && this.registered) this.ui.setWidget(FLEET_KEY, undefined);
     this.registered = false;

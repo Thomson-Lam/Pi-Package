@@ -1,7 +1,8 @@
 import { visibleWidth } from "@earendil-works/pi-tui";
 import { describe, expect, it, vi } from "vitest";
 import type { AgentRecord } from "../src/types.js";
-import { FleetList, formatFleetElapsed, formatFleetTokens } from "../src/ui/fleet-list.js";
+import { zellijName } from "../src/names.js";
+import { FleetList, formatFleetTokens } from "../src/ui/fleet-list.js";
 
 const theme = { fg: (_c: string, s: string) => s, bold: (s: string) => s };
 const record = (over: Partial<AgentRecord> = {}) => ({
@@ -26,8 +27,7 @@ function harness(records: AgentRecord[]) {
 }
 
 describe("passive FleetList", () => {
-  it("formats compact metrics", () => {
-    expect(formatFleetElapsed(1600)).toBe("2s");
+  it("formats compact token metrics", () => {
     expect(formatFleetTokens(1200)).toBe("1.2k");
   });
   it("shows queued records before a session exists and captures no input", () => {
@@ -42,23 +42,36 @@ describe("passive FleetList", () => {
     done.reviewedAt = Date.now();
     expect(harness([done]).render()).toEqual([]);
   });
-  it("renders activity targets, not assistant prose, and stays width-safe", () => {
+  it("renders one width-safe row without activity text or elapsed time", () => {
     const r = record({ status: "running", latestActivity: { toolName: "read", action: "reading", target: "src/approval.ts", startedAt: Date.now() } });
     const h = harness([r]);
-    expect(h.render().join("\n")).toContain("reading src/approval.ts");
+    const output = h.render().join("\n");
+    expect(output).not.toContain("reading src/approval.ts");
+    expect(output).not.toMatch(/\d+s/);
+    expect(h.render()).toHaveLength(1);
     for (const w of [8, 20, 80]) for (const line of h.render(w)) expect(visibleWidth(line)).toBeLessThanOrEqual(w);
   });
   it("caps overflow", () => {
-    const rows = Array.from({ length: 8 }, (_, i) => record({ id: String(i), description: `task ${i}` }));
+    const rows = Array.from({ length: 12 }, (_, i) => record({ id: String(i), description: `task ${i}` }));
     expect(harness(rows).render().join("\n")).toMatch(/\+\d+ more/);
   });
-  it("prioritizes decision rows and renders the persistent alert", () => {
+  it("prioritizes decision rows and renders only the Alt+A hint", () => {
     const waiting = record({ id: "wait", description: "waiting task", status: "awaiting_decision", decision: { reason: "turn_limit", requestedAt: Date.now() - 42000, result: "status", turnCount: 10, toolUses: 2, maxTurns: 10 }, maxTurns: 10, turnCount: 10, window: { id: "@3", index: 3, name: "agent", state: "closed" } });
     const running = record({ id: "run", description: "running task", status: "running", updatedAt: Date.now() + 1000 });
-    const output = harness([running, waiting]).render().join("\\n");
-    expect(output.indexOf("needs input")).toBeGreaterThanOrEqual(0);
+    const output = harness([running, waiting]).render().join("\n");
+    expect(output).toContain("Alt+A open");
+    expect(output).not.toContain("needs input");
+    expect(output).not.toContain("⚠");
+    expect(output).not.toContain("↳");
     expect(output.indexOf("waiting task")).toBeLessThan(output.indexOf("running task"));
-    expect(output).toContain("Enter to reopen");
+    expect(output).toContain("(closed)");
+  });
+  it("highlights the waiting agent name", () => {
+    const waiting = record({ id: "wait", status: "awaiting_decision" });
+    const h = harness([waiting]);
+    const styledTheme = { fg: vi.fn((_color: string, text: string) => text), bold: (text: string) => text };
+    h.fleet.renderRows(styledTheme, "wait");
+    expect(styledTheme.fg).toHaveBeenCalledWith("warning", zellijName("wait"));
   });
 });
 
