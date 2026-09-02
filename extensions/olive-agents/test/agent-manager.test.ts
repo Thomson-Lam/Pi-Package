@@ -240,6 +240,57 @@ describe("AgentManager", () => {
     manager.dispose();
   });
 
+  it("marks a human-controlled settled run idle without returning model context", async () => {
+    const deps = makeDeps();
+    const onComplete = vi.fn();
+    const manager = new AgentManager(onComplete, 1, undefined, undefined, deps);
+    const id = await spawnBg(manager, makeCtx(), "interactive");
+    const rec = manager.getRecord(id)!;
+    emitChildEvent(rec.mailboxDir!, { type: "ready", sessionId: "s" });
+    await sleep(100);
+    emitChildEvent(rec.mailboxDir!, { type: "run_started", runNumber: 1, maxTurns: 10, mode: "automatic" });
+    emitChildEvent(rec.mailboxDir!, { type: "run_idle", runNumber: 1, reason: "interrupted", turnCount: 1, toolUses: 0 });
+    await sleep(150);
+    expect(manager.getRecord(id)?.status).toBe("idle");
+    expect(manager.getRecord(id)?.result).toBeUndefined();
+    expect(manager.hasRunning()).toBe(false);
+    expect(onComplete).not.toHaveBeenCalled();
+    manager.dispose();
+  });
+
+  it("accepts repeatable context checkpoints, releases the work slot, and acknowledges them", async () => {
+    const deps = makeDeps();
+    const onCheckpoint = vi.fn();
+    const manager = new AgentManager(undefined, 1, undefined, undefined, deps);
+    manager.setCallbacks({ onContextCheckpoint: onCheckpoint });
+    const id = await spawnBg(manager, makeCtx(), "checkpoint");
+    const rec = manager.getRecord(id)!;
+    emitChildEvent(rec.mailboxDir!, { type: "ready", sessionId: "s" });
+    await sleep(100);
+    emitChildEvent(rec.mailboxDir!, {
+      type: "context_checkpoint",
+      runNumber: 1,
+      checkpoint: {
+        version: 1,
+        id: "cp-1",
+        agentId: id,
+        sourceSessionName: "child",
+        createdAt: new Date().toISOString(),
+        reason: "completed",
+        selections: [{ kind: "message", entryId: "m1", role: "assistant", label: "assistant · done", text: "done" }],
+        coveredEntryIds: ["m1"],
+      },
+    });
+    await sleep(150);
+    expect(manager.getRecord(id)?.status).toBe("idle");
+    expect(manager.getRecord(id)?.result).toContain("done");
+    expect(manager.hasRunning()).toBe(false);
+    expect(onCheckpoint).toHaveBeenCalledTimes(1);
+    expect(manager.acknowledgeCheckpoint(id, "cp-1")).toBe(true);
+    expect(readPendingCommands(rec.mailboxDir!)).toContainEqual({ type: "ack_checkpoint", checkpointId: "cp-1" });
+    manager.dispose();
+  });
+
   it("child process death releases nothing and remains reopenable", async () => {
     const deps = makeDeps();
     const manager = new AgentManager(undefined, 1, undefined, undefined, deps);
@@ -408,6 +459,22 @@ describe("AgentManager", () => {
     await sleep(250);
     expect(manager.getRecord(id)).toBeUndefined();
     expect(deps.tmux).not.toHaveBeenCalledWith(expect.arrayContaining(["kill-window"]));
+    manager.dispose();
+  });
+
+  it("dismiss closes an idle child window (settled but durable)", async () => {
+    const deps = makeDeps({ focusedWindow: "@1" }); // window stays open after run_idle
+    const manager = new AgentManager(undefined, 2, undefined, undefined, deps);
+    const id = await spawnBg(manager, makeCtx(), "idle child");
+    const rec = manager.getRecord(id)!;
+    emitChildEvent(rec.mailboxDir!, { type: "ready", sessionId: "s", sessionFile: join(work, "c.jsonl") });
+    await sleep(200);
+    emitChildEvent(rec.mailboxDir!, { type: "run_idle", runNumber: 1, reason: "completed", turnCount: 2, toolUses: 1 });
+    await sleep(300);
+    expect(manager.getRecord(id)!.status).toBe("idle");
+    expect(await manager.dismiss(id)).toBe("dismissed");
+    expect(manager.getRecord(id)).toBeUndefined();
+    expect(deps.tmux).toHaveBeenCalledWith(expect.arrayContaining(["kill-window"]));
     manager.dispose();
   });
 

@@ -8,11 +8,11 @@ Components:
 - `src/agent-runner.ts` — launch-spec preparation (v3, optional ledger), max-turns/grace-turn normalization, and reopen descriptors.
 - `src/agent-types.ts` — embedded default + user-defined agent registry.
 - `src/approval.ts` — mandatory per-launch review/approval, with optional context-ledger building.
-- `src/child-host.mjs` — plain-ESM host booting each agent as a native Pi session in its own tmux window; persists the received ledger node into the child session.
+- `src/child-host.mjs` — thin plain-ESM bootstrap around native Pi InteractiveMode: opens each child in tmux, wires mailbox/lifecycle control, switches human-interrupted runs to unlimited interactive mode, and routes automatic Return or `/or` through the shared TypeScript context builder.
 - `src/child-extension-filter.mjs` — preserves the inline child-return bridge (`/or`) alongside the inherited parent-extension allow-list.
 - `src/context-ledger.ts` — durable context model: message extraction, snapshotting, prompt serialization, parent-context resolution, /ot graph loading, and agent-tree placement.
 - `src/cross-extension-rpc.ts` — ping/spawn/stop RPC over `pi.events`.
-- `src/event-mailbox.ts` — filesystem mailbox between parent and child sessions.
+- `src/event-mailbox.ts` — filesystem mailbox between parent and child sessions, including acknowledged incremental context checkpoints.
 - `src/group-join.ts` — grouped completion notifications for background agents.
 - `src/tmux-window.ts` — tmux window creation/management for agent hosts, incl. stable-name lookups for reopen dedup.
 - `src/ui/` — fleet overview (`fleet-list.ts`), context selection (`context-selection.ts`), and /ot tree (`context-tree.ts`, which doubles as the inheritance picker via select mode), plus formatting (`format.ts`).
@@ -26,8 +26,9 @@ Components:
 - `test/` — unit coverage for manager, runner, approval, context ledger, tree placement, mailbox, model resolution, and UI.
 
 Notes:
-- The context ledger persists into pi session JSONL files only (`olive-agent-context-link` in the parent session, `olive-agent-context-ledger` in the child session); nothing is written to the project workspace.
+- Context state persists into pi session JSONL files only (`olive-agent-context-link` in the parent, `olive-agent-context-ledger` plus incremental `olive-agent-context-return` checkpoints in the child); nothing is written to the project workspace.
 - Non-mutating compaction output uses pi's native summarizer without appending a compaction entry to the current session.
+- Automatic children open Continue/Return/Feedback when they settle; human interruption or input switches them to unlimited interactive mode, where only `/or` opens that selector. Both Return paths use the shared context builder and send only checkpoint-uncovered child messages.
 - Context-building flow: select messages → include existing context? (choose one agent; its parent chain follows automatically) → compact full conversation? → launch.
 - `/ot` renders agent sessions using context relationships only. Each row can show its passed context or focus/reopen the session; agents launched without context remain separate roots.
 - /ot rebuilds the tree from persisted entries after /resume; `--no-session` cannot rebuild.

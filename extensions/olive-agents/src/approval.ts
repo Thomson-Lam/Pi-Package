@@ -394,6 +394,75 @@ async function compactHandoff(
   }
 }
 
+export interface BuildLedgerContextOptions {
+  /** Return flows reuse the launch UI but must not resend inherited parent context. */
+  allowInheritance?: boolean;
+  title?: string;
+  nextHint?: string;
+  compactQuestion?: string;
+}
+
+/**
+ * Shared context-ledger builder used by launch approval and child-to-parent
+ * returns. It owns the native selection UI, optional inheritance, compaction
+ * configuration, output review, and re-compaction loop.
+ */
+export async function buildLedgerContext(
+  ctx: ExtensionContext,
+  registry: ModelRegistry,
+  request: Pick<ApprovalRequest, "model" | "thinking">,
+  contextInput: ApprovalContextInput,
+  options: BuildLedgerContextOptions = {},
+): Promise<BuiltLedgerContext | undefined> {
+  const builtSelection = await buildContextUI({
+    ctx,
+    branch: contextInput.branch,
+    title: options.title,
+    nextHint: options.nextHint,
+  });
+  if (!builtSelection) return undefined;
+
+  let inheritedNodes: ContextLedgerNode[] = [];
+  if (options.allowInheritance !== false && contextInput.candidates.length > 0) {
+    const wantInherit = (await ctx.ui.select("Include existing context?", ["Yes", "No"])) === "Yes";
+    if (wantInherit && contextInput.openInheritTree) {
+      const inherited = await contextInput.openInheritTree(contextInput.candidates[0]?.id);
+      if (inherited) inheritedNodes = inherited;
+    }
+  }
+
+  let summary: string | undefined;
+  for (;;) {
+    const compactChoice = await ctx.ui.select(
+      options.compactQuestion ?? "Compact the full conversation before sendoff?",
+      ["Default", "Custom", "None"],
+    );
+    if (compactChoice === "None" || !compactChoice) break;
+
+    const config = compactChoice === "Custom"
+      ? await configureHandoffCompaction(ctx, registry, {
+        model: request.model,
+        thinking: request.thinking,
+      })
+      : {
+        model: request.model,
+        thinking: request.thinking,
+        instructions: DEFAULT_HANDOFF_COMPACTION_PROMPT,
+      };
+    if (!config) continue;
+
+    summary = await compactHandoff(ctx, {
+      branch: contextInput.branch,
+      summarize: contextInput.summarize,
+      config,
+    });
+    break;
+  }
+
+  if (builtSelection.selectedIds.length === 0 && !summary && inheritedNodes.length === 0) return undefined;
+  return { selectedIds: builtSelection.selectedIds, summary, inheritedNodes };
+}
+
 /** Approve a manually prepared launch with only prompt review, launch, or cancel. */
 export async function approveManualLaunch(
   ctx: ExtensionContext,
@@ -466,63 +535,8 @@ export async function approveInvocation(
       continue;
     }
     if (action === "Build context") {
-      const builtSelection = await buildContextUI({
-        ctx,
-        branch: contextInput!.branch,
-      });
-      if (!builtSelection) continue; // cancelled / nothing selected
-
-      // Step 2: optionally choose one existing context. Its parent chain is
-      // included automatically; unrelated branches are never merged.
-      let inheritedNodes: ContextLedgerNode[] = [];
-      if (contextInput!.candidates.length > 0) {
-        const wantInherit = (await ctx.ui.select(
-          "Include existing context?",
-          ["Yes", "No"],
-        )) === "Yes";
-        if (wantInherit && contextInput!.openInheritTree) {
-          const inherited = await contextInput!.openInheritTree(contextInput!.candidates[0]?.id);
-          if (inherited) inheritedNodes = inherited;
-        }
-      }
-
-      // Step 3: choose compaction before making any summarization request.
-      // Cancelling a custom setting returns to this choice, rather than
-      // discarding the whole context-building flow.
-      let summary: string | undefined;
-      for (;;) {
-        const compactChoice = await ctx.ui.select(
-          "Compact the full conversation before sendoff?",
-          ["Default", "Custom", "None"],
-        );
-        if (compactChoice === "None" || !compactChoice) break;
-
-        const config = compactChoice === "Custom"
-          ? await configureHandoffCompaction(ctx, registry, {
-            model: request.model,
-            thinking: request.thinking,
-          })
-          : {
-            model: request.model,
-            thinking: request.thinking,
-            instructions: DEFAULT_HANDOFF_COMPACTION_PROMPT,
-          };
-        if (!config) continue;
-
-        summary = await compactHandoff(ctx, {
-          branch: contextInput!.branch,
-          summarize: contextInput!.summarize,
-          config,
-        });
-        break;
-      }
-
-      if (builtSelection.selectedIds.length === 0 && !summary && inheritedNodes.length === 0) continue;
-      built = {
-        selectedIds: builtSelection.selectedIds,
-        summary,
-        inheritedNodes,
-      };
+      const next = await buildLedgerContext(ctx, registry, request, contextInput!);
+      if (next) built = next;
       continue;
     }
     if (action === "Feedback to main agent") {

@@ -28,6 +28,9 @@ export interface ContextBuildResult {
 export interface ContextBuildInput {
   ctx: ExtensionContext;
   branch: SessionEntry[];
+  /** Display-only wording; selection behavior and layout stay identical. */
+  title?: string;
+  nextHint?: string;
 }
 
 function fullTextOf(branch: SessionEntry[], entryId: string): string {
@@ -80,6 +83,8 @@ export async function buildContextUI(
   input: ContextBuildInput,
 ): Promise<ContextBuildResult | undefined> {
   const { ctx, branch } = input;
+  const title = input.title ?? "Select context for sendoff";
+  const nextHint = input.nextHint ?? "existing context? → compact?";
 
   const messages = selectableMessages(branch);
   if (messages.length === 0) {
@@ -166,14 +171,14 @@ export async function buildContextUI(
       lines.push(bdr(`╭${hLine("─", innerWidth)}╮`));
 
       // ── Header: title ──
-      const header = `${acc(theme.bold("Select context for sendoff"))}  ${dim(`messages ${messages.length}`)}`;
+      const header = `${acc(theme.bold(title))}  ${dim(`messages ${messages.length}`)}`;
       lines.push(bdr("│") + " " + truncateToWidth(header, innerWidth - 2) + " " + bdr("│"));
 
       // ── Status row: selection count ──
       const count = selectedCount();
       const size = count > 0 ? ` · ~${Math.max(1, Math.round(selectedBytes() / 1024))}KB` : "";
       const selText = count === 0 ? dim("no items selected") : theme.fg("success", `${count} selected${size}`);
-      const status = `${selText}   ${dim("next: existing context? → compact?")}`;
+      const status = `${selText}   ${dim(`next: ${nextHint}`)}`;
       lines.push(bdr("│") + " " + truncateToWidth(status, innerWidth - 2) + " " + bdr("│"));
 
       // ── Separator ──
@@ -219,7 +224,7 @@ export async function buildContextUI(
         acc("j/k") + dim(" move"),
         acc("space") + dim(" select"),
         acc("enter") + dim(" preview"),
-        acc("esc") + dim(" done → existing context?"),
+        acc("esc") + dim(` done → ${nextHint}`),
       ].join(dim("  ·  "));
       lines.push(bdr("│") + " " + truncateToWidth(hints, innerWidth - 2) + " " + bdr("│"));
 

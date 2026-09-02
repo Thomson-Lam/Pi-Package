@@ -17,14 +17,19 @@ import { clampThinkingLevel } from "@earendil-works/pi-ai";
 import { Type } from "typebox";
 import { AgentManager } from "./agent-manager.js";
 import { getDefaultMaxTurns, getGraceTurns, normalizeMaxTurns, SUBAGENT_TOOL_NAMES, setDefaultMaxTurns, setGraceTurns, validateMaxTurns } from "./agent-runner.js";
-import { approveInvocation, approveManualLaunch, availableThinkingLevels, selectSubagentModel, type ApprovalContextInput, type BuiltLedgerContext } from "./approval.js";
+import { approveInvocation, approveManualLaunch, availableThinkingLevels, buildLedgerContext, selectSubagentModel, type ApprovalContextInput, type BuiltLedgerContext } from "./approval.js";
 import { getAgentConfig, getAllTypes, getAvailableTypes, isDefaultsDisabled, registerAgents, resolveType, setDefaultsDisabled } from "./agent-types.js";
 import {
   CONTEXT_LINK_ENTRY,
+  CONTEXT_RETURN_ENTRY,
   type ContextLedgerNode,
   type ContextLinkData,
+  type ContextReturnCheckpoint,
+  contextReturnToMarkdown,
+  finalizeContextReturn,
   finalizeLedgerContext,
   getSessionLedgerNode,
+  returnableContextEntries,
   getSessionLinks,
   loadLedgerGraph,
   plainEntries,
@@ -302,6 +307,63 @@ function buildNotificationDetails(record: AgentRecord, resultMaxLen: number, act
 }
 
 export default function (pi: ExtensionAPI) {
+  // The plain child bootstrap requests this shared TypeScript flow over the
+  // in-process event bus. This keeps /or and automatic Return on the exact
+  // same selector/compaction implementation as launch approval.
+  const unsubscribeReturnBuilder = pi.events.on("olive-agents:return-context-request", async (raw: unknown) => {
+    const request = raw as {
+      agentId?: string;
+      reason?: ContextReturnCheckpoint["reason"];
+      ctx?: ExtensionContext;
+      respond?: (result: { checkpoint?: ContextReturnCheckpoint; cancelled?: boolean; error?: string }) => void;
+    };
+    if (!request.agentId || !request.ctx || !request.respond) return;
+    const childCtx = request.ctx;
+    try {
+      const allEntries = childCtx.sessionManager.getBranch();
+      const branch = returnableContextEntries(allEntries);
+      if (!branch.some((entry) => entry.type === "message")) {
+        childCtx.ui.notify("No new child context is available to return.", "info");
+        request.respond({ cancelled: true });
+        return;
+      }
+      if (!childCtx.model) throw new Error("No active child model is available for context compaction.");
+      const built = await buildLedgerContext(
+        childCtx,
+        childCtx.modelRegistry,
+        { model: childCtx.model, thinking: childCtx.thinkingLevel ?? "off" },
+        {
+          branch,
+          candidates: [],
+          summarize: (entries, selectedIds, model, thinking, customInstructions) =>
+            summarizeSelections(childCtx.modelRegistry, { branch: entries, selectedIds, model, thinking, customInstructions }),
+        },
+        {
+          allowInheritance: false,
+          title: "Select context to return to parent",
+          nextHint: "compact? → return",
+          compactQuestion: "Compact all new child conversation before return?",
+        },
+      );
+      if (!built) {
+        request.respond({ cancelled: true });
+        return;
+      }
+      const checkpoint = finalizeContextReturn({
+        agentId: request.agentId,
+        built,
+        branch,
+        sourceSessionFile: childCtx.sessionManager.getSessionFile(),
+        sourceSessionName: sessionLabel(childCtx),
+        reason: request.reason ?? "manual",
+      });
+      pi.appendEntry(CONTEXT_RETURN_ENTRY, checkpoint);
+      request.respond({ checkpoint });
+    } catch (error) {
+      request.respond({ error: error instanceof Error ? error.message : String(error) });
+    }
+  });
+
   // ---- Register custom notification renderer ----
   pi.registerMessageRenderer<NotificationDetails>(
     "subagent-notification",
@@ -466,6 +528,8 @@ export default function (pi: ExtensionAPI) {
     };
   }
 
+  const receivedCheckpointIds = new Set<string>();
+
   // Background completion: route through group join or send individual nudge
   const manager = new AgentManager((record) => {
     // Emit lifecycle event based on terminal status
@@ -553,6 +617,44 @@ export default function (pi: ExtensionAPI) {
         },
       }, { deliverAs: "followUp", triggerTurn: true });
     },
+    onContextCheckpoint: (record, checkpoint) => {
+      if (receivedCheckpointIds.has(checkpoint.id)) {
+        manager.acknowledgeCheckpoint(record.id, checkpoint.id);
+        return;
+      }
+      const markdown = contextReturnToMarkdown(checkpoint);
+      try {
+        // Persist model context first. If the process dies before the receipt
+        // entry, session_start also recovers ids from these custom messages.
+        pi.sendMessage({
+          customType: "subagent-context-checkpoint",
+          content: [
+            `Agent context checkpoint from "${record.description}".`,
+            "",
+            "<agent-context-checkpoint>",
+            `<agent-id>${escapeXml(record.id)}</agent-id>`,
+            `<checkpoint-id>${escapeXml(checkpoint.id)}</checkpoint-id>`,
+            `<source-session>${escapeXml(checkpoint.sourceSessionName)}</source-session>`,
+            "<context>",
+            escapeXml(markdown),
+            "</context>",
+            "</agent-context-checkpoint>",
+          ].join("\n"),
+          display: true,
+          details: { checkpointId: checkpoint.id, agentId: record.id, markdown },
+        }, { deliverAs: "followUp", triggerTurn: true });
+        pi.appendEntry("olive-agent-context-return-received", {
+          version: 1,
+          checkpointId: checkpoint.id,
+          agentId: record.id,
+          receivedAt: new Date().toISOString(),
+        });
+        receivedCheckpointIds.add(checkpoint.id);
+        manager.acknowledgeCheckpoint(record.id, checkpoint.id);
+      } catch (error) {
+        console.error("[olive-agents] failed to persist returned child context:", error instanceof Error ? error.message : error);
+      }
+    },
     // Persist the child-session link in the parent session so /ot can rebuild
     // the context tree after a resume, and /ot can reopen the child session.
     onLink: (link: ContextLinkData) => {
@@ -602,6 +704,20 @@ export default function (pi: ExtensionAPI) {
   // bound session_start, so a filtered-out activation never advertises (#142).
   pi.on("session_start", async (_event, ctx) => {
     currentCtx = ctx;
+    receivedCheckpointIds.clear();
+    for (const entry of ctx.sessionManager.getEntries()) {
+      if (entry.type === "custom" && entry.customType === "olive-agent-context-return-received") {
+        const checkpointId = (entry.data as { checkpointId?: unknown } | undefined)?.checkpointId;
+        if (typeof checkpointId === "string") receivedCheckpointIds.add(checkpointId);
+        continue;
+      }
+      if (entry.type === "message") {
+        const message = entry.message as { role?: string; customType?: string; details?: { checkpointId?: unknown } };
+        if (message.role === "custom" && message.customType === "subagent-context-checkpoint" && typeof message.details?.checkpointId === "string") {
+          receivedCheckpointIds.add(message.details.checkpointId);
+        }
+      }
+    }
     fleet.setUICtx(ctx.ui as unknown as FleetUICtx);
     // Reattach mailbox watchers before handling new work. Child windows outlive
     // the parent, so a pending decision or /or release may have happened while
@@ -670,6 +786,7 @@ export default function (pi: ExtensionAPI) {
     rpcHandle?.unsubPing();
     rpcHandle = undefined;
     currentCtx = undefined;
+    unsubscribeReturnBuilder();
     // Only release the global slot if this activation claimed it — a child
     // session's shutdown must not delete the root session's registry entry.
     if (ownsManagerRegistry && (globalThis as any)[MANAGER_KEY] === registryEntry) {
@@ -876,7 +993,7 @@ If the target is already known, use a direct tool — \`read\` for a known path,
 
 - Always include a short (3-5 word) description summarizing what the agent will do (shown in UI).
 - When you launch multiple agents for independent work, send them in a single message with multiple tool uses, with run_in_background: true on each, so they run concurrently. If the user specifies that they want agents run "in parallel", you MUST send a single message with multiple tool calls.
-- Every fresh run requires max_turns, a positive work-turn limit. Natural completion and the turn ceiling wait for the human to choose Continue, Return, or Feedback; only Return releases the result.
+- Every fresh delegated run requires max_turns, a positive work-turn limit. Without human input, natural completion and the turn ceiling open Continue, Return, or Feedback automatically. Human interruption/input switches the child to unlimited interactive mode; /or then opens that selector. Return uses the context builder and may be repeated later for new, unsent context.
 - Trust but verify: an agent's summary describes what it intended to do, not necessarily what it did. When an agent writes or edits code, check the actual changes before reporting work as done.
 - Leave run_in_background false or omit it to detach from the child: the Agent tool returns immediately and terminates the current parent loop. The parent accepts the next user prompt while the child continues.
 - Set run_in_background true only when the parent should continue its current loop after launch. Both modes notify the parent after the human returns the child result.
@@ -990,7 +1107,7 @@ The child starts fresh and receives only the self-contained task prompt.
       }),
       run_in_background: Type.Optional(
         Type.Boolean({
-          description: "Set true to let the current parent loop continue after launch. False/omitted detaches from the child, returns immediately, and terminates the current parent loop. Both modes notify the parent when the child result is returned.",
+          description: "Set true to let the current parent loop continue after launch. False/omitted detaches from the child, returns immediately, and terminates the current parent loop. Both modes notify the parent when the child returns a context checkpoint.",
         }),
       ),
       resume: Type.Optional(
@@ -1349,7 +1466,7 @@ The child starts fresh and receives only the self-contained task prompt.
         (detached
           ? `\nThe current parent loop has ended. The parent can accept the next user prompt while the child continues.\n`
           : `\nThe current parent loop may continue while the child runs.\n`) +
-        `The parent will be notified after the child result is returned.\n` +
+        `The parent will be notified after the child returns a context checkpoint.\n` +
         `Use get_subagent_result to inspect status without waiting.\n` +
         `Do not duplicate this agent's work.`,
         { ...detailBase, toolUses: 0, tokens: "", durationMs: 0, status: detached ? "detached" : "background", agentId: id },
@@ -1372,7 +1489,7 @@ The child starts fresh and receives only the self-contained task prompt.
       }),
       wait: Type.Optional(
         Type.Boolean({
-          description: "If true, wait until the child result is explicitly returned. This can block at the human decision gate. Default: false.",
+          description: "If true, wait until the child returns a context checkpoint. This can block at the human decision gate. Default: false.",
         }),
       ),
       verbose: Type.Optional(
@@ -1422,7 +1539,7 @@ The child starts fresh and receives only the self-contained task prompt.
       if (record.status === "running" || record.status === "queued") {
         output += "Agent is still running. Use wait: true or check back later.";
       } else if (record.status === "awaiting_decision") {
-        output += "Status: awaiting human decision\nThe child has produced a response, but it has not been returned.\nOpen its tmux window with Alt+A.";
+        output += "Status: awaiting human decision\nThe child has produced a response, but no context checkpoint has been returned.\nOpen its tmux window with Alt+A.";
       } else if (record.status === "error") {
         output += `Error: ${record.error}${partialOutputSuffix(record)}`;
       } else {
@@ -1847,6 +1964,8 @@ The child starts fresh and receives only the self-contained task prompt.
                   ctx.ui.notify("Only finished agents can be dismissed — focus its window to stop it.", "info");
                   return;
                 }
+                // Idle children are settled but durable: closing their window
+                // keeps the session file, so dismiss is allowed.
                 const id = rec.id;
                 void manager.dismiss(id).then((outcome) => {
                   if (outcome === "failed") {

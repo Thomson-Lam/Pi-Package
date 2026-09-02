@@ -17,6 +17,7 @@
 
 import { chmodSync, existsSync, mkdirSync, readdirSync, readFileSync, renameSync, rmSync, watch, writeFileSync } from "node:fs";
 import { join } from "node:path";
+import type { ContextReturnCheckpoint } from "./context-ledger.js";
 
 export interface LifetimeUsageReport { input: number; output: number; cacheWrite: number }
 
@@ -34,12 +35,14 @@ export interface PendingDecisionState {
 
 export interface ChildEventMap {
   ready: { sessionId: string; sessionFile?: string };
-  run_started: { runNumber: number; maxTurns?: number };
+  run_started: { runNumber: number; maxTurns?: number; mode?: "automatic" | "interactive" };
   tool_started: { runNumber?: number; toolName: string; target?: string };
   tool_finished: { runNumber?: number; toolName: string };
   turn_finished: { runNumber?: number; turnCount: number };
   human_steer: { runNumber?: number; text: string };
+  run_idle: { runNumber: number; reason: "completed" | "turn_limit" | "interrupted"; turnCount: number; toolUses: number; maxTurns?: number };
   decision_required: PendingDecisionState;
+  context_checkpoint: { runNumber: number; checkpoint: ContextReturnCheckpoint };
   run_settled: {
     runNumber: number;
     status: "completed" | "steered" | "aborted" | "stopped" | "error";
@@ -63,6 +66,7 @@ export type ChildEvent = { [K in keyof ChildEventMap]: { type: K } & ChildEventM
 export interface ParentCommandMap {
   follow_up: { message: string; maxTurns: number };
   abort: {};
+  ack_checkpoint: { checkpointId: string };
   shutdown: {};
 }
 

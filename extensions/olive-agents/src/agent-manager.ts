@@ -12,14 +12,14 @@
  */
 
 import { randomUUID } from "node:crypto";
-import { existsSync, readdirSync } from "node:fs";
+import { existsSync, readdirSync, readFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import type { Model } from "@earendil-works/pi-ai";
 import type { ExtensionAPI, ExtensionContext } from "@earendil-works/pi-coding-agent";
 import { getPackageDir } from "@earendil-works/pi-coding-agent";
 import { type AgentLaunchSpec, buildReopenDescriptor, prepareAgentLaunch, validateMaxTurns, writeLaunchSpec } from "./agent-runner.js";
-import { type ContextLedgerNode, type ContextLinkData } from "./context-ledger.js";
+import { contextReturnToMarkdown, type ContextLedgerNode, type ContextLinkData, type ContextReturnCheckpoint } from "./context-ledger.js";
 import { type ChildEvent, ensureMailboxDir, readPendingDecision, removeMailboxDir, watchChildEvents, writeParentCommand } from "./event-mailbox.js";
 import { createAgentWindow, execFromPi, findWindowByName as findTmuxWindowByName, focusWindow as focusTmuxWindow, killWindow as killTmuxWindow, shellQuote, windowAlive as tmuxWindowAlive, type TmuxExec } from "./tmux-window.js";
 import { agentSessionName, agentWindowName } from "./names.js";
@@ -62,6 +62,7 @@ export type OnAgentStart = (record: AgentRecord) => void;
 export type OnAgentCompact = (record: AgentRecord, info: { reason: string; tokensBefore: number }) => void;
 export type OnAgentReady = (record: AgentRecord, identity: NonNullable<AgentRecord["childSession"]>) => void;
 export type OnHumanSteer = (record: AgentRecord, text: string) => void;
+export type OnContextCheckpoint = (record: AgentRecord, checkpoint: ContextReturnCheckpoint) => void;
 
 /** Injectable side-effect surface (tests provide mocks). */
 export interface ManagerDeps {
@@ -80,6 +81,9 @@ const WINDOW_POLL_MS = 15_000;
 
 function isDecisionPending(record: AgentRecord): boolean { return record.status === "awaiting_decision"; }
 function isActiveRecord(record: AgentRecord): boolean {
+  return record.status === "queued" || record.status === "running" || record.status === "idle" || isDecisionPending(record);
+}
+function isWorkActive(record: AgentRecord): boolean {
   return record.status === "queued" || record.status === "running" || isDecisionPending(record);
 }
 function isTerminalRecord(record: AgentRecord): boolean { return !isActiveRecord(record); }
@@ -125,6 +129,7 @@ export class AgentManager {
   private onCompact?: OnAgentCompact;
   private onReady?: OnAgentReady;
   private onHumanSteer?: OnHumanSteer;
+  private onContextCheckpoint?: OnContextCheckpoint;
   private onLink?: (link: ContextLinkData) => void;
   private maxConcurrent: number;
   private queue: { id: string; args: { pi: ExtensionAPI; ctx: ExtensionContext; type: SubagentType; prompt: string; options: SpawnOptions } }[] = [];
@@ -156,9 +161,10 @@ export class AgentManager {
   }
 
   /** Callback wiring (set after construction to avoid long constructor args). */
-  setCallbacks(cb: { onReady?: OnAgentReady; onHumanSteer?: OnHumanSteer; onLink?: (link: ContextLinkData) => void }): void {
+  setCallbacks(cb: { onReady?: OnAgentReady; onHumanSteer?: OnHumanSteer; onContextCheckpoint?: OnContextCheckpoint; onLink?: (link: ContextLinkData) => void }): void {
     if (cb.onReady) this.onReady = cb.onReady;
     if (cb.onHumanSteer) this.onHumanSteer = cb.onHumanSteer;
+    if (cb.onContextCheckpoint) this.onContextCheckpoint = cb.onContextCheckpoint;
     if (cb.onLink) this.onLink = cb.onLink;
   }
 
@@ -347,7 +353,10 @@ export class AgentManager {
     record.window = { id: created.id, index: created.index, name: created.name, state: "starting" };
     record.startedAt = Date.now();
     record.updatedAt = Date.now();
-    if (options.isBackground) this.runningBackground++;
+    if (options.isBackground) {
+      this.runningBackground++;
+      record.slotActive = true;
+    }
     this.onStart?.(record);
     this.emit({ type: "started", record });
 
@@ -499,6 +508,50 @@ export class AgentManager {
         break;
       }
 
+      case "run_idle": {
+        if (event.runNumber < record.runNumber) break;
+        record.runNumber = event.runNumber;
+        record.status = "idle";
+        record.turnCount = event.turnCount;
+        record.toolUses = Math.max(record.toolUses, event.toolUses);
+        record.maxTurns = event.maxTurns;
+        record.decision = undefined;
+        record.completedAt = undefined;
+        record.updatedAt = Date.now();
+        if (record.slotActive) {
+          this.runningBackground = Math.max(0, this.runningBackground - 1);
+          record.slotActive = false;
+          void this.drainQueue();
+        }
+        this.emit({ type: "updated", record });
+        break;
+      }
+
+      case "context_checkpoint": {
+        const checkpoint = event.checkpoint;
+        const seen = new Set(record.checkpointIds ?? []);
+        if (seen.has(checkpoint.id)) {
+          this.onContextCheckpoint?.(record, checkpoint);
+          break;
+        }
+        seen.add(checkpoint.id);
+        record.checkpointIds = [...seen];
+        record.latestCheckpoint = checkpoint;
+        record.result = contextReturnToMarkdown(checkpoint);
+        record.status = "idle";
+        record.completedAt = undefined;
+        record.decision = undefined;
+        record.updatedAt = Date.now();
+        if (record.slotActive) {
+          this.runningBackground = Math.max(0, this.runningBackground - 1);
+          record.slotActive = false;
+          void this.drainQueue();
+        }
+        this.onContextCheckpoint?.(record, checkpoint);
+        this.emit({ type: "updated", record });
+        break;
+      }
+
       case "decision_required": {
         if (event.maxTurns !== undefined && (!Number.isInteger(event.maxTurns) || event.maxTurns < 1)) break;
         if (event.runNumber < record.runNumber || (event.runNumber === record.runNumber && record.status !== "running")) break;
@@ -581,7 +634,10 @@ export class AgentManager {
       record.resultConsumed = true;
       try { this.onComplete?.(record); } catch { /* ignore */ }
     } else {
-      this.runningBackground = Math.max(0, this.runningBackground - 1);
+      if (record.slotActive) {
+        this.runningBackground = Math.max(0, this.runningBackground - 1);
+        record.slotActive = false;
+      }
       try { this.onComplete?.(record); } catch { /* ignore */ }
       void this.drainQueue();
     }
@@ -621,7 +677,10 @@ export class AgentManager {
   async dismiss(id: string): Promise<"dismissed" | "missing" | "active" | "failed"> {
     const record = this.agents.get(id);
     if (!record) return "active";
-    if (isActiveRecord(record)) return "active";
+    // Only in-flight work (or a run parked at the decision gate) is
+    // protected from dismissal. Idle children are settled and durable —
+    // closing their tmux window keeps the session file for /ot reopen.
+    if (isWorkActive(record)) return "active";
 
     if (record.window && record.window.state !== "closed") {
       if (!(await tmuxWindowAlive(this.deps.tmux, record.window.id))) {
@@ -780,6 +839,14 @@ export class AgentManager {
     return this.agents.get(id);
   }
 
+  /** Acknowledge a durable context checkpoint after the parent persisted it. */
+  acknowledgeCheckpoint(id: string, checkpointId: string): boolean {
+    const record = this.agents.get(id);
+    if (!record?.mailboxDir) return false;
+    writeParentCommand(record.mailboxDir, { type: "ack_checkpoint", checkpointId });
+    return true;
+  }
+
   getRecord(id: string): AgentRecord | undefined {
     return this.agents.get(id);
   }
@@ -902,6 +969,8 @@ export class AgentManager {
     // resumed parent receives the normal completion notification.
     const pending = readPendingDecision(mailboxDir);
     const released = existsSync(join(mailboxDir, "released-decision.json"));
+    let bridgeState: { status?: string; mode?: string; maxTurns?: number } | undefined;
+    try { bridgeState = JSON.parse(readFileSync(join(mailboxDir, "bridge-state.json"), "utf-8")); } catch {}
     let hasQueuedEvents = false;
     try { hasQueuedEvents = readdirSync(join(mailboxDir, "events")).some((name) => name.endsWith(".json")); } catch {}
     // If an earlier parent already consumed the release, do not resurrect the
@@ -909,7 +978,7 @@ export class AgentManager {
     if (released && !hasQueuedEvents) return false;
     const windowName = agentWindowName(link.agentId, link.agentType);
     const live = await findTmuxWindowByName(this.deps.tmux, windowName);
-    if (!pending && !released && !live) return false;
+    if (!pending && !released && !live && !bridgeState) return false;
 
     const spec: AgentLaunchSpec = {
       version: 3,
@@ -926,9 +995,10 @@ export class AgentManager {
       bridge: { mailboxDir },
     };
     const startedAt = Date.parse(link.createdAt) || Date.now();
+    const restoredIdle = bridgeState?.status === "idle" || (pending != null && bridgeState?.mode === "interactive");
     const record: AgentRecord = {
       id: link.agentId, type: link.agentType, description: link.description,
-      status: pending ? "awaiting_decision" : "running", decision: pending ? { ...pending } : undefined,
+      status: restoredIdle ? "idle" : pending ? "awaiting_decision" : "running", decision: pending ? { ...pending } : undefined,
       toolUses: pending?.toolUses ?? 0, startedAt, lifetimeUsage: pending?.usage ? { ...pending.usage } : { input: 0, output: 0, cacheWrite: 0 },
       compactionCount: pending?.compactions ?? 0, originalPrompt: "", effectivePrompt: "", updatedAt: Date.now(),
       runNumber: pending?.runNumber ?? 0, turnCount: pending?.turnCount ?? 0, maxTurns: pending?.maxTurns ?? reopen.maxTurns,
@@ -939,7 +1009,10 @@ export class AgentManager {
       ...(live ? { window: { id: live.id, index: live.index, name: live.name, state: "alive" as const } } : {}),
     };
     this.agents.set(record.id, record);
-    this.runningBackground++;
+    if (!restoredIdle) {
+      this.runningBackground++;
+      record.slotActive = true;
+    }
     this.emit({ type: "created", record });
     const watcher = watchChildEvents(mailboxDir, (events) => {
       for (const event of events) this.handleChildEvent(record.id, event, { description: record.description });
@@ -1057,7 +1130,7 @@ export class AgentManager {
   /** Whether any agents are still running or queued. */
   hasRunning(): boolean {
     return [...this.agents.values()].some(
-      (r) => isActiveRecord(r),
+      (r) => isWorkActive(r),
     );
   }
 

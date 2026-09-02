@@ -109,21 +109,41 @@ if (!model) {
 
 let nativeSystemPrompt;
 let bridgeContext;
+let bridgePi;
 
 const bridgeFactory = (pi) => {
+  bridgePi = pi;
   // Restore the native prompt after other extensions have processed the hook.
   registerPromptPolicy(pi, spec.runtime.promptPolicy, () => nativeSystemPrompt);
 
   pi.on("session_start", (_event, ctx) => { bridgeContext = ctx; });
   pi.registerCommand("or", {
-    description: "Return the pending child result to the parent",
-    handler: async (_args, ctx) => { await returnPending("human_return", ctx); },
+    description: "Return new child context to the parent",
+    handler: async (_args, ctx) => {
+      if (inRun || session?.isStreaming) {
+        ctx.ui.notify?.("Wait for the current response before opening /or.", "warning");
+        return;
+      }
+      const decision = pendingDecision ?? {
+        runNumber: Math.max(1, runNumber), reason: "completed",
+        result: assistantText(lastAssistant(session)), turnCount,
+        maxTurns: currentMaxTurns, toolUses, requestedAt: Date.now(),
+        compactions, usage: usageOf(session),
+      };
+      await returnContext(decision, ctx);
+    },
   });
-  // Human steering detection and implicit continuation after Escape.
+  // Any direct human work transfers control from the delegated automatic run
+  // to an unlimited interactive conversation. The initial task payload is
+  // delivered through the same input channel but is NOT a human intervention,
+  // so the mode switch is gated on the session having actually started work.
   pi.on("input", (event) => {
     const text = typeof event?.text === "string" ? event.text : "";
-    if (pendingDecision && !decisionGateActive && event?.source === "interactive" && text.trim() && text.trim() !== "/or") {
-      clearPendingForContinuation();
+    if (event?.source === "interactive" && text.trim() && text.trim() !== "/or") {
+      if (workStarted) {
+        enterInteractiveMode();
+        if (pendingDecision && !decisionGateActive) clearPendingForContinuation();
+      }
     }
     if (event?.source === "interactive" && event.streamingBehavior && text.trim()) {
       emitEvent(spec.bridge.mailboxDir, { type: "human_steer", runNumber, text: text.slice(0, 500) });
@@ -196,15 +216,27 @@ let ceilingTriggered = false;
 let reconciliationRun = false;
 let pendingDecision = null;
 let decisionGateActive = false;
-let decisionReturned = false;
+let interactiveMode = false;
+let workStarted = false;
 let originalTools = session.getActiveToolNames();
 const pendingDecisionPath = join(spec.bridge.mailboxDir, "pending-decision.json");
-const releasedDecisionPath = join(spec.bridge.mailboxDir, "released-decision.json");
+const bridgeStatePath = join(spec.bridge.mailboxDir, "bridge-state.json");
 try { pendingDecision = JSON.parse(readFileSync(pendingDecisionPath, "utf-8")); } catch {}
 if (pendingDecision?.runNumber) {
   runNumber = pendingDecision.runNumber;
   currentMaxTurns = pendingDecision.maxTurns;
+  workStarted = true;
 }
+try {
+  const modeEntries = sessionManager.getEntries().filter((entry) =>
+    entry?.type === "custom" && entry.customType === "olive-agent-control-mode"
+  );
+  interactiveMode = modeEntries.at(-1)?.data?.mode === "interactive";
+  if (interactiveMode) {
+    currentMaxTurns = undefined;
+    workStarted = true;
+  }
+} catch {}
 
 function targetOf(args) {
   if (!args || typeof args !== "object") return undefined;
@@ -247,46 +279,101 @@ function usageOf(s) {
   } catch { return undefined; }
 }
 
+function persistBridgeState(status) {
+  try {
+    writeJsonAtomic(bridgeStatePath, {
+      version: 1,
+      status,
+      mode: interactiveMode ? "interactive" : "automatic",
+      runNumber,
+      turnCount,
+      maxTurns: currentMaxTurns,
+      updatedAt: Date.now(),
+    });
+  } catch {}
+}
+
+function emitInteractiveIdle(reason) {
+  persistBridgeState("idle");
+  emitEvent(spec.bridge.mailboxDir, {
+    type: "run_idle",
+    runNumber,
+    reason,
+    turnCount,
+    toolUses,
+    maxTurns: currentMaxTurns,
+  });
+}
+
+function enterInteractiveMode() {
+  if (interactiveMode) return;
+  interactiveMode = true;
+  currentMaxTurns = undefined;
+  ceilingTriggered = false;
+  try { session.setActiveToolsByName(originalTools); } catch {}
+  try { bridgePi?.appendEntry?.("olive-agent-control-mode", { version: 1, mode: "interactive", changedAt: new Date().toISOString() }); } catch {}
+  persistBridgeState(inRun ? "running" : "idle");
+}
+
+function enterAutomaticMode(maxTurns) {
+  interactiveMode = false;
+  currentMaxTurns = maxTurns;
+  ceilingTriggered = false;
+  try { bridgePi?.appendEntry?.("olive-agent-control-mode", { version: 1, mode: "automatic", changedAt: new Date().toISOString() }); } catch {}
+  persistBridgeState(inRun ? "running" : "idle");
+}
+
 function clearPendingForContinuation() {
   pendingDecision = null;
-  decisionReturned = false;
   ceilingTriggered = false;
   reconciliationRun = false;
   parentAborted = false;
   try { rmSync(pendingDecisionPath, { force: true }); } catch {}
-  try { rmSync(releasedDecisionPath, { force: true }); } catch {}
   try { session.setActiveToolsByName(originalTools); } catch {}
 }
 
-async function returnPending(releaseReason, ctx = bridgeContext) {
+async function buildReturnCheckpoint(decision, ctx = bridgeContext) {
+  if (!bridgePi?.events?.emit) throw new Error("child return bridge is unavailable");
+  return new Promise((resolve, reject) => {
+    let settled = false;
+    const finish = (result) => {
+      if (settled) return;
+      settled = true;
+      clearTimeout(timer);
+      if (result?.error) reject(new Error(result.error));
+      else resolve(result);
+    };
+    const timer = setTimeout(() => finish({ error: "context builder did not respond" }), 60_000 * 30);
+    bridgePi.events.emit("olive-agents:return-context-request", {
+      agentId: spec.agent.id,
+      reason: decision.reason === "turn_limit" ? "turn_limit" : decision.reason === "aborted" ? "interrupted" : "completed",
+      ctx,
+      respond: finish,
+    });
+  });
+}
+
+async function returnContext(decision, ctx = bridgeContext) {
   if (inRun || session.isStreaming) {
     ctx?.ui?.notify?.("Wait for the current response before returning.", "warning");
     return false;
   }
-  if (!pendingDecision || decisionReturned) {
-    ctx?.ui?.notify?.(decisionReturned ? "This result was already returned to the parent." : "No child result is waiting to be returned.", "info");
-    return false;
-  }
-  const decision = pendingDecision;
-  const status = decision.reason === "aborted" ? "stopped" : "completed";
   try {
-    // Persist before emitting: a resumed parent can distinguish an already
-    // returned child from one that is still active.
-    writeJsonAtomic(releasedDecisionPath, { ...decision, status, releasedAt: Date.now() });
+    const built = await buildReturnCheckpoint(decision, ctx);
+    if (!built?.checkpoint) return false;
     emitEvent(spec.bridge.mailboxDir, {
-      type: "run_settled", runNumber: decision.runNumber, status,
-      result: decision.result, turnCount: decision.turnCount, toolUses: decision.toolUses,
-      compactions: decision.compactions, usage: decision.usage,
-      releaseReason, decisionReason: decision.reason,
+      type: "context_checkpoint",
+      runNumber: decision.runNumber,
+      checkpoint: built.checkpoint,
     });
   } catch (err) {
-    ctx?.ui?.notify?.(`Could not return the child result: ${err?.message ?? err}`, "error");
+    ctx?.ui?.notify?.(`Could not return child context: ${err?.message ?? err}`, "error");
     return false;
   }
-  decisionReturned = true;
   pendingDecision = null;
   try { rmSync(pendingDecisionPath, { force: true }); } catch {}
-  ctx?.ui?.notify?.("Child result returned to the parent.", "info");
+  persistBridgeState("idle");
+  ctx?.ui?.notify?.("Selected child context returned to the parent.", "info");
   return true;
 }
 
@@ -298,10 +385,11 @@ async function waitForBridgeContext() {
 }
 
 async function showDecisionGate(decision) {
-  if (decisionGateActive || decisionReturned || !decision) return;
+  if (decisionGateActive || !decision) return;
   decisionGateActive = true;
   pendingDecision = decision;
   try { writeJsonAtomic(pendingDecisionPath, decision); } catch {}
+  persistBridgeState("awaiting_decision");
   emitEvent(spec.bridge.mailboxDir, { type: "decision_required", ...decision });
   const title = decision.reason === "turn_limit" ? "Turn limit reached" : "Agent response ready";
   let continuationPrompt;
@@ -319,7 +407,7 @@ async function showDecisionGate(decision) {
         continuationPrompt = feedback;
       }
     } else if (choice === "Return to parent") {
-      await returnPending("human_return");
+      await returnContext(decision, ctx);
     } else {
       ctx.ui.notify?.("Decision remains pending. Use /or to return, or enter another prompt to continue.", "info");
     }
@@ -332,7 +420,7 @@ async function showDecisionGate(decision) {
   // settle while decisionGateActive is still true and lose its next selector.
   if (continuationPrompt) {
     try {
-      await session.prompt(continuationPrompt);
+      await session.prompt(continuationPrompt, { source: "extension" });
     } catch (err) {
       bridgeContext?.ui?.notify?.(`Could not continue the agent: ${err?.message ?? err}`, "warning");
       await showDecisionGate(decision);
@@ -343,7 +431,7 @@ async function showDecisionGate(decision) {
 async function requestReconciliation(s) {
   reconciliationRun = true;
   try {
-    await s.prompt("The work-turn limit has been reached. Do not continue executing the task. Report current status for the human: work completed, remaining work, blockers, and the next action you would take.");
+    await s.prompt("The work-turn limit has been reached. Do not continue executing the task. Report current status for the human: work completed, remaining work, blockers, and the next action you would take.", { source: "extension" });
   } catch {
     reconciliationRun = false;
     await showDecisionGate({ runNumber, reason: "turn_limit", result: "No status response was produced. Review the session before deciding.", turnCount, maxTurns: currentMaxTurns, toolUses, requestedAt: Date.now(), compactions, usage: usageOf(s) });
@@ -356,12 +444,14 @@ function subscribeTo(s) {
       case "agent_start":
         if (!inRun) {
           inRun = true;
+          persistBridgeState("running");
           if (!reconciliationRun) {
+            workStarted = true;
             runNumber++;
             turnCount = 0;
             toolUses = 0;
             parentAborted = false;
-            emitEvent(spec.bridge.mailboxDir, { type: "run_started", runNumber, maxTurns: currentMaxTurns });
+            emitEvent(spec.bridge.mailboxDir, { type: "run_started", runNumber, maxTurns: currentMaxTurns, mode: interactiveMode ? "interactive" : "automatic" });
           }
         }
         break;
@@ -395,7 +485,15 @@ function subscribeTo(s) {
         const result = assistantText(lastAssistant(session));
         if (reconciliationRun) {
           reconciliationRun = false;
-          void showDecisionGate({ runNumber, reason: "turn_limit", result: result || "No status response was produced. Review the session before deciding.", turnCount, maxTurns: currentMaxTurns, toolUses, requestedAt: Date.now(), compactions, usage: usageOf(s) });
+          const decision = { runNumber, reason: "turn_limit", result: result || "No status response was produced. Review the session before deciding.", turnCount, maxTurns: currentMaxTurns, toolUses, requestedAt: Date.now(), compactions, usage: usageOf(s) };
+          if (interactiveMode) {
+            pendingDecision = decision;
+            try { writeJsonAtomic(pendingDecisionPath, decision); } catch {}
+            emitInteractiveIdle("turn_limit");
+            bridgeContext?.ui?.notify?.("Interactive response ready. Use /or when you want to return selected context to the parent.", "info");
+          } else {
+            void showDecisionGate(decision);
+          }
           break;
         }
         if (ceilingTriggered) {
@@ -403,15 +501,23 @@ function subscribeTo(s) {
           break;
         }
         if (status === "completed") {
-          void showDecisionGate({ runNumber, reason: "completed", result: result || undefined, turnCount, maxTurns: currentMaxTurns, toolUses, requestedAt: Date.now(), compactions, usage: usageOf(s) });
+          const decision = { runNumber, reason: "completed", result: result || undefined, turnCount, maxTurns: currentMaxTurns, toolUses, requestedAt: Date.now(), compactions, usage: usageOf(s) };
+          if (interactiveMode) {
+            pendingDecision = decision;
+            try { writeJsonAtomic(pendingDecisionPath, decision); } catch {}
+            emitInteractiveIdle("completed");
+            bridgeContext?.ui?.notify?.("Interactive response ready. Use /or when you want to return selected context to the parent.", "info");
+          } else {
+            void showDecisionGate(decision);
+          }
         } else if (status === "stopped") {
-          // Escape/abort never releases to the parent. Keep partial output
-          // durable so /or can explicitly return it later.
+          // A human stop transfers control to an unlimited interactive session.
+          enterInteractiveMode();
           const decision = { runNumber, reason: "aborted", result: result || undefined, turnCount, maxTurns: currentMaxTurns, toolUses, requestedAt: Date.now(), compactions, usage: usageOf(s) };
           pendingDecision = decision;
           try { writeJsonAtomic(pendingDecisionPath, decision); } catch {}
-          emitEvent(spec.bridge.mailboxDir, { type: "decision_required", ...decision });
-          bridgeContext?.ui?.notify?.("Agent stopped. Nothing was returned to the parent. Use /or to return the partial result, or enter a prompt to continue.", "info");
+          emitInteractiveIdle("interrupted");
+          bridgeContext?.ui?.notify?.("Agent stopped and switched to interactive mode. Use /or to return selected context, or enter a prompt to continue.", "info");
         } else if (status === "error") {
           // Unrecoverable failure: surface it so the parent cannot wait forever.
           emitEvent(spec.bridge.mailboxDir, { type: "run_settled", runNumber, status, result: result || undefined, error: "provider error with no output", turnCount, toolUses, compactions, usage: usageOf(s), releaseReason: "error" });
@@ -457,14 +563,23 @@ async function processCommands() {
             bridgeContext?.ui?.notify?.("Resume rejected: max_turns must be a positive integer.", "error");
             break;
           }
-          currentMaxTurns = cmd.maxTurns;
+          enterAutomaticMode(cmd.maxTurns);
           clearPendingForContinuation();
           if (session.isStreaming) await session.followUp(cmd.message);
-          else await session.prompt(cmd.message);
+          else await session.prompt(cmd.message, { source: "extension" });
           break;
         case "abort":
           parentAborted = true;
           await session.abort();
+          break;
+        case "ack_checkpoint":
+          try {
+            bridgePi?.appendEntry?.("olive-agent-context-return-ack", {
+              version: 1,
+              checkpointId: cmd.checkpointId,
+              acknowledgedAt: new Date().toISOString(),
+            });
+          } catch {}
           break;
         case "shutdown":
           shuttingDown = true;
@@ -509,6 +624,22 @@ if (!spec.session.openFile && spec.ledger?.node) {
   }
 }
 
+// At-least-once checkpoint delivery: a parent acknowledges only after its
+// session persisted the returned context. Reopening re-emits anything unacked.
+try {
+  const entries = sessionManager.getEntries();
+  const acknowledged = new Set(entries
+    .filter((entry) => entry?.type === "custom" && entry.customType === "olive-agent-context-return-ack")
+    .map((entry) => entry.data?.checkpointId)
+    .filter((id) => typeof id === "string"));
+  for (const entry of entries) {
+    if (entry?.type !== "custom" || entry.customType !== "olive-agent-context-return") continue;
+    const checkpoint = entry.data;
+    if (!checkpoint?.id || acknowledged.has(checkpoint.id)) continue;
+    emitEvent(spec.bridge.mailboxDir, { type: "context_checkpoint", runNumber: Math.max(1, runNumber), checkpoint });
+  }
+} catch {}
+
 const mode = new InteractiveMode(runtime, {
   initialMessage: spec.run.prompt || undefined,
   verbose: false,
@@ -520,8 +651,8 @@ try {
   // original task. The selector is native Pi UI and the durable state survives
   // an accidental tmux window close.
   if (pendingDecision) setTimeout(() => {
-    if (pendingDecision.reason === "aborted") {
-      bridgeContext?.ui?.notify?.("Agent stopped. Nothing was returned to the parent. Use /or to return the partial result, or enter a prompt to continue.", "info");
+    if (interactiveMode || pendingDecision.reason === "aborted") {
+      bridgeContext?.ui?.notify?.("Interactive child context is waiting. Use /or to review and return it.", "info");
     } else {
       void showDecisionGate(pendingDecision);
     }

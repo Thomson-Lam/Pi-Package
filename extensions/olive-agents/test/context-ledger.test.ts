@@ -15,11 +15,14 @@ import { visibleWidth } from "@earendil-works/pi-tui";
 import {
   CONTEXT_LEDGER_ENTRY,
   CONTEXT_LINK_ENTRY,
+  CONTEXT_RETURN_ENTRY,
   type ContextLedgerNode,
   type ContextLinkData,
   type TreeRow,
   buildContextPrompt,
   computeTreeRows,
+  contextReturnToMarkdown,
+  finalizeContextReturn,
   finalizeLedgerContext,
   getSessionLedgerNode,
   getSessionLinks,
@@ -28,6 +31,7 @@ import {
   readSessionEntries,
   resolveLedgerChain,
   resolveNearestLedgerAncestors,
+  returnableContextEntries,
   selectableMessages,
   sessionDisplayName,
   snapshotSelections,
@@ -171,6 +175,63 @@ describe("serialization", () => {
     expect(prompt).not.toContain("## Context:");
     expect(prompt).toContain("# instructions");
     expect(prompt).toContain("do the thing");
+  });
+});
+
+describe("child-to-parent context checkpoints", () => {
+  it("compaction covers every available message while selections remain explicit", () => {
+    const sm = makeSession("return");
+    const first = sm.appendMessage({ role: "user", content: "question" });
+    const second = sm.appendMessage({ role: "assistant", content: [{ type: "text", text: "answer" }] } as never);
+    const checkpoint = finalizeContextReturn({
+      agentId: "agent-1",
+      built: { selectedIds: [second], summary: "compact decisions", inheritedNodes: [] },
+      branch: sm.getBranch(),
+      sourceSessionName: "child",
+      reason: "completed",
+      checkpointId: "checkpoint-1",
+      createdAt: T0,
+    });
+    expect(checkpoint.coveredEntryIds).toEqual([first, second]);
+    expect(checkpoint.selections.map((selection) => selection.entryId)).toEqual([second]);
+    expect(contextReturnToMarkdown(checkpoint)).toContain("compact decisions");
+    expect(contextReturnToMarkdown(checkpoint)).toContain("answer");
+  });
+
+  it("without compaction covers only selected messages", () => {
+    const sm = makeSession("return-selected");
+    sm.appendMessage({ role: "user", content: "old" });
+    const selected = sm.appendMessage({ role: "assistant", content: [{ type: "text", text: "new" }] } as never);
+    const checkpoint = finalizeContextReturn({
+      agentId: "agent-1",
+      built: { selectedIds: [selected], inheritedNodes: [] },
+      branch: sm.getBranch(),
+      sourceSessionName: "child",
+      reason: "manual",
+    });
+    expect(checkpoint.coveredEntryIds).toEqual([selected]);
+  });
+
+  it("excludes the inherited launch payload and already checkpointed messages", () => {
+    const sm = makeSession("return-dedup");
+    const launch = sm.appendMessage({ role: "user", content: "# context\nparent ledger\n# instructions\ntask" });
+    const sent = sm.appendMessage({ role: "assistant", content: [{ type: "text", text: "first result" }] } as never);
+    const fresh = sm.appendMessage({ role: "user", content: "human follow-up" });
+    sm.appendCustomEntry(CONTEXT_RETURN_ENTRY, {
+      version: 1,
+      id: "cp-old",
+      agentId: "agent-1",
+      sourceSessionName: "child",
+      createdAt: T0,
+      reason: "completed",
+      selections: [],
+      coveredEntryIds: [sent],
+    });
+    const ids = returnableContextEntries(sm.getBranch())
+      .filter((entry) => entry.type === "message")
+      .map((entry) => entry.id);
+    expect(ids).toEqual([fresh]);
+    expect(ids).not.toContain(launch);
   });
 });
 

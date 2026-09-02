@@ -1,7 +1,7 @@
 import type { Api, Model } from "@earendil-works/pi-ai";
 import type { ExtensionContext } from "@earendil-works/pi-coding-agent";
 import { describe, expect, it, vi } from "vitest";
-import { approveInvocation, approveManualLaunch, DEFAULT_HANDOFF_COMPACTION_PROMPT } from "../src/approval.js";
+import { approveInvocation, approveManualLaunch, buildLedgerContext, DEFAULT_HANDOFF_COMPACTION_PROMPT } from "../src/approval.js";
 
 const model = { provider: "test", id: "basic", name: "Basic", reasoning: false } as unknown as Model<Api>;
 const registry = { getAll: () => [model], getAvailable: () => [model] };
@@ -285,6 +285,32 @@ describe("approval with context ledger", () => {
       "Feedback for re-compaction",
       "Review compacted handoff (edit to use)",
     ]);
+  });
+
+  it("reuses the same selector and compaction flow for a return without inheritance", async () => {
+    const titles: string[] = [];
+    const ui = {
+      select: async (title: string) => {
+        titles.push(title);
+        return "None";
+      },
+      custom: async () => ({ selectedIds: ["e1"] }),
+    };
+    const openInheritTree = vi.fn(async () => candidates);
+    const result = await buildLedgerContext(
+      { mode: "tui", ui } as unknown as ExtensionContext,
+      registry,
+      request,
+      { branch, candidates, summarize: () => Promise.resolve("summary"), openInheritTree },
+      {
+        allowInheritance: false,
+        title: "Select context to return to parent",
+        compactQuestion: "Compact all new child conversation before return?",
+      },
+    );
+    expect(result?.selectedIds).toEqual(["e1"]);
+    expect(openInheritTree).not.toHaveBeenCalled();
+    expect(titles).toEqual(["Compact all new child conversation before return?"]);
   });
 
   it("uses independently selected model and reasoning for compaction", async () => {

@@ -7,7 +7,7 @@
  */
 
 import type { ModelThinkingLevel } from "@earendil-works/pi-ai";
-import type { ContextLedgerNode } from "./context-ledger.js";
+import type { ContextLedgerNode, ContextReturnCheckpoint } from "./context-ledger.js";
 import type { LifetimeUsage } from "./usage.js";
 
 export type ThinkingLevel = ModelThinkingLevel;
@@ -134,7 +134,7 @@ export interface AgentRecord {
   id: string;
   type: SubagentType;
   description: string;
-  status: "queued" | "running" | "awaiting_decision" | "completed" | "steered" | "aborted" | "stopped" | "error";
+  status: "queued" | "running" | "idle" | "awaiting_decision" | "completed" | "steered" | "aborted" | "stopped" | "error";
   /** Child output held for the human gate; never exposed as record.result. */
   decision?: AgentDecision;
   result?: string;
@@ -191,6 +191,11 @@ export interface AgentRecord {
   lifetimeUsage: LifetimeUsage;
   /** Number of times this agent's session has compacted. */
   compactionCount: number;
+  /** Incremental child-to-parent checkpoints already observed by this manager. */
+  checkpointIds?: string[];
+  latestCheckpoint?: ContextReturnCheckpoint;
+  /** Whether this record currently occupies a background execution slot. */
+  slotActive?: boolean;
   /**
    * Whether completion is notification-backed. Agent tool launches set this
    * true for both parent behaviors; `runInBackground` separately controls

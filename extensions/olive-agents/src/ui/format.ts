@@ -67,7 +67,7 @@ export interface AgentDetails {
   toolUses: number;
   tokens: string;
   durationMs: number;
-  status: "queued" | "running" | "awaiting_decision" | "completed" | "steered" | "aborted" | "stopped" | "error" | "background" | "detached";
+  status: "queued" | "running" | "idle" | "awaiting_decision" | "completed" | "steered" | "aborted" | "stopped" | "error" | "background" | "detached";
   /** Human-readable description of what the agent is currently doing. */
   activity?: string;
   /** Current spinner frame index (for animated running indicator). */

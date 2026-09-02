@@ -29,7 +29,7 @@ export function needsDecision(record: AgentRecord): boolean {
 }
 
 export function isActive(record: AgentRecord): boolean {
-  return record.status === "queued" || record.status === "running" || needsDecision(record);
+  return record.status === "queued" || record.status === "running" || record.status === "idle" || needsDecision(record);
 }
 
 export function isTerminal(record: AgentRecord): boolean {
@@ -40,6 +40,7 @@ function icon(record: AgentRecord): string {
   if (record.status === "awaiting_decision") return "◆";
   if (record.status === "running") return "●";
   if (record.status === "queued") return "◌";
+  if (record.status === "idle") return "◇";
   if (record.status === "completed" || record.status === "steered") return "✓";
   if (record.status === "stopped") return "■";
   return "!";
