@@ -98,10 +98,23 @@ function actionFor(toolName: string): string {
   }
 }
 
+/**
+ * Resolve the executable used to boot child-host.mjs.
+ *
+ * Pi is distributed both as a Node program and as a standalone executable.
+ * `process.execPath` points at Node in the former case, but points at Pi in
+ * the latter; invoking the latter with a .mjs path makes Pi treat the paths as
+ * startup messages instead of running the child host.
+ */
+export function resolveNodeExecutable(execPath: string = process.execPath): string {
+  const executable = execPath.split(/[\\/]/).pop() ?? execPath;
+  return /^(?:node|nodejs)(?:\.exe)?$/i.test(executable) ? execPath : "node";
+}
+
 /** Default child command line: `node <child-host.mjs> <specPath>`. */
-function defaultChildCommand(specPath: string): string {
+export function defaultChildCommand(specPath: string, execPath: string = process.execPath): string {
   const hostPath = new URL("./child-host.mjs", import.meta.url).pathname;
-  return `${shellQuote(process.execPath)} ${shellQuote(hostPath)} ${shellQuote(specPath)}`;
+  return `${shellQuote(resolveNodeExecutable(execPath))} ${shellQuote(hostPath)} ${shellQuote(specPath)}`;
 }
 
 export class AgentManager {
@@ -198,7 +211,7 @@ export class AgentManager {
     prompt: string,
     options: SpawnOptions,
   ): Promise<string> {
-    validateMaxTurns(options.maxTurns);
+    if (options.maxTurns !== undefined) validateMaxTurns(options.maxTurns);
     const id = randomUUID().slice(0, 17);
     const record: AgentRecord = {
       id,
@@ -240,7 +253,7 @@ export class AgentManager {
     id: string,
     { pi, ctx, type, prompt, options }: { pi: ExtensionAPI; ctx: ExtensionContext; type: SubagentType; prompt: string; options: SpawnOptions },
   ): Promise<void> {
-    validateMaxTurns(options.maxTurns);
+    if (options.maxTurns !== undefined) validateMaxTurns(options.maxTurns);
     const record = this.agents.get(id);
     if (!record || this.disposed) return;
 
@@ -487,7 +500,7 @@ export class AgentManager {
       }
 
       case "decision_required": {
-        if (!Number.isInteger(event.maxTurns) || event.maxTurns < 1) break;
+        if (event.maxTurns !== undefined && (!Number.isInteger(event.maxTurns) || event.maxTurns < 1)) break;
         if (event.runNumber < record.runNumber || (event.runNumber === record.runNumber && record.status !== "running")) break;
         record.runNumber = event.runNumber;
         record.status = "awaiting_decision";
@@ -909,7 +922,7 @@ export class AgentManager {
         ...(reopen.systemPrompt === undefined ? {} : { systemPrompt: reopen.systemPrompt }),
         ...(reopen.promptPolicy ? { promptPolicy: reopen.promptPolicy } : {}),
       },
-      run: { prompt: "", maxTurns: pending?.maxTurns ?? reopen.maxTurns ?? 1 },
+      run: { prompt: "", ...((pending?.maxTurns ?? reopen.maxTurns) !== undefined ? { maxTurns: pending?.maxTurns ?? reopen.maxTurns } : {}) },
       bridge: { mailboxDir },
     };
     const startedAt = Date.parse(link.createdAt) || Date.now();
@@ -991,7 +1004,7 @@ export class AgentManager {
         ...(reopen.systemPrompt === undefined ? {} : { systemPrompt: reopen.systemPrompt }),
         ...(reopen.promptPolicy ? { promptPolicy: reopen.promptPolicy } : {}),
       },
-      run: { prompt: "", maxTurns: reopen.maxTurns ?? 1 }, // reopen attaches; never re-sends the task
+      run: { prompt: "", ...(reopen.maxTurns !== undefined ? { maxTurns: reopen.maxTurns } : {}) }, // reopen attaches; never re-sends the task
       bridge: { mailboxDir },
     };
 

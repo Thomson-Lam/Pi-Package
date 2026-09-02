@@ -89,10 +89,12 @@ describe("prepareAgentLaunch", () => {
     expect(spec.runtime.extensionPaths).toEqual(["/project/custom.ts", "/project/inactive.ts"]);
   });
 
-  it("rejects a missing fresh-run limit", async () => {
+  it("allows a missing fresh-run limit as unlimited", async () => {
     setDefaultMaxTurns(20);
     setGraceTurns(3);
-    await expect(prepare({ model: { provider: "test", id: "basic" }, thinking: "high" })).rejects.toThrow("positive integer");
+    const { spec } = await prepare({ model: { provider: "test", id: "basic" }, thinking: "high" });
+    expect(spec.run.maxTurns).toBeUndefined();
+    expect(JSON.parse(JSON.stringify(spec.run))).not.toHaveProperty("maxTurns");
   });
 });
 

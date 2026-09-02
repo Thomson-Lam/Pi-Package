@@ -33,10 +33,10 @@ export const SUBAGENT_TOOL_NAMES = {
   GET_RESULT: "get_subagent_result",
 } as const;
 
-/** Legacy default used only by manual compatibility callers. Agent tool launches must supply maxTurns. */
+/** Legacy default retained for settings compatibility; omitted maxTurns means unlimited. */
 let defaultMaxTurns: number | undefined;
 
-/** Normalize legacy configuration values. Fresh Agent launches use validateMaxTurns instead. */
+/** Normalize legacy configuration values. */
 export function normalizeMaxTurns(n: number | undefined): number | undefined {
   if (n == null || n === 0) return undefined;
   return Math.max(1, n);
@@ -98,7 +98,7 @@ export interface PrepareLaunchResult {
  */
 export async function prepareAgentLaunch(input: PrepareLaunchInput): Promise<PrepareLaunchResult> {
   const { pi, ctx, type, prompt, options } = input;
-  validateMaxTurns(options.maxTurns);
+  if (options.maxTurns !== undefined) validateMaxTurns(options.maxTurns);
   const maxTurns = options.maxTurns;
   const config = getConfig(type);
   const agentConfig = getAgentConfig(type);

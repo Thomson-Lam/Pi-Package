@@ -17,7 +17,7 @@ import { clampThinkingLevel } from "@earendil-works/pi-ai";
 import { Type } from "typebox";
 import { AgentManager } from "./agent-manager.js";
 import { getDefaultMaxTurns, getGraceTurns, normalizeMaxTurns, SUBAGENT_TOOL_NAMES, setDefaultMaxTurns, setGraceTurns, validateMaxTurns } from "./agent-runner.js";
-import { approveInvocation, type ApprovalContextInput, type BuiltLedgerContext } from "./approval.js";
+import { approveInvocation, approveManualLaunch, availableThinkingLevels, selectSubagentModel, type ApprovalContextInput, type BuiltLedgerContext } from "./approval.js";
 import { getAgentConfig, getAllTypes, getAvailableTypes, isDefaultsDisabled, registerAgents, resolveType, setDefaultsDisabled } from "./agent-types.js";
 import {
   CONTEXT_LINK_ENTRY,
@@ -60,6 +60,7 @@ import {
 import { FleetList, type FleetUICtx } from "./ui/fleet-list.js";
 import { execFromPi, findWindowByName, focusWindow } from "./tmux-window.js";
 import { openContextTree } from "./ui/context-tree.js";
+import { buildContextUI } from "./ui/context-selection.js";
 import { getLifetimeTotal, type LifetimeUsage } from "./usage.js";
 
 // ---- Shared helpers ----
@@ -96,7 +97,7 @@ function formatLifetimeTokens(o: { lifetimeUsage: LifetimeUsage }): string {
  */
 const THINKING_LEVELS = ["off", "minimal", "low", "medium", "high", "xhigh", "max"] as const;
 
-// ---- Context-ledger workflow helpers (shared by Agent tool and /mag) ------
+// ---- Context-ledger workflow helpers -------------------------------------
 
 /**
  * Build the approval context input for the current session: selectable branch
@@ -1593,8 +1594,8 @@ The child starts fresh and receives only the self-contained task prompt.
     }
   }
 
-  /** Manually choose and launch a background agent through normal approval. */
-  async function launchManualAgent(ctx: ExtensionCommandContext) {
+  /** Launch a new agent from an existing /ot ledger context. */
+  async function launchAgentFromContext(ctx: ExtensionCommandContext, inheritedNodes: ContextLedgerNode[]) {
     reloadCustomAgents();
     const available = getAvailableTypes();
     if (available.length === 0) {
@@ -1645,11 +1646,12 @@ The child starts fresh and receives only the self-contained task prompt.
       agentType: subagentType,
       description,
       prompt: originalPrompt,
-      model: model!,
+      model,
       thinking,
       maxTurns,
       runInBackground: true,
-    }, makeApprovalContextInput(ctx)));
+      initialContext: { selectedIds: [], inheritedNodes },
+    }));
 
     if (approved.outcome === "feedback") {
       pi.sendUserMessage(`feedback: ${approved.feedback}`);
@@ -1674,16 +1676,14 @@ The child starts fresh and receives only the self-contained task prompt.
     };
 
     let id: string;
-    const manualPromptPolicy: "native" | "inherit" = subagentType.toLowerCase() === "general-purpose" ? "native" : "inherit";
+    const promptPolicy: "native" | "inherit" = subagentType.toLowerCase() === "general-purpose" ? "native" : "inherit";
     try {
       id = await manager.spawn(pi, ctx, subagentType, prompt, {
         description,
         model: approved.model,
         maxTurns: effectiveMaxTurns,
         thinkingLevel: approved.thinking,
-        promptPolicy: manualPromptPolicy,
-        // Manual launches also detach immediately and report through the
-        // normal completion notification path.
+        promptPolicy,
         isBackground: true,
         invocation,
         ...(ledgerNode ? { ledgerNode } : {}),
@@ -1700,6 +1700,113 @@ The child starts fresh and receives only the self-contained task prompt.
     ctx.ui.notify(approved.runInBackground
       ? `Started ${getDisplayName(subagentType)} in background (${id}).`
       : `Started ${getDisplayName(subagentType)} and detached (${id}).`, "info");
+  }
+
+  /** Build context from this session and launch an unlimited general-purpose agent. */
+  async function launchNewAgent(ctx: ExtensionCommandContext) {
+    let branch;
+    try {
+      branch = ctx.sessionManager.getBranch();
+    } catch {
+      ctx.ui.notify("Could not read the current session context.", "warning");
+      return;
+    }
+
+    const selectedContext = await buildContextUI({ ctx, branch });
+    if (!selectedContext) return;
+    if (selectedContext.selectedIds.length === 0) {
+      ctx.ui.notify("Select at least one context message to start an agent.", "warning");
+      return;
+    }
+
+    const models = (ctx.modelRegistry.getAvailable?.() ?? ctx.modelRegistry.getAll()) as Parameters<typeof selectSubagentModel>[1];
+    const model = await selectSubagentModel(ctx, models, ctx.model, "Select subagent model");
+    if (!model) return;
+
+    if (isScopeModelsEnabled()) {
+      const allowed = resolveEnabledModels(readEnabledModels(ctx.cwd), ctx.modelRegistry, ctx.cwd);
+      if (allowed && !isModelInScope(model, allowed)) {
+        ctx.ui.notify(
+          `Selected model "${model.provider}/${model.id}" is outside the enabled model scope.`,
+          "warning",
+        );
+      }
+    }
+
+    const thinking = await ctx.ui.select(
+      "Select subagent reasoning level",
+      availableThinkingLevels(model),
+    );
+    if (!thinking) return;
+
+    const agentChoice = await ctx.ui.select(
+      "Select agent",
+      ["inherit (default)", "general purpose"],
+    );
+    if (!agentChoice) return;
+
+    reloadCustomAgents();
+    const resolvedGeneralPurpose = resolveType("general-purpose");
+    if (agentChoice === "general purpose" && (!resolvedGeneralPurpose || !getAvailableTypes().includes(resolvedGeneralPurpose))) {
+      ctx.ui.notify("No enabled general-purpose agent is available.", "warning");
+      return;
+    }
+    const subagentType = resolvedGeneralPurpose ?? "general-purpose";
+    const promptPolicy: "native" | "inherit" = agentChoice === "general purpose" ? "native" : "inherit";
+    const agentLabel = agentChoice === "general purpose" ? getDisplayName(subagentType) : "inherited agent";
+
+    const enteredPrompt = await ctx.ui.editor(`Task for ${agentLabel}`, "");
+    const prompt = enteredPrompt?.trim();
+    if (!prompt) return;
+
+    const description = prompt.split("\n").find(line => line.trim())!.trim().slice(0, 80);
+    const approved = await withApproval(() => approveManualLaunch(ctx, {
+      agentType: agentChoice === "general purpose" ? subagentType : "inherit (default)",
+      description,
+      prompt,
+      model,
+      thinking: thinking as ThinkingLevel,
+      runInBackground: true,
+      initialContext: { ...selectedContext, inheritedNodes: [] },
+    }));
+
+    if (approved.outcome === "feedback") {
+      pi.sendUserMessage(`feedback: ${approved.feedback}`);
+      return;
+    }
+    if (approved.outcome === "do-it-yourself") {
+      pi.sendUserMessage("do it yourself");
+      return;
+    }
+    if (approved.outcome === "cancel") return;
+
+    const { prompt: launchPrompt, ledgerNode } = finalizeLaunchContext(ctx, approved.context, approved.prompt);
+    const invocation: AgentInvocation = {
+      thinking: approved.thinking,
+      runInBackground: approved.runInBackground,
+    };
+
+    let id: string;
+    try {
+      id = await manager.spawn(pi, ctx, subagentType, launchPrompt, {
+        description,
+        model: approved.model,
+        thinkingLevel: approved.thinking,
+        promptPolicy,
+        isBackground: true,
+        invocation,
+        ...(ledgerNode ? { ledgerNode } : {}),
+      });
+    } catch (err) {
+      ctx.ui.notify(err instanceof Error ? err.message : String(err), "warning");
+      return;
+    }
+
+    const record = manager.getRecord(id);
+    if (record) record.joinMode = "async";
+    pi.events.emit("subagents:created", { id, type: subagentType, description, isBackground: approved.runInBackground });
+    fleet.setUICtx(ctx.ui as unknown as FleetUICtx);
+    ctx.ui.notify(`Started ${getDisplayName(subagentType)} in background (${id}).`, "info");
   }
 
   /** Alt+A picker: select a fleet row and focus/reopen its tmux window. */
@@ -2353,12 +2460,28 @@ ${systemPrompt}
         }
         await routeToSession(ctx, file, linksByChild);
       },
+      startNewAgent: async (row) => {
+        if (!row.node) return;
+        const inheritedNodes: ContextLedgerNode[] = [];
+        const seen = new Set<string>();
+        let node: ContextLedgerNode | undefined = row.node;
+        while (node && !seen.has(node.id)) {
+          seen.add(node.id);
+          inheritedNodes.unshift(node);
+          node = node.parentId ? graph.nodes.get(node.parentId) : undefined;
+        }
+        await launchAgentFromContext(ctx, inheritedNodes);
+      },
     });
   }
 
   pi.registerCommand("ot", {
     description: "Inspect the context-ledger tree and route to agent sessions",
     handler: async (_args, ctx) => { await showContextTree(ctx); },
+  });
+  pi.registerCommand("otn", {
+    description: "start agent manually",
+    handler: async (_args, ctx) => { await launchNewAgent(ctx); },
   });
   pi.registerCommand("agents", {
     description: "Manage agent definitions and settings",
@@ -2371,9 +2494,5 @@ ${systemPrompt}
   pi.registerShortcut("alt+a", {
     description: "Select an agent session window",
     handler: async (ctx) => { await openAgentSessionPicker(ctx); },
-  });
-  pi.registerCommand("mag", {
-    description: "Manually choose and launch a background agent",
-    handler: async (_args, ctx) => { await launchManualAgent(ctx); },
   });
 }

@@ -9,7 +9,7 @@ import { mkdirSync, mkdtempSync, readdirSync, readFileSync, rmSync, writeFileSyn
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { AgentManager, type SpawnOptions } from "../src/agent-manager.js";
+import { AgentManager, defaultChildCommand, resolveNodeExecutable, type SpawnOptions } from "../src/agent-manager.js";
 import { emitChildEvent, ensureMailboxDir, readPendingCommands, removeMailboxDir, writePendingDecision } from "../src/event-mailbox.js";
 import type { ContextLinkData } from "../src/context-ledger.js";
 import type { AgentLaunchSpec } from "../src/types.js";
@@ -100,6 +100,18 @@ async function spawnBg(manager: AgentManager, ctx: any, description = "review au
   });
 }
 
+describe("child host command", () => {
+  it("uses Node when Pi is the standalone process executable", () => {
+    expect(resolveNodeExecutable("/opt/pi/pi")).toBe("node");
+    expect(defaultChildCommand("/tmp/olive-agents/launch.json", "/opt/pi/pi")).toMatch(/^'node' /);
+  });
+
+  it.each(["/usr/bin/node", "/usr/local/bin/nodejs", "C:\\\\Node\\\\node.exe"])(
+    "preserves a Node executable: %s",
+    (execPath) => expect(resolveNodeExecutable(execPath)).toBe(execPath),
+  );
+});
+
 describe("AgentManager", () => {
   it("spawn → ready → run_settled completes the record and releases the slot", async () => {
     const deps = makeDeps();
@@ -148,6 +160,28 @@ describe("AgentManager", () => {
     emitChildEvent(record.mailboxDir!, { type: "run_settled", runNumber: 1, status: "completed", result: "fg done", turnCount: 1, toolUses: 2 });
     const { record: done } = await wait;
     expect(done.result).toBe("fg done");
+    manager.dispose();
+  });
+
+  it("accepts an unlimited run and its response-ready decision", async () => {
+    const deps = makeDeps();
+    const manager = new AgentManager(undefined, 2, undefined, undefined, deps);
+    const ctx = makeCtx();
+    const id = await manager.spawn({ exec: vi.fn() } as any, ctx, "Review", "task", {
+      description: "unlimited",
+      model: ctx.model,
+      isBackground: true,
+    });
+    const record = manager.getRecord(id)!;
+    expect(deps.prepare.mock.calls[0]![0].options.maxTurns).toBeUndefined();
+    emitChildEvent(record.mailboxDir!, { type: "ready", sessionId: "s", sessionFile: join(work, "unlimited.jsonl") });
+    await sleep(150);
+    emitChildEvent(record.mailboxDir!, {
+      type: "decision_required", runNumber: 1, reason: "completed", result: "done",
+      turnCount: 3, toolUses: 2, requestedAt: Date.now(),
+    });
+    await sleep(150);
+    expect(manager.getRecord(id)?.status).toBe("awaiting_decision");
     manager.dispose();
   });
 

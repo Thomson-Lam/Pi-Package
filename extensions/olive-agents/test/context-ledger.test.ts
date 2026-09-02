@@ -415,15 +415,22 @@ function captureCustom<R>(open: (ctx: any) => Promise<R>): CapturedComponent {
 
 interface TreeCapture extends CapturedComponent {
   focusCalls: TreeRow[];
+  startCalls: TreeRow[];
 }
 
 /** Capture the real /ot + inheritance context tree (openContextTree). */
 function captureContextTree(input: Omit<ContextTreeInput, "ctx">): TreeCapture {
   const focusCalls: TreeRow[] = [];
+  const startCalls: TreeRow[] = [];
   const cap = captureCustom<string | undefined>((ctx) =>
-    openContextTree({ ...input, ctx, focusOrOpen: async (row) => { focusCalls.push(row); } }),
+    openContextTree({
+      ...input,
+      ctx,
+      focusOrOpen: async (row) => { focusCalls.push(row); },
+      startNewAgent: async (row) => { startCalls.push(row); },
+    }),
   );
-  return { ...cap, focusCalls };
+  return { ...cap, focusCalls, startCalls };
 }
 
 /** Capture the real launch message-selection TUI (buildContextUI). */
@@ -926,6 +933,7 @@ describe("context tree + TUI rendering (scenario gallery)", () => {
     dumpVisual("combined / /ot action menu", menu);
     expect(menu.join("\n")).toContain("View context");
     expect(menu.join("\n")).toContain("Open agent session");
+    expect(menu.join("\n")).toContain("Start new agent");
 
     // View context: inherited path, compacted summary, selected messages.
     ot.input(ENTER);
@@ -945,6 +953,15 @@ describe("context tree + TUI rendering (scenario gallery)", () => {
     ot.input(ENTER);
     expect(ot.focusCalls).toHaveLength(1);
     expect(ot.focusCalls[0]).toMatchObject({ sessionFile: child.getSessionFile() });
+
+    // The same ledger row can start a new child without leaving /ot.
+    await Promise.resolve();
+    ot.input(ENTER);
+    ot.input("j");
+    ot.input("j");
+    ot.input(ENTER);
+    expect(ot.startCalls).toHaveLength(1);
+    expect(ot.startCalls[0]).toMatchObject({ node: finalized.ledgerNode });
   });
 
   it("context selection TUI: live list, selection state, preview, tool noise excluded", async () => {

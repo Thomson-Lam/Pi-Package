@@ -18,8 +18,10 @@ export interface ApprovalRequest {
   prompt: string;
   model: Model<Api>;
   thinking: ThinkingLevel;
-  maxTurns: number;
+  maxTurns?: number;
   runInBackground: boolean;
+  /** Optional context preselected by an external picker such as /ot. */
+  initialContext?: BuiltLedgerContext;
 }
 
 /** Context already built by the human (from the context-building flow). */
@@ -48,7 +50,7 @@ export interface ApprovalContextInput {
 }
 
 export type ApprovalResult =
-  | { outcome: "launch"; prompt: string; model: Model<Api>; thinking: ThinkingLevel; maxTurns: number; runInBackground: boolean; context?: BuiltLedgerContext }
+  | { outcome: "launch"; prompt: string; model: Model<Api>; thinking: ThinkingLevel; maxTurns?: number; runInBackground: boolean; context?: BuiltLedgerContext }
   | { outcome: "feedback"; feedback: string }
   | { outcome: "do-it-yourself"; prompt: string }
   | { outcome: "cancel" };
@@ -61,7 +63,7 @@ export function availableThinkingLevels(model: Model<Api>): ThinkingLevel[] {
   return [...new Set(THINKING_LEVELS.map((level) => clampThinkingLevel(model, level) as ThinkingLevel))];
 }
 
-async function selectSubagentModel(
+export async function selectSubagentModel(
   ctx: ExtensionContext,
   models: Model<Api>[],
   current: Model<Api>,
@@ -249,7 +251,7 @@ function buildSummary(request: ApprovalRequest, built?: BuiltLedgerContext, inhe
     `Agent: ${request.agentType}`,
     `Model: ${modelId(request.model)}`,
     `Reasoning: ${request.thinking}`,
-    `Turn limit: ${request.maxTurns} work turns`,
+    `Turn limit: ${request.maxTurns == null ? "Unlimited" : `${request.maxTurns} work turns`}`,
     `Parent behavior: ${request.runInBackground ? "Continue working" : "Detach from child"}`,
     contextLine,
     "System prompt: subagent replacement prompt",
@@ -392,6 +394,39 @@ async function compactHandoff(
   }
 }
 
+/** Approve a manually prepared launch with only prompt review, launch, or cancel. */
+export async function approveManualLaunch(
+  ctx: ExtensionContext,
+  initial: ApprovalRequest,
+): Promise<ApprovalResult> {
+  if (ctx.mode !== "tui") return { outcome: "cancel" };
+
+  const request = { ...initial };
+  const built = initial.initialContext;
+  for (;;) {
+    const action = await ctx.ui.select(
+      buildSummary(request, built),
+      ["Review / edit task prompt", "Launch", "Cancel"],
+    );
+    if (!action || action === "Cancel") return { outcome: "cancel" };
+    if (action === "Launch") {
+      return {
+        outcome: "launch",
+        prompt: request.prompt,
+        model: request.model,
+        thinking: request.thinking,
+        maxTurns: request.maxTurns,
+        runInBackground: request.runInBackground,
+        ...(built ? { context: built } : {}),
+      };
+    }
+    if (action === "Review / edit task prompt") {
+      const prompt = await ctx.ui.editor("Review subagent task prompt", request.prompt);
+      if (prompt?.trim()) request.prompt = prompt;
+    }
+  }
+}
+
 export async function approveInvocation(
   ctx: ExtensionContext,
   registry: ModelRegistry,
@@ -402,7 +437,7 @@ export async function approveInvocation(
 
   const request = { ...initial };
   /** Context built so far; survives approval-menu iterations. */
-  let built: BuiltLedgerContext | undefined;
+  let built: BuiltLedgerContext | undefined = initial.initialContext;
 
   for (;;) {
     const actions = [

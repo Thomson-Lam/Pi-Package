@@ -17,6 +17,8 @@ export interface ContextTreeInput {
   currentLedgerId?: string;
   /** Focus a live agent pane, or reopen its persisted session. */
   focusOrOpen(row: TreeRow): Promise<void>;
+  /** Start a new agent using the selected ledger context. */
+  startNewAgent?(row: TreeRow): Promise<void>;
   /** Select mode chooses one context; its parent chain is included by the caller. */
   mode?: "navigate" | "select";
   initialSelectedId?: string;
@@ -73,6 +75,7 @@ export async function openContextTree(input: ContextTreeInput): Promise<string |
   const actionsFor = (row: TreeRow): string[] => [
     ...(row.node ? ["View context"] : []),
     "Open agent session",
+    ...(row.node && input.startNewAgent ? ["Start new agent"] : []),
     CANCEL,
   ];
 
@@ -192,6 +195,8 @@ export async function openContextTree(input: ContextTreeInput): Promise<string |
           else if (action === "View context") {
             const detail = contextLines(row);
             state = { kind: "context", ...detail, scroll: 0 };
+          } else if (action === "Start new agent" && input.startNewAgent) {
+            void input.startNewAgent(row).finally(() => { state = { kind: "browse" }; rerender(); });
           } else if (action === "Open agent session") {
             void focusOrOpen(row).finally(() => { state = { kind: "browse" }; rerender(); });
           }

@@ -1,7 +1,7 @@
 import type { Api, Model } from "@earendil-works/pi-ai";
 import type { ExtensionContext } from "@earendil-works/pi-coding-agent";
 import { describe, expect, it, vi } from "vitest";
-import { approveInvocation, DEFAULT_HANDOFF_COMPACTION_PROMPT } from "../src/approval.js";
+import { approveInvocation, approveManualLaunch, DEFAULT_HANDOFF_COMPACTION_PROMPT } from "../src/approval.js";
 
 const model = { provider: "test", id: "basic", name: "Basic", reasoning: false } as unknown as Model<Api>;
 const registry = { getAll: () => [model], getAvailable: () => [model] };
@@ -51,6 +51,47 @@ describe("subagent approval", () => {
     } as unknown as ExtensionContext, registry, request);
     expect(title).not.toContain("Wait for child");
     expect(result).toMatchObject({ outcome: "launch", maxTurns: 10, runInBackground: true });
+  });
+
+  it("starts with an external ledger context without offering current-session context building", async () => {
+    let title = "";
+    let actions: string[] = [];
+    const external = { version: 1, id: "external", sourceSessionName: "other session", createdAt: "2025-01-01T00:00:00.000Z", selections: [] };
+    const result = await approveInvocation({
+      mode: "tui",
+      ui: {
+        select: async (value: string, offered: string[]) => {
+          title = value;
+          actions = offered;
+          return "Launch";
+        },
+      },
+    } as unknown as ExtensionContext, registry, {
+      ...request,
+      initialContext: { selectedIds: [], inheritedNodes: [external] },
+    });
+    expect(title).toContain("include 1 parent context");
+    expect(actions).not.toContain("Build context");
+    expect(result).toMatchObject({ outcome: "launch", context: { selectedIds: [], inheritedNodes: [external] } });
+  });
+
+  it("manual approval only offers prompt review, launch, and cancel", async () => {
+    let actions: string[] = [];
+    const result = await approveManualLaunch({
+      mode: "tui",
+      ui: {
+        select: async (_title: string, offered: string[]) => {
+          actions = offered;
+          return "Launch";
+        },
+      },
+    } as unknown as ExtensionContext, {
+      ...request,
+      maxTurns: undefined,
+      initialContext: { selectedIds: ["e1"], inheritedNodes: [] },
+    });
+    expect(actions).toEqual(["Review / edit task prompt", "Launch", "Cancel"]);
+    expect(result).toMatchObject({ outcome: "launch", maxTurns: undefined });
   });
 });
 

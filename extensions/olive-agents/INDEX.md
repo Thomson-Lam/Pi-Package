@@ -3,7 +3,7 @@
 Description: Human-approved autonomous sub-agents: launch, lifecycle, tmux windows, and mailbox communication.
 
 Components:
-- `index.ts` — registers `/agents`, `/agent-session`, `/mag`, `/ot`, the `alt+a` shortcut, and the `Agent` / `get_subagent_result` tools; wires managers, approval, context ledger, and UI.
+- `index.ts` — registers `/agents`, `/agent-session`, `/ot`, `/otn`, the `alt+a` shortcut, and the `Agent` / `get_subagent_result` tools; `/ot` starts agents from selected ledger contexts and `/otn` starts unlimited agents from current-session context; wires managers, approval, context ledger, and UI.
 - `src/agent-manager.ts` — child agent lifecycle state (tmux windows + filesystem mailbox); persists parent-session context links; reopens persisted sessions from /ot.
 - `src/agent-runner.ts` — launch-spec preparation (v3, optional ledger), max-turns/grace-turn normalization, and reopen descriptors.
 - `src/agent-types.ts` — embedded default + user-defined agent registry.

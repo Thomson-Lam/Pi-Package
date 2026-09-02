@@ -55,8 +55,35 @@ try {
 // One-shot spec: delete after reading.
 try { rmSync(specPath, { force: true }); } catch {}
 
-const { SessionManager, createAgentSessionRuntime, createAgentSessionServices, createAgentSessionFromServices, getAgentDir, ModelRuntime, InteractiveMode } =
-  await import(pathToFileURL(join(spec.runtime.packageDir, "dist", "index.js")));
+let codingAgent;
+try {
+  // The standalone Pi binary has no Node-readable dist/index.js. The child
+  // runs under Node, so resolve the SDK from the normal Node module graph first.
+  codingAgent = await import("@earendil-works/pi-coding-agent");
+} catch (moduleError) {
+  // Compatibility fallback for older npm/source installations whose package
+  // root is explicitly supplied in the launch spec.
+  try {
+    codingAgent = await import(pathToFileURL(join(spec.runtime.packageDir, "dist", "index.js")));
+  } catch (fallbackError) {
+    const message = `child SDK startup failed: ${fallbackError?.message ?? moduleError?.message ?? fallbackError}`;
+    console.error(`[olive-agent] ${message}`);
+    try {
+      emitEvent(spec.bridge.mailboxDir, {
+        type: "run_settled",
+        runNumber: 0,
+        status: "error",
+        error: message,
+        turnCount: 0,
+        toolUses: 0,
+        releaseReason: "error",
+      });
+    } catch {}
+    process.exit(1);
+  }
+}
+
+const { SessionManager, createAgentSessionRuntime, createAgentSessionServices, createAgentSessionFromServices, getAgentDir, ModelRuntime, InteractiveMode } = codingAgent;
 
 // ---- Session + runtime ----
 
@@ -344,7 +371,7 @@ function subscribeTo(s) {
         // index may span resumed runs.
         turnCount += 1;
         emitEvent(spec.bridge.mailboxDir, { type: "turn_finished", runNumber, turnCount });
-        if (turnCount >= currentMaxTurns && !ceilingTriggered) {
+        if (currentMaxTurns != null && turnCount >= currentMaxTurns && !ceilingTriggered) {
           ceilingTriggered = true;
           try { s.setActiveToolsByName([]); } catch {}
           void s.abort();

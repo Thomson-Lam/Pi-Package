@@ -25,7 +25,7 @@ export interface PendingDecisionState {
   reason: "completed" | "turn_limit" | "aborted";
   result?: string;
   turnCount: number;
-  maxTurns: number;
+  maxTurns?: number;
   toolUses: number;
   requestedAt: number;
   compactions?: number;

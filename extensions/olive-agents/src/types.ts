@@ -88,8 +88,8 @@ export interface AgentLaunchSpec {
   };
   run: {
     prompt: string;
-    /** Required ceiling for normal work turns. Reopen specs retain it but do not start a run. */
-    maxTurns: number;
+    /** Optional ceiling for normal work turns. Omitted means unlimited. */
+    maxTurns?: number;
     /** Deprecated compatibility field; never used for ceiling handling. */
     graceTurns?: number;
   };
@@ -127,7 +127,7 @@ export interface AgentDecision {
   result?: string;
   turnCount: number;
   toolUses: number;
-  maxTurns: number;
+  maxTurns?: number;
 }
 
 export interface AgentRecord {
