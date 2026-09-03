@@ -191,6 +191,17 @@ const createRuntime = async ({ cwd, agentDir, sessionManager: sm }) => {
             ),
           }),
       noSkills: spec.runtime.noSkills,
+      // An Olive snapshot is authoritative, including an empty array. Let Pi
+      // install it through its native resource loader so prompt metadata and
+      // /skill:* commands use the same resolved resources as the parent.
+      ...(spec.runtime.skillsSnapshotAuthoritative === true
+        ? {
+            skillsOverride: () => ({
+              skills: Array.isArray(spec.runtime.skillsSnapshot) ? spec.runtime.skillsSnapshot : [],
+              diagnostics: [],
+            }),
+          }
+        : {}),
       noPromptTemplates: true,
       noThemes: false,
       noContextFiles: true,

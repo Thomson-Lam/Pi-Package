@@ -9,7 +9,8 @@ vi.mock("../src/agent-types.js", () => ({
 }));
 
 import { getAgentConfig, getConfig } from "../src/agent-types.js";
-import { prepareAgentLaunch, setDefaultMaxTurns, setGraceTurns } from "../src/agent-runner.js";
+import { buildReopenDescriptor, prepareAgentLaunch, setDefaultMaxTurns, setGraceTurns } from "../src/agent-runner.js";
+import { cloneSkillSnapshot, parseSkillSnapshot, type SkillSnapshot } from "../src/skill-snapshot.js";
 import type { AgentLaunchSpec } from "../src/types.js";
 
 let work: string;
@@ -49,6 +50,16 @@ function makeCtx() {
   } as any;
 }
 
+function makeSkill(): SkillSnapshot {
+  const filePath = join(work, ".pi", "skills", "project-guidance", "SKILL.md");
+  const baseDir = join(work, ".pi", "skills", "project-guidance");
+  return {
+    name: "project-guidance", description: "Project guidance", filePath, baseDir,
+    sourceInfo: { path: filePath, source: "local", scope: "project", origin: "top-level", baseDir },
+    disableModelInvocation: false,
+  };
+}
+
 async function prepare(options: any = { model: { provider: "test", id: "basic" }, thinking: "high", maxTurns: 10 }) {
   return prepareAgentLaunch({
     pi: makePi(), ctx: makeCtx(), type: "Review", prompt: "Review the diff",
@@ -57,6 +68,47 @@ async function prepare(options: any = { model: { provider: "test", id: "basic" }
     sessionDir: work, mailboxDir: join(work, "mailbox"),
   });
 }
+
+describe("skill snapshots", () => {
+  it("clones the full Pi Skill shape and preserves an authoritative empty array", () => {
+    const skill = makeSkill();
+    const copy = cloneSkillSnapshot([skill]);
+    expect(copy).toEqual([skill]);
+    expect(copy).not.toBeUndefined();
+    expect(copy![0]).not.toBe(skill);
+    expect(copy![0]!.sourceInfo).not.toBe(skill.sourceInfo);
+    expect(parseSkillSnapshot([])).toEqual([]);
+    expect(parseSkillSnapshot(undefined)).toBeUndefined();
+    expect(parseSkillSnapshot([{ name: "invalid" }])).toBeUndefined();
+  });
+
+  it("uses the parent snapshot instead of a profile's skills setting", async () => {
+    const { spec } = await prepareAgentLaunch({
+      pi: makePi(), ctx: makeCtx(), type: "Review", prompt: "do the thing", description: "review",
+      options: { model: { provider: "test", id: "basic" }, thinking: "high", maxTurns: 10 },
+      agentId: "agent-id", childSessionId: "child-session", parentSessionFile: join(work, "parent.jsonl"),
+      sessionDir: work, mailboxDir: join(work, "mailbox"), skillsSnapshot: [makeSkill()],
+    });
+    expect(spec.runtime.skillsSnapshot).toEqual([makeSkill()]);
+    expect(spec.runtime.skillsSnapshotAuthoritative).toBe(true);
+    expect(spec.runtime.systemPrompt).not.toContain("Preloaded Skill");
+    const reopened = buildReopenDescriptor(spec);
+    expect(reopened.skillsSnapshot).toEqual([makeSkill()]);
+    expect(reopened.skillsSnapshotAuthoritative).toBe(true);
+  });
+
+  it("emits an authoritative empty snapshot", async () => {
+    const { spec } = await prepareAgentLaunch({
+      pi: makePi(), ctx: makeCtx(), type: "Review", prompt: "do the thing", description: "review",
+      options: { model: { provider: "test", id: "basic" }, thinking: "high", maxTurns: 10 },
+      agentId: "agent-id", childSessionId: "child-session", parentSessionFile: join(work, "parent.jsonl"),
+      sessionDir: work, mailboxDir: join(work, "mailbox"), skillsSnapshot: [],
+    });
+    expect(spec.runtime.skillsSnapshot).toEqual([]);
+    expect(spec.runtime.skillsSnapshotAuthoritative).toBe(true);
+    expect(buildReopenDescriptor(spec).skillsSnapshot).toEqual([]);
+  });
+});
 
 describe("prepareAgentLaunch", () => {
   it("creates a fresh replacement-prompt spec in the parent cwd", async () => {

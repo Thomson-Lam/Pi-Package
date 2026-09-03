@@ -18,6 +18,7 @@ import { buildAgentPrompt, type PromptExtras } from "./prompts.js";
 import { preloadSkills } from "./skill-loader.js";
 import { agentSessionName } from "./names.js";
 import type { AgentLaunchSpec, SubagentType, ThinkingLevel } from "./types.js";
+import { cloneSkillSnapshot, type SkillSnapshot } from "./skill-snapshot.js";
 import { writeJsonAtomic } from "./event-mailbox.js";
 
 // Re-export for callers that historically imported the spec from agent-runner.
@@ -85,6 +86,8 @@ export interface PrepareLaunchInput {
   ledgerNode?: ContextLedgerNode;
   /** Attached-context markdown delivered to the child as a custom message. */
   contextMessage?: string;
+  /** Launch-time snapshot of the parent's resolved Pi skills. */
+  skillsSnapshot?: SkillSnapshot[];
 }
 
 export interface PrepareLaunchResult {
@@ -115,8 +118,11 @@ export async function prepareAgentLaunch(input: PrepareLaunchInput): Promise<Pre
   const extras: PromptExtras = {};
   const skills = config.skills;
   const noSkills = skills === false || Array.isArray(skills);
+  const skillsSnapshot = cloneSkillSnapshot(input.skillsSnapshot);
 
-  if (Array.isArray(skills)) {
+  // A parent snapshot is authoritative for the child, so do not add a
+  // profile's named-skill prompt blocks alongside the inherited resource set.
+  if (Array.isArray(skills) && skillsSnapshot === undefined) {
     const loaded = preloadSkills(skills, effectiveCwd);
     if (loaded.length > 0) extras.skillBlocks = loaded;
   }
@@ -180,6 +186,9 @@ export async function prepareAgentLaunch(input: PrepareLaunchInput): Promise<Pre
       noExtensions,
       extensionPaths: finalExtensionPaths,
       noSkills,
+      ...(skillsSnapshot === undefined
+        ? {}
+        : { skillsSnapshot, skillsSnapshotAuthoritative: true }),
       ...(systemPrompt === undefined ? {} : { systemPrompt }),
       ...(input.promptPolicy ? { promptPolicy: input.promptPolicy } : {}),
     },
@@ -228,5 +237,8 @@ export function buildReopenDescriptor(spec: AgentLaunchSpec): ReopenDescriptor {
     promptPolicy: spec.runtime.promptPolicy,
     sessionDir: spec.session.sessionDir,
     maxTurns: spec.run.maxTurns,
+    ...(spec.runtime.skillsSnapshot === undefined
+      ? (spec.runtime.skillsSnapshotAuthoritative ? { skillsSnapshot: [], skillsSnapshotAuthoritative: true } : {})
+      : { skillsSnapshot: cloneSkillSnapshot(spec.runtime.skillsSnapshot)!, skillsSnapshotAuthoritative: true }),
   };
 }

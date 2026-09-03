@@ -68,6 +68,7 @@ import { execFromPi, findWindowByName, focusWindow } from "./tmux-window.js";
 import { openContextTree } from "./ui/context-tree.js";
 import { buildContextUI } from "./ui/context-selection.js";
 import { getLifetimeTotal, type LifetimeUsage } from "./usage.js";
+import { cloneSkillSnapshot, type SkillSnapshot } from "./skill-snapshot.js";
 
 // ---- Shared helpers ----
 
@@ -308,6 +309,27 @@ function buildNotificationDetails(record: AgentRecord, resultMaxLen: number, act
 }
 
 export default function (pi: ExtensionAPI) {
+  // Captured from Pi's resolved prompt inputs at parent launch time. This is
+  // intentionally a snapshot: children do not follow later resource changes.
+  let parentSkillsSnapshot: SkillSnapshot[] | undefined;
+
+  const skillsForLaunch = (ctx: unknown): SkillSnapshot[] | undefined => {
+    const getter = (ctx as { getSystemPromptOptions?: () => { skills?: unknown } } | undefined)?.getSystemPromptOptions;
+    if (typeof getter === "function") {
+      try {
+        const snapshot = cloneSkillSnapshot(getter.call(ctx)?.skills);
+        if (snapshot !== undefined) return snapshot;
+      } catch { /* fall back to the latest lifecycle snapshot */ }
+    }
+    return cloneSkillSnapshot(parentSkillsSnapshot);
+  };
+
+  // Normal Agent-tool launches happen after this event. It exposes Pi's
+  // already-resolved project, global, package, and runtime-discovered skills.
+  pi.on("before_agent_start", (event) => {
+    parentSkillsSnapshot = cloneSkillSnapshot(event.systemPromptOptions.skills);
+  });
+
   // The plain child bootstrap requests this shared TypeScript flow over the
   // in-process event bus. This keeps /or and automatic Return on the exact
   // same selector/compaction implementation as launch approval.
@@ -1256,6 +1278,7 @@ The child starts fresh and receives only the self-contained task prompt.
 
     execute: async (toolCallId, params, signal, _onUpdate, ctx) => {
       fleet.setUICtx(ctx.ui as unknown as FleetUICtx);
+      const launchSkillsSnapshot = skillsForLaunch(ctx);
 
       // Reload custom agents so new project/global .md files are picked up without restart
       reloadCustomAgents();
@@ -1471,6 +1494,7 @@ The child starts fresh and receives only the self-contained task prompt.
           invocation: agentInvocation,
           ...(ledgerNode ? { ledgerNode } : {}),
           ...(contextMessage ? { contextMessage } : {}),
+          ...(launchSkillsSnapshot === undefined ? {} : { skillsSnapshot: launchSkillsSnapshot }),
         });
       } catch (err) {
         return textResult(err instanceof Error ? err.message : String(err));
@@ -1760,6 +1784,7 @@ The child starts fresh and receives only the self-contained task prompt.
 
   /** Launch a new agent from an existing /ot ledger context. */
   async function launchAgentFromContext(ctx: ExtensionCommandContext, inheritedNodes: ContextLedgerNode[]) {
+    const launchSkillsSnapshot = skillsForLaunch(ctx);
     reloadCustomAgents();
     const available = getAvailableTypes();
     if (available.length === 0) {
@@ -1852,6 +1877,7 @@ The child starts fresh and receives only the self-contained task prompt.
         invocation,
         ...(ledgerNode ? { ledgerNode } : {}),
         ...(contextMessage ? { contextMessage } : {}),
+        ...(launchSkillsSnapshot === undefined ? {} : { skillsSnapshot: launchSkillsSnapshot }),
       });
     } catch (err) {
       ctx.ui.notify(err instanceof Error ? err.message : String(err), "warning");
@@ -1869,6 +1895,7 @@ The child starts fresh and receives only the self-contained task prompt.
 
   /** Build context from this session and launch an unlimited general-purpose agent. */
   async function launchNewAgent(ctx: ExtensionCommandContext) {
+    const launchSkillsSnapshot = skillsForLaunch(ctx);
     let branch;
     try {
       branch = ctx.sessionManager.getBranch();
@@ -1962,6 +1989,7 @@ The child starts fresh and receives only the self-contained task prompt.
         invocation,
         ...(ledgerNode ? { ledgerNode } : {}),
         ...(contextMessage ? { contextMessage } : {}),
+        ...(launchSkillsSnapshot === undefined ? {} : { skillsSnapshot: launchSkillsSnapshot }),
       });
     } catch (err) {
       ctx.ui.notify(err instanceof Error ? err.message : String(err), "warning");
@@ -2224,6 +2252,7 @@ The child starts fresh and receives only the self-contained task prompt.
   }
 
   async function showGenerateWizard(ctx: ExtensionCommandContext, targetDir: string) {
+    const launchSkillsSnapshot = skillsForLaunch(ctx);
     const description = await ctx.ui.input("Describe what this agent should do");
     if (!description) return;
 
@@ -2268,6 +2297,7 @@ Write the file using the write tool. Only write the file, nothing else.`;
     const { record } = await manager.spawnAndWait(pi, ctx, "general-purpose", generatePrompt, {
       description: `Generate ${name} agent`,
       maxTurns: 5,
+      ...(launchSkillsSnapshot === undefined ? {} : { skillsSnapshot: launchSkillsSnapshot }),
     });
 
     if (record.status === "error") {

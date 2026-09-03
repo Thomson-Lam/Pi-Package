@@ -24,6 +24,7 @@ import { type ChildEvent, ensureMailboxDir, readPendingDecision, removeMailboxDi
 import { createAgentWindow, execFromPi, findWindowByName as findTmuxWindowByName, focusWindow as focusTmuxWindow, killWindow as killTmuxWindow, shellQuote, windowAlive as tmuxWindowAlive, type TmuxExec } from "./tmux-window.js";
 import { agentSessionName, agentWindowName } from "./names.js";
 import { type AgentRecord, type AgentWindowInfo, type SubagentType, type ThinkingLevel } from "./types.js";
+import { cloneSkillSnapshot, type SkillSnapshot } from "./skill-snapshot.js";
 
 /** Tool activity callback (kept for foreground streaming compatibility). */
 export interface ToolActivity {
@@ -45,6 +46,8 @@ export interface SpawnOptions {
   ledgerNode?: ContextLedgerNode;
   /** Attached-context markdown injected into the child as a custom message. */
   contextMessage?: string;
+  /** Launch-time snapshot of the parent's resolved Pi skills. */
+  skillsSnapshot?: SkillSnapshot[];
   onToolActivity?: (activity: ToolActivity) => void;
   onTurnEnd?: (turnCount: number) => void;
   onAssistantUsage?: (usage: { input: number; output: number; cacheWrite: number }) => void;
@@ -89,6 +92,12 @@ function isWorkActive(record: AgentRecord): boolean {
   return record.status === "queued" || record.status === "running" || isDecisionPending(record);
 }
 function isTerminalRecord(record: AgentRecord): boolean { return !isActiveRecord(record); }
+
+function snapshotFromContext(ctx: unknown): SkillSnapshot[] | undefined {
+  const getter = (ctx as { getSystemPromptOptions?: () => { skills?: unknown } } | undefined)?.getSystemPromptOptions;
+  if (typeof getter !== "function") return undefined;
+  try { return cloneSkillSnapshot(getter.call(ctx)?.skills); } catch { return undefined; }
+}
 
 /** Human-readable tool action label. */
 function actionFor(toolName: string): string {
@@ -278,6 +287,11 @@ export class AgentManager {
     const childSessionId = randomUUID();
     const model = options.model ?? ctx.model;
     if (!model) throw new Error("No effective model available for agent launch.");
+    // Command callers can expose Pi's current base prompt options; this also
+    // covers RPC/manual launches that did not explicitly carry a snapshot.
+    const skillsSnapshot = options.skillsSnapshot === undefined
+      ? snapshotFromContext(ctx)
+      : cloneSkillSnapshot(options.skillsSnapshot);
     const { spec, warnings } = await this.deps.prepare({
       pi,
       ctx,
@@ -297,6 +311,7 @@ export class AgentManager {
       mailboxDir,
       ledgerNode: options.ledgerNode,
       ...(options.contextMessage ? { contextMessage: options.contextMessage } : {}),
+      ...(skillsSnapshot === undefined ? {} : { skillsSnapshot }),
     });
 
     for (const warning of warnings) {
@@ -1002,6 +1017,9 @@ export class AgentManager {
         cwd: reopen.cwd, packageDir: getPackageDir(), model: reopen.model,
         thinking: reopen.thinking, tools: reopen.tools, noExtensions: reopen.noExtensions,
         extensionPaths: reopen.extensionPaths, noSkills: reopen.noSkills,
+        ...(reopen.skillsSnapshotAuthoritative
+          ? { skillsSnapshot: reopen.skillsSnapshot ?? [], skillsSnapshotAuthoritative: true }
+          : {}),
         ...(reopen.systemPrompt === undefined ? {} : { systemPrompt: reopen.systemPrompt }),
         ...(reopen.promptPolicy ? { promptPolicy: reopen.promptPolicy } : {}),
       },
@@ -1079,6 +1097,9 @@ export class AgentManager {
         noExtensions: reopen.noExtensions,
         extensionPaths: reopen.extensionPaths,
         noSkills: reopen.noSkills,
+        ...(reopen.skillsSnapshotAuthoritative
+          ? { skillsSnapshot: reopen.skillsSnapshot ?? [], skillsSnapshotAuthoritative: true }
+          : {}),
         ...(reopen.systemPrompt === undefined ? {} : { systemPrompt: reopen.systemPrompt }),
         ...(reopen.promptPolicy ? { promptPolicy: reopen.promptPolicy } : {}),
       },
