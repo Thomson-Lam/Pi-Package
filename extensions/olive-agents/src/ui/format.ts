@@ -134,6 +134,14 @@ export function formatTurns(turnCount: number, maxTurns?: number | null): string
   return maxTurns != null ? `↻${turnCount}≤${maxTurns}` : `↻${turnCount}`;
 }
 
+/** Render the agent-session picker hint without exceeding the component width. */
+export function formatAgentSessionPickerHint(theme: Theme, width: number): string {
+  return truncateToWidth(
+    theme.fg("dim", "↑/↓ select agent · Enter focus/reopen · d dismiss · Esc close"),
+    width,
+  );
+}
+
 /** Format milliseconds as human-readable duration. */
 export function formatMs(ms: number): string {
   return `${(ms / 1000).toFixed(1)}s`;

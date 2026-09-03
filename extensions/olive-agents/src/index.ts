@@ -54,6 +54,7 @@ import {
   type AgentDetails,
   buildInvocationTags,
   fgPreservingNestedStyles,
+  formatAgentSessionPickerHint,
   formatDuration,
   formatMs,
   formatTokens,
@@ -1428,7 +1429,7 @@ The child starts fresh and receives only the self-contained task prompt.
 
       // Context-ledger finalization: embeds any inherited chain + the new node
       // into the child prompt, and produces the node the child persists.
-      const { prompt, ledgerNode } = finalizeLaunchContext(ctx, approved.context, approved.prompt);
+      const { prompt, ledgerNode, contextMessage } = finalizeLaunchContext(ctx, approved.context, approved.prompt);
       const effectiveModel = approved.model;
       model = effectiveModel;
       thinking = approved.thinking;
@@ -1826,7 +1827,7 @@ The child starts fresh and receives only the self-contained task prompt.
     }
     if (approved.outcome === "cancel") return;
 
-    const { prompt, ledgerNode } = finalizeLaunchContext(ctx, approved.context, approved.prompt);
+    const { prompt, ledgerNode, contextMessage } = finalizeLaunchContext(ctx, approved.context, approved.prompt);
     const effectiveMaxTurns = approved.maxTurns;
     const modelName = approved.model.id !== ctx.model?.id
       ? (approved.model.name ?? approved.model.id).replace(/^Claude\s+/i, "").toLowerCase()
@@ -1944,7 +1945,7 @@ The child starts fresh and receives only the self-contained task prompt.
     }
     if (approved.outcome === "cancel") return;
 
-    const { prompt: launchPrompt, ledgerNode } = finalizeLaunchContext(ctx, approved.context, approved.prompt);
+    const { prompt: launchPrompt, ledgerNode, contextMessage } = finalizeLaunchContext(ctx, approved.context, approved.prompt);
     const invocation: AgentInvocation = {
       thinking: approved.thinking,
       runInBackground: approved.runInBackground,
@@ -1986,13 +1987,8 @@ The child starts fresh and receives only the self-contained task prompt.
     try {
       const selected = await ctx.ui.custom<string | undefined>(
         (_tui, theme, _kb, done) => {
-          const hint = theme.fg("dim", "↑/↓ select agent · Enter focus tmux window · Esc close");
-          let hintLine: string[] = [hint];
           return {
-            render: (w: number) => {
-              hintLine = [theme.fg("dim", "↑/↓ select agent · Enter focus/reopen · d dismiss · Esc close")];
-              return hintLine;
-            },
+            render: (w: number) => [formatAgentSessionPickerHint(theme, w)],
             invalidate: () => {},
             handleInput: (data: string) => {
               if (matchesKey(data, "up") || matchesKey(data, "k")) { fleet.moveSelection(-1); return; }

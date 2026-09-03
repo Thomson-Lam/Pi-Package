@@ -3,6 +3,7 @@ import { describe, expect, it, vi } from "vitest";
 import type { AgentRecord } from "../src/types.js";
 import { zellijName } from "../src/names.js";
 import { FleetList, formatFleetTokens } from "../src/ui/fleet-list.js";
+import { formatAgentSessionPickerHint } from "../src/ui/format.js";
 
 const theme = { fg: (_c: string, s: string) => s, bold: (s: string) => s };
 const record = (over: Partial<AgentRecord> = {}) => ({
@@ -29,6 +30,12 @@ function harness(records: AgentRecord[]) {
 describe("passive FleetList", () => {
   it("formats compact token metrics", () => {
     expect(formatFleetTokens(1200)).toBe("1.2k");
+  });
+  it("truncates the picker hint to narrow terminal widths", () => {
+    const hint = formatAgentSessionPickerHint(theme, 50);
+    expect(visibleWidth(hint)).toBeLessThanOrEqual(50);
+    expect(hint).not.toContain("Esc close");
+    expect(formatAgentSessionPickerHint(theme, 100)).toContain("Esc close");
   });
   it("shows queued records before a session exists and captures no input", () => {
     const h = harness([record()]);
