@@ -97,7 +97,7 @@ export interface AgentLaunchSpec {
     mailboxDir: string;
   };
   /** Context ledger carried by this launch; the child persists its node on first run. */
-  ledger?: { node: ContextLedgerNode };
+  ledger?: { node: ContextLedgerNode; /** Attached-context markdown injected as a custom message. */ message?: string };
 }
 
 /** Persistent Pi session identity of a child agent session. */

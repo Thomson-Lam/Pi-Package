@@ -19,8 +19,8 @@ import {
   type ContextLedgerNode,
   type ContextLinkData,
   type TreeRow,
-  buildContextPrompt,
   computeTreeRows,
+  contextAttachmentToMarkdown,
   contextReturnToMarkdown,
   finalizeContextReturn,
   finalizeLedgerContext,
@@ -166,15 +166,35 @@ describe("serialization", () => {
     expect(md).toContain("hello world");
   });
 
-  it("buildContextPrompt embeds inherited chain then the new node", () => {
+  it("contextAttachmentToMarkdown builds ## context with numbered ### agent (N) sections", () => {
     const parent = node("L1", undefined);
     const child = node("L2", "L1");
-    const prompt = buildContextPrompt("do the thing", [parent], child);
-    expect(prompt).toMatch(/^# context/);
-    expect(prompt).toContain("Inherited context 1");
-    expect(prompt).not.toContain("## Context:");
-    expect(prompt).toContain("# instructions");
-    expect(prompt).toContain("do the thing");
+    const md = contextAttachmentToMarkdown([parent, child]);
+    expect(md).toMatch(/^## context/);
+    expect(md).toContain("### agent (1)");
+    expect(md).toContain("### agent (2)");
+    expect(md).toContain("hello world");
+  });
+
+  it("contextReturnToMarkdown renders ## context with numbered ## agent (N) sections", () => {
+    const checkpoint = {
+      version: 1 as const,
+      id: "cp-1",
+      agentId: "agent-1",
+      sourceSessionName: "child",
+      createdAt: "2025-01-01T00:00:00.000Z",
+      reason: "completed" as const,
+      selections: [
+        { kind: "message" as const, entryId: "m1", role: "assistant", label: "assistant · one", text: "first result" },
+        { kind: "message" as const, entryId: "m2", role: "user", label: "user · two", text: "second note" },
+      ],
+      coveredEntryIds: ["m1", "m2"],
+    };
+    const md = contextReturnToMarkdown(checkpoint);
+    expect(md).toMatch(/^## context/);
+    expect(md).toContain("## agent (1)\n\n## Agent\nfirst result");
+    expect(md).toContain("## agent (2)\n\n## User\nsecond note");
+    expect(md).not.toContain("### ");
   });
 });
 
@@ -210,6 +230,22 @@ describe("child-to-parent context checkpoints", () => {
       reason: "manual",
     });
     expect(checkpoint.coveredEntryIds).toEqual([selected]);
+  });
+
+  it("carries an optional check-in note on the checkpoint", () => {
+    const sm = makeSession("return-note");
+    const selected = sm.appendMessage({ role: "assistant", content: [{ type: "text", text: "work" }] } as never);
+    const checkpoint = finalizeContextReturn({
+      agentId: "agent-1",
+      built: { selectedIds: [selected], inheritedNodes: [] },
+      branch: sm.getBranch(),
+      sourceSessionName: "child",
+      reason: "manual",
+      note: "please review this next",
+    });
+    expect(checkpoint.note).toBe("please review this next");
+    expect(checkpoint.coveredEntryIds).toEqual([selected]);
+    expect(checkpoint.selections.map((s) => s.entryId)).toEqual([selected]);
   });
 
   it("excludes the inherited launch payload and already checkpointed messages", () => {
@@ -483,21 +519,24 @@ function captureCustom<R>(open: (ctx: any) => Promise<R>): CapturedComponent {
 interface TreeCapture extends CapturedComponent {
   focusCalls: TreeRow[];
   startCalls: TreeRow[];
+  launchCalls: TreeRow[];
 }
 
 /** Capture the real /ot + inheritance context tree (openContextTree). */
 function captureContextTree(input: Omit<ContextTreeInput, "ctx">): TreeCapture {
   const focusCalls: TreeRow[] = [];
   const startCalls: TreeRow[] = [];
+  const launchCalls: TreeRow[] = [];
   const cap = captureCustom<string | undefined>((ctx) =>
     openContextTree({
       ...input,
       ctx,
       focusOrOpen: async (row) => { focusCalls.push(row); },
       startNewAgent: async (row) => { startCalls.push(row); },
+      launchNewAgent: async (row) => { launchCalls.push(row); },
     }),
   );
-  return { ...cap, focusCalls, startCalls };
+  return { ...cap, focusCalls, startCalls, launchCalls };
 }
 
 /** Capture the real launch message-selection TUI (buildContextUI). */
@@ -557,12 +596,15 @@ describe("finalized ledger context (what goes into the agent)", () => {
     expect(ledgerNode.summary).toBeUndefined();
     // Snapshots follow branch order, not selection order.
     expect(ledgerNode.selections.map((s) => s.entryId)).toEqual([userObjective, assistantPlan]);
-    expect(result.prompt).toContain("# context");
-    expect(result.prompt).toContain("Implementation plan: build the ledger scenarios stub first.");
-    expect(result.prompt).not.toContain("file body noise");
-    expect(result.prompt).not.toContain("Inherited context");
-    expect(result.prompt.endsWith(`# instructions\n${FIXED_INSTRUCTIONS}`)).toBe(true);
+    // The instructions prompt stays bare; context is attached separately.
+    expect(result.prompt).toBe(FIXED_INSTRUCTIONS);
+    expect(result.contextMessage).toContain("## context");
+    expect(result.contextMessage).toContain("### agent (1)");
+    expect(result.contextMessage).toContain("Implementation plan: build the ledger scenarios stub first.");
+    expect(result.contextMessage).not.toContain("file body noise");
+    expect(result.contextMessage).not.toContain("Inherited context");
     dumpText("selected-only / agent payload", result.prompt);
+    dumpVisual("selected-only / attached context", result.contextMessage!.split("\n"));
   });
 
   it("summary-only: no snapshots, summary embedded, fresh root", () => {
@@ -580,9 +622,10 @@ describe("finalized ledger context (what goes into the agent)", () => {
     expect(ledgerNode.summary).toBe(FIXED_SUMMARY);
     expect(ledgerNode.selections).toEqual([]);
     expect(ledgerNode.parentId).toBeUndefined();
-    expect(result.prompt).toContain("## Decisions from prior session");
-    expect(result.prompt).toContain(FIXED_SUMMARY);
-    expect(result.prompt).not.toContain("Selected messages");
+    expect(result.prompt).toBe(FIXED_INSTRUCTIONS);
+    expect(result.contextMessage).toContain("## context");
+    expect(result.contextMessage).toContain(FIXED_SUMMARY);
+    expect(result.contextMessage).not.toContain("Selected messages");
     dumpText("summary-only / agent payload", result.prompt);
   });
 
@@ -600,10 +643,12 @@ describe("finalized ledger context (what goes into the agent)", () => {
     });
     expect(result.ledgerNode!.parentId).toBe("L1");
     expect(result.ledgerNode!.selections).toEqual([]);
-    expect(result.prompt).toContain("## Inherited context 1: B1 plan");
-    expect(result.prompt).toContain("## Inherited context 2: B1 plan");
-    // The empty new node contributes no block, so there is no fresh context header.
-    expect(result.prompt).not.toContain("## Context:");
+    expect(result.prompt).toBe(FIXED_INSTRUCTIONS);
+    // The inherited chain renders as numbered agent sections; the empty new
+    // node contributes no block.
+    expect(result.contextMessage).toContain("### agent (1)");
+    expect(result.contextMessage).toContain("### agent (2)");
+    expect(result.contextMessage).not.toContain("## Context:");
     dumpText("inherit-only / agent payload", result.prompt);
   });
 
@@ -624,20 +669,23 @@ describe("finalized ledger context (what goes into the agent)", () => {
     });
     expect(result.ledgerNode!.parentId).toBe("L1");
     expect(result.ledgerNode!.summary).toBe(FIXED_SUMMARY);
-    // Everything here is deterministic, so assert the EXACT prompt string —
-    // this is the precise payload that would enter the agent.
+    expect(result.prompt).toBe(FIXED_INSTRUCTIONS);
+    // Everything here is deterministic, so assert the EXACT attached-context
+    // string — the precise custom-message payload injected into the child.
     const expected = [
-      "# context",
-      "## Inherited context 1: B1 plan",
+      "## context",
+      "",
+      "### agent (1)",
       "## Selected messages",
       "### user (m1)",
       "hello world",
       "",
-      "## Inherited context 2: B1 plan",
+      "### agent (2)",
       "## Selected messages",
       "### user (m1)",
       "hello world",
       "",
+      "### agent (3)",
       "## Decisions from prior session",
       FIXED_SUMMARY,
       "",
@@ -647,12 +695,10 @@ describe("finalized ledger context (what goes into the agent)", () => {
       "",
       `### assistant (${assistantPlan})`,
       "Implementation plan: build the ledger scenarios stub first.",
-      "",
-      "# instructions",
-      FIXED_INSTRUCTIONS,
     ].join("\n");
-    expect(result.prompt).toBe(expected);
+    expect(result.contextMessage).toBe(expected);
     dumpText("combined / agent payload", result.prompt);
+    dumpVisual("combined / attached context", result.contextMessage!.split("\n"));
   });
 
   it("tool noise: tool calls and results never enter the node or prompt", () => {
@@ -670,8 +716,9 @@ describe("finalized ledger context (what goes into the agent)", () => {
     });
     expect(result.ledgerNode!.selections.map((s) => s.entryId))
       .toEqual([ids.userObjective, ids.assistantPlan, ids.assistantDecision]);
-    expect(result.prompt).not.toContain("file body noise");
-    expect(result.prompt).not.toContain("src/a.ts");
+    expect(result.prompt).toBe(FIXED_INSTRUCTIONS);
+    expect(result.contextMessage).not.toContain("file body noise");
+    expect(result.contextMessage).not.toContain("src/a.ts");
     dumpText("tool-noise / agent payload", result.prompt);
   });
 });
@@ -1030,6 +1077,54 @@ describe("context tree + TUI rendering (scenario gallery)", () => {
     expect(ot.startCalls).toHaveLength(1);
     expect(ot.startCalls[0]).toMatchObject({ node: finalized.ledgerNode });
     expect(ot.isSettled()).toBe(true);
+  });
+
+  it("session rows offer 'Launch an agent' (the /otn flow); ledger rows do not", async () => {
+    const b1 = makeSession("B1-plan", undefined, "B1 plan");
+    const ctxChild = makeSession("B2-ctx", b1.getSessionFile()!, "B2 context");
+    withLedger(ctxChild, node("L1", undefined, T1, "B1 plan"));
+    const iso = makeSession("B3-iso", b1.getSessionFile()!, "B3 isolated");
+    b1.appendCustomEntry(CONTEXT_LINK_ENTRY, { ...link(b1, ctxChild, node("L1", undefined, T1, "B1 plan")), stage: "ready" });
+    b1.appendCustomEntry(CONTEXT_LINK_ENTRY, { ...link(b1, iso, undefined), stage: "ready" });
+    b1.appendMessage({ role: "assistant", content: [{ type: "text", text: "ok" }], provider: "test", model: "basic", stopReason: "stop" } as never);
+    ctxChild.appendMessage({ role: "assistant", content: [{ type: "text", text: "ok" }], provider: "test", model: "basic", stopReason: "stop" } as never);
+    iso.appendMessage({ role: "assistant", content: [{ type: "text", text: "ok" }], provider: "test", model: "basic", stopReason: "stop" } as never);
+
+    const graph = loadLedgerGraph(b1.getSessionFile()!, readSessionEntries, sessionDisplayName);
+    const rows = computeTreeRows(graph, b1.getSessionFile()!);
+    expect(rows.map((r) => r.number)).toEqual(["[0a]", "[1]", "[0b]"]);
+
+    const cap = captureContextTree({ graph, ancestorFiles: [b1.getSessionFile()!], currentFile: b1.getSessionFile()! });
+
+    // Enter on the parent session row: session rows get Launch an agent.
+    cap.input(ENTER);
+    const rootMenu = cap.render();
+    dumpVisual("/ot session row action menu", rootMenu);
+    expectFits(rootMenu);
+    expect(rootMenu.join("\n")).toContain("Launch an agent");
+    expect(rootMenu.join("\n")).not.toContain("Start new agent");
+    expect(rootMenu.join("\n")).not.toContain("View context");
+    cap.input("q"); // back to browse
+
+    // Ledger row: inherits the old actions, never Launch an agent.
+    cap.input("j"); // cursor → [1] B2 context
+    cap.input(ENTER);
+    const ctxMenu = cap.render();
+    dumpVisual("/ot ledger row action menu", ctxMenu);
+    expect(ctxMenu.join("\n")).toContain("View context");
+    expect(ctxMenu.join("\n")).toContain("Start new agent");
+    expect(ctxMenu.join("\n")).not.toContain("Launch an agent");
+    cap.input("q");
+
+    // Isolated session row: Launch an agent is present and invokes the /otn flow.
+    cap.input("j"); // cursor → [0b] B3 isolated
+    cap.input(ENTER);
+    cap.input("j"); // Open agent session → Launch an agent
+    cap.input(ENTER);
+    await Promise.resolve();
+    expect(cap.launchCalls).toHaveLength(1);
+    expect(cap.startCalls).toHaveLength(0);
+    expect(cap.isSettled()).toBe(true);
   });
 
   it("context selection TUI: live list, selection state, preview, tool noise excluded", async () => {

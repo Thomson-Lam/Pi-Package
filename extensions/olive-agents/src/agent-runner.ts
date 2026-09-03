@@ -83,6 +83,8 @@ export interface PrepareLaunchInput {
   mailboxDir: string;
   /** Optional context ledger node accompanying this launch. */
   ledgerNode?: ContextLedgerNode;
+  /** Attached-context markdown delivered to the child as a custom message. */
+  contextMessage?: string;
 }
 
 export interface PrepareLaunchResult {
@@ -186,7 +188,9 @@ export async function prepareAgentLaunch(input: PrepareLaunchInput): Promise<Pre
       maxTurns,
     },
     bridge: { mailboxDir: input.mailboxDir },
-    ...(input.ledgerNode ? { ledger: { node: input.ledgerNode } } : {}),
+    ...(input.ledgerNode
+      ? { ledger: { node: input.ledgerNode, ...(input.contextMessage ? { message: input.contextMessage } : {}) } }
+      : {}),
   };
 
   if (!input.parentSessionFile) {

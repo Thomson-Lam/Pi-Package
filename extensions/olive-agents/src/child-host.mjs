@@ -117,6 +117,25 @@ const bridgeFactory = (pi) => {
   registerPromptPolicy(pi, spec.runtime.promptPolicy, () => nativeSystemPrompt);
 
   pi.on("session_start", (_event, ctx) => { bridgeContext = ctx; });
+
+  /**
+   * /or may only return context to a parent, so it must no-op when the
+   * current session is not a child (no parentSession in the JSONL header).
+   * The header is authoritative for reopened sessions; the launch spec's
+   * parentFile is the fallback for fresh sessions.
+   */
+  const isChildSession = () => {
+    try {
+      const entries = sessionManager?.getEntries?.() ?? [];
+      const header = entries.find((e) => e?.type === "session");
+      if (header) return Boolean(header.parentSession);
+    } catch { /* fall through to spec */ }
+    return Boolean(spec?.session?.parentFile);
+  };
+
+  // Register /or only for genuine children: a parent session must never even
+  // expose the command, regardless of how the bridge happens to load.
+  if (isChildSession()) {
   pi.registerCommand("or", {
     description: "Return new child context to the parent",
     handler: async (_args, ctx) => {
@@ -133,6 +152,7 @@ const bridgeFactory = (pi) => {
       await returnContext(decision, ctx);
     },
   });
+  }
   // Any direct human work transfers control from the delegated automatic run
   // to an unlimited interactive conversation. The initial task payload is
   // delivered through the same input channel but is NOT a human intervention,
@@ -227,6 +247,19 @@ if (pendingDecision?.runNumber) {
   currentMaxTurns = pendingDecision.maxTurns;
   workStarted = true;
 }
+// Manual unlimited launches (/otn, /ot → Launch an agent) run interactive from
+// the start: there is no ceiling, and completion must never open the automatic
+// decision gate — the human returns context explicitly with /or. Limited
+// launches (Agent tool, /ot → Start new agent, parent resumes) stay automatic.
+// Only fresh launches derive the mode from the spec; reopens trust the
+// persisted control-mode entry.
+if (!spec.session.openFile && currentMaxTurns === undefined) {
+  enterInteractiveMode();
+  workStarted = true;
+}
+// Record the boot state for the parent: reopened children start idle (or
+// awaiting a restored decision); fresh spawns are corrected by run_started.
+persistBridgeState(pendingDecision ? "awaiting_decision" : "idle");
 try {
   const modeEntries = sessionManager.getEntries().filter((entry) =>
     entry?.type === "custom" && entry.customType === "olive-agent-control-mode"
@@ -621,6 +654,21 @@ if (!spec.session.openFile && spec.ledger?.node) {
     sessionManager.appendCustomEntry("olive-agent-context-ledger", { version: 1, node: spec.ledger.node });
   } catch (err) {
     console.error(`[olive-agent] failed to persist context ledger: ${err?.message ?? err}`);
+  }
+  // Attached context is delivered as a custom message (same type as returns)
+  // so the child sees context + instructions separately; it participates in
+  // LLM context and persists as a custom_message entry, never as a user blob.
+  if (spec.ledger.message) {
+    try {
+      sessionManager.appendCustomMessageEntry(
+        "subagent-context-checkpoint",
+        spec.ledger.message,
+        true,
+        { direction: "attached", ledgerNodeId: spec.ledger.node.id },
+      );
+    } catch (err) {
+      console.error(`[olive-agent] failed to append attached context: ${err?.message ?? err}`);
+    }
   }
 }
 

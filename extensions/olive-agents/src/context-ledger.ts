@@ -84,6 +84,8 @@ export interface ContextReturnCheckpoint {
   selections: LedgerSnapshot[];
   /** Source message ids represented by selections or compaction. */
   coveredEntryIds: string[];
+  /** Optional human check-in note returned to the parent as a user message. */
+  note?: string;
 }
 
 export interface ContextReturnAcknowledgement {
@@ -310,6 +312,8 @@ export interface FinalizeContextReturnInput {
   reason: ContextReturnCheckpoint["reason"];
   checkpointId?: string;
   createdAt?: string;
+  /** Optional human check-in note delivered to the parent as a user message. */
+  note?: string;
 }
 
 /** Build an incremental return checkpoint without mutating either session. */
@@ -326,32 +330,39 @@ export function finalizeContextReturn(input: FinalizeContextReturnInput): Contex
     ...(input.built.summary ? { summary: input.built.summary } : {}),
     selections: snapshotSelections(input.branch, new Set(input.built.selectedIds)),
     coveredEntryIds: input.built.summary ? messageIds : [...input.built.selectedIds],
+    ...(input.note ? { note: input.note } : {}),
   };
 }
 
 export function contextReturnToMarkdown(checkpoint: ContextReturnCheckpoint): string {
-  return nodeToMarkdown(checkpoint) || "(no context selected)";
+  const parts: string[] = ["## context"];
+  let n = 1;
+  if (checkpoint.summary?.trim()) {
+    parts.push(`## agent (${n++})\n${checkpoint.summary.trim()}`);
+  }
+  for (const selection of checkpoint.selections) {
+    // Title each section by its author so the parent can tell who said what.
+    const title = selection.role === "user" ? "## User" : selection.role === "assistant" ? "## Agent" : "";
+    parts.push(
+      title
+        ? `## agent (${n++})\n\n${title}\n${selection.text}`
+        : `## agent (${n++})\n${selection.text}`,
+    );
+  }
+  return parts.length > 1 ? parts.join("\n\n") : "## context";
 }
 
 /**
- * Build the child's full launch prompt:
- *
- *   # context
- *   <inherited chain, root→leaf, then the new node>
- *   # instructions
- *   <agent prompt>
+ * Attached-context markdown for a child session: `## context` with one
+ * `### agent (N)` section per ledger node in the chain (root→leaf incl. own).
  */
-export function buildContextPrompt(instructions: string, chain: ContextLedgerNode[], node: ContextLedgerNode): string {
-  const contextNodes = [...chain, node].filter(Boolean);
-  const blocks = contextNodes.map((n, i) => {
-    const body = nodeToMarkdown(n);
-    const header = i === contextNodes.length - 1
-      ? ""
-      : `## Inherited context ${i + 1}: ${n.sourceSessionName}`;
-    return body ? `${header ? `${header}\n` : ""}${body}` : "";
-  }).filter(Boolean);
-  const contextBlock = blocks.length > 0 ? blocks.join("\n\n") : "(no context selected)";
-  return `# context\n${contextBlock}\n\n# instructions\n${instructions}`;
+export function contextAttachmentToMarkdown(nodes: ContextLedgerNode[]): string {
+  const parts: string[] = ["## context"];
+  nodes.forEach((node, i) => {
+    const body = node ? nodeToMarkdown(node) : "";
+    if (body) parts.push(`### agent (${i + 1})\n${body}`);
+  });
+  return parts.length > 1 ? parts.join("\n\n") : "## context";
 }
 
 // ---- Finalization (what actually goes into the agent) ----------------------
@@ -378,15 +389,20 @@ export interface FinalizeLedgerContextInput {
 }
 
 export interface FinalizedLedgerContext {
+  /** Instructions-only prompt for the child's user message. */
   prompt: string;
   ledgerNode?: ContextLedgerNode;
+  /** Attached-context markdown delivered to the child as a custom message. */
+  contextMessage?: string;
 }
 
 /**
  * Turn an approved context into a launch-ready ledger node + the final child
- * prompt. The prompt embeds the full inherited chain (ancestor nodes root→leaf
- * plus the new node). Returns the original instructions and no node when no
- * context was built (isolated launch). Pure: no session/ctx access.
+ * prompt. The instructions prompt stays bare; the full context (inherited
+ * chain root→leaf plus the new node) is returned as `contextMessage` for the
+ * child's custom-message injection. Returns the original instructions and no
+ * node when no context was built (isolated launch). Pure: no session/ctx
+ * access.
  */
 export function finalizeLedgerContext(input: FinalizeLedgerContextInput): FinalizedLedgerContext {
   const { instructions, built, branch } = input;
@@ -407,7 +423,11 @@ export function finalizeLedgerContext(input: FinalizeLedgerContextInput): Finali
     selections: snapshotSelections(branch, new Set(built.selectedIds)),
   };
 
-  return { prompt: buildContextPrompt(instructions, inherited, node), ledgerNode: node };
+  return {
+    prompt: instructions,
+    ledgerNode: node,
+    contextMessage: contextAttachmentToMarkdown([...inherited, node]),
+  };
 }
 
 // ---- Session file reading ------------------------------------------------

@@ -349,6 +349,12 @@ export default function (pi: ExtensionAPI) {
         request.respond({ cancelled: true });
         return;
       }
+      // Optional check-in note, returned to the parent as a user message.
+      // Empty input or cancel skips the note; the context still returns.
+      const noteText = await childCtx.ui.input(
+        "Message to return to the parent (empty to skip)",
+      );
+      const note = noteText?.trim() || undefined;
       const checkpoint = finalizeContextReturn({
         agentId: request.agentId,
         built,
@@ -356,6 +362,7 @@ export default function (pi: ExtensionAPI) {
         sourceSessionFile: childCtx.sessionManager.getSessionFile(),
         sourceSessionName: sessionLabel(childCtx),
         reason: request.reason ?? "manual",
+        ...(note ? { note } : {}),
       });
       pi.appendEntry(CONTEXT_RETURN_ENTRY, checkpoint);
       request.respond({ checkpoint });
@@ -529,6 +536,19 @@ export default function (pi: ExtensionAPI) {
   }
 
   const receivedCheckpointIds = new Set<string>();
+  /** True once the parent-session no-op /or has been registered. */
+  let parentOrRegistered: boolean | undefined;
+
+  // Serialize checkpoint deliveries: two returns must never race the parent's
+  // run guard ("Agent is already processing a prompt"), and a user message is
+  // never sent without a delivery mode (which throws while streaming).
+  let checkpointDeliveryTail: Promise<void> = Promise.resolve();
+  const waitUntilParentIdle = async (): Promise<void> => {
+    for (let attempt = 0; attempt < 200; attempt++) {
+      if (currentCtx?.isIdle?.() !== false) return;
+      await new Promise((resolve) => setTimeout(resolve, 50));
+    }
+  };
 
   // Background completion: route through group join or send individual nudge
   const manager = new AgentManager((record) => {
@@ -623,26 +643,33 @@ export default function (pi: ExtensionAPI) {
         return;
       }
       const markdown = contextReturnToMarkdown(checkpoint);
+      // Markdown-only format: `## context` + numbered `## agent (N)` sections.
+      // No XML wrapper, no metadata bullets, no footer.
+      const content = markdown;
+      const sendCheckpoint = (body: string, trigger: boolean) =>
+        pi.sendMessage({ customType: "subagent-context-checkpoint", content: body, display: true, details: { checkpointId: checkpoint.id, agentId: record.id, markdown } }, { deliverAs: "followUp", triggerTurn: trigger });
+      if (checkpoint.note) {
+        const note = checkpoint.note;
+        // Serialize: wait out any in-flight parent run, append the checkpoint
+        // context silently, then let the note be the single user message that
+        // triggers the parent turn — the two land in the same context snapshot.
+        checkpointDeliveryTail = checkpointDeliveryTail
+          .then(async () => {
+            await waitUntilParentIdle();
+            sendCheckpoint(content, false);
+            pi.sendUserMessage(note, { deliverAs: "steer" });
+          })
+          .catch(() => { /* delivery is best-effort; the ack below still runs */ });
+      } else {
+        // No note: the checkpoint itself notifies the parent after it is idle.
+        checkpointDeliveryTail = checkpointDeliveryTail
+          .then(async () => {
+            await waitUntilParentIdle();
+            sendCheckpoint(content, true);
+          })
+          .catch(() => { /* best-effort */ });
+      }
       try {
-        // Persist model context first. If the process dies before the receipt
-        // entry, session_start also recovers ids from these custom messages.
-        pi.sendMessage({
-          customType: "subagent-context-checkpoint",
-          content: [
-            `Agent context checkpoint from "${record.description}".`,
-            "",
-            "<agent-context-checkpoint>",
-            `<agent-id>${escapeXml(record.id)}</agent-id>`,
-            `<checkpoint-id>${escapeXml(checkpoint.id)}</checkpoint-id>`,
-            `<source-session>${escapeXml(checkpoint.sourceSessionName)}</source-session>`,
-            "<context>",
-            escapeXml(markdown),
-            "</context>",
-            "</agent-context-checkpoint>",
-          ].join("\n"),
-          display: true,
-          details: { checkpointId: checkpoint.id, agentId: record.id, markdown },
-        }, { deliverAs: "followUp", triggerTurn: true });
         pi.appendEntry("olive-agent-context-return-received", {
           version: 1,
           checkpointId: checkpoint.id,
@@ -704,6 +731,24 @@ export default function (pi: ExtensionAPI) {
   // bound session_start, so a filtered-out activation never advertises (#142).
   pi.on("session_start", async (_event, ctx) => {
     currentCtx = ctx;
+    // A parent session must expose /or as a recognized no-op: otherwise an
+    // unknown slash command falls through to the model. Children get the real
+    // /or from the child bridge (which only registers when a parent exists).
+    if (parentOrRegistered !== true) {
+      try {
+        const header = ctx.sessionManager.getEntries().find((e) => (e as { type?: string }).type === "session");
+        const hasParent = Boolean((header as { parentSession?: string } | undefined)?.parentSession);
+        if (!hasParent) {
+          parentOrRegistered = true;
+          pi.registerCommand("or", {
+            description: "No-op: this session is not a child agent session",
+            handler: async (_args, commandCtx) => {
+              commandCtx.ui.notify?.("/or only returns context from a child agent session — nothing to do here.", "info");
+            },
+          });
+        }
+      } catch { /* best effort */ }
+    }
     receivedCheckpointIds.clear();
     for (const entry of ctx.sessionManager.getEntries()) {
       if (entry.type === "custom" && entry.customType === "olive-agent-context-return-received") {
@@ -1424,6 +1469,7 @@ The child starts fresh and receives only the self-contained task prompt.
           isBackground: true,
           invocation: agentInvocation,
           ...(ledgerNode ? { ledgerNode } : {}),
+          ...(contextMessage ? { contextMessage } : {}),
         });
       } catch (err) {
         return textResult(err instanceof Error ? err.message : String(err));
@@ -1804,6 +1850,7 @@ The child starts fresh and receives only the self-contained task prompt.
         isBackground: true,
         invocation,
         ...(ledgerNode ? { ledgerNode } : {}),
+        ...(contextMessage ? { contextMessage } : {}),
       });
     } catch (err) {
       ctx.ui.notify(err instanceof Error ? err.message : String(err), "warning");
@@ -1913,6 +1960,7 @@ The child starts fresh and receives only the self-contained task prompt.
         isBackground: true,
         invocation,
         ...(ledgerNode ? { ledgerNode } : {}),
+        ...(contextMessage ? { contextMessage } : {}),
       });
     } catch (err) {
       ctx.ui.notify(err instanceof Error ? err.message : String(err), "warning");
@@ -2590,6 +2638,11 @@ ${systemPrompt}
           node = node.parentId ? graph.nodes.get(node.parentId) : undefined;
         }
         await launchAgentFromContext(ctx, inheritedNodes);
+      },
+      launchNewAgent: async () => {
+        // Same flow as /otn: build context from the current session, no
+        // inheritance required — the row is only the UI anchor.
+        await launchNewAgent(ctx);
       },
     });
   }

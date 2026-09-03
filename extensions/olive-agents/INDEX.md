@@ -28,7 +28,7 @@ Components:
 Notes:
 - Context state persists into pi session JSONL files only (`olive-agent-context-link` in the parent, `olive-agent-context-ledger` plus incremental `olive-agent-context-return` checkpoints in the child); nothing is written to the project workspace.
 - Non-mutating compaction output uses pi's native summarizer without appending a compaction entry to the current session.
-- Automatic children open Continue/Return/Feedback when they settle; human interruption or input switches them to unlimited interactive mode, where only `/or` opens that selector. Both Return paths use the shared context builder and send only checkpoint-uncovered child messages.
+- Automatic children open Continue/Return/Feedback when they settle; human interruption or input switches them to unlimited interactive mode, where only `/or` opens that selector. Both Return paths use the shared context builder, send only checkpoint-uncovered child messages, and add an optional native text-input note that arrives in the parent as a single user message in the same turn as the checkpoint.
 - Context-building flow: select messages → include existing context? (choose one agent; its parent chain follows automatically) → compact full conversation? → launch.
 - `/ot` renders agent sessions using context relationships only. Each row can show its passed context or focus/reopen the session; agents launched without context remain separate roots.
 - /ot rebuilds the tree from persisted entries after /resume; `--no-session` cannot rebuild.

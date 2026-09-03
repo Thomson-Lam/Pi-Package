@@ -23,7 +23,7 @@ import { contextReturnToMarkdown, type ContextLedgerNode, type ContextLinkData, 
 import { type ChildEvent, ensureMailboxDir, readPendingDecision, removeMailboxDir, watchChildEvents, writeParentCommand } from "./event-mailbox.js";
 import { createAgentWindow, execFromPi, findWindowByName as findTmuxWindowByName, focusWindow as focusTmuxWindow, killWindow as killTmuxWindow, shellQuote, windowAlive as tmuxWindowAlive, type TmuxExec } from "./tmux-window.js";
 import { agentSessionName, agentWindowName } from "./names.js";
-import { type AgentRecord, type SubagentType, type ThinkingLevel } from "./types.js";
+import { type AgentRecord, type AgentWindowInfo, type SubagentType, type ThinkingLevel } from "./types.js";
 
 /** Tool activity callback (kept for foreground streaming compatibility). */
 export interface ToolActivity {
@@ -43,6 +43,8 @@ export interface SpawnOptions {
   invocation?: AgentRecord["invocation"];
   /** Optional context ledger node accompanying this launch (persisted by the child). */
   ledgerNode?: ContextLedgerNode;
+  /** Attached-context markdown injected into the child as a custom message. */
+  contextMessage?: string;
   onToolActivity?: (activity: ToolActivity) => void;
   onTurnEnd?: (turnCount: number) => void;
   onAssistantUsage?: (usage: { input: number; output: number; cacheWrite: number }) => void;
@@ -294,6 +296,7 @@ export class AgentManager {
       sessionDir,
       mailboxDir,
       ledgerNode: options.ledgerNode,
+      ...(options.contextMessage ? { contextMessage: options.contextMessage } : {}),
     });
 
     for (const warning of warnings) {
@@ -412,7 +415,18 @@ export class AgentManager {
       case "ready": {
         if (record.childSession) record.childSession.sessionFile = event.sessionFile;
         if (record.window) record.window.state = "alive";
-        record.status = "running";
+        // Reopened/restored children boot idle (or awaiting a restored
+        // decision); fresh spawns with a task start running.
+        if (record.launchSpec && record.launchSpec.run.prompt === "") {
+          record.status = "idle";
+          try {
+            const bridgeState = JSON.parse(readFileSync(join(record.mailboxDir!, "bridge-state.json"), "utf-8")) as { status?: string };
+            if (bridgeState.status === "awaiting_decision") record.status = "awaiting_decision";
+            else if (bridgeState.status === "running") record.status = "running";
+          } catch { /* keep idle */ }
+        } else {
+          record.status = "running";
+        }
         record.updatedAt = Date.now();
         // Persist the resolved link now that the child session file is known.
         const linkSpec = record.launchSpec;
@@ -1037,15 +1051,6 @@ export class AgentManager {
 
     const exec = this.deps.tmux;
     const windowName = agentWindowName(link.agentId, link.agentType);
-    const existing = await findTmuxWindowByName(exec, windowName);
-    if (existing) {
-      await focusTmuxWindow(exec, existing.id);
-      return { ok: true, focused: true, windowId: existing.id, windowName };
-    }
-
-    const sessionResult = await exec(["display-message", "-p", "#{session_id}"]);
-    if (sessionResult.code !== 0) return { ok: false, focused: false };
-    const tmuxSession = sessionResult.stdout.trim();
 
     // Fresh mailbox: launch specs and mailbox dirs are one-shot, never reused.
     const mailboxDir = join(tmpdir(), "olive-agents", link.agentId, "reopen");
@@ -1081,6 +1086,19 @@ export class AgentManager {
       bridge: { mailboxDir },
     };
 
+    const existing = await findTmuxWindowByName(exec, windowName);
+    if (existing) {
+      await focusTmuxWindow(exec, existing.id);
+      this.registerReopenedRecord(link, spec, mailboxDir, {
+        id: existing.id, index: existing.index, name: existing.name, state: "alive" as const,
+      });
+      return { ok: true, focused: true, windowId: existing.id, windowName };
+    }
+
+    const sessionResult = await exec(["display-message", "-p", "#{session_id}"]);
+    if (sessionResult.code !== 0) return { ok: false, focused: false };
+    const tmuxSession = sessionResult.stdout.trim();
+
     const specPath = join(mailboxDir, "reopen.json");
     writeLaunchSpec(specPath, spec);
     const command = this.deps.childCommand(specPath);
@@ -1091,11 +1109,71 @@ export class AgentManager {
         cwd: reopen.cwd,
         command,
       });
+      this.registerReopenedRecord(link, spec, mailboxDir, {
+        id: created.id, index: created.index, name: created.name, state: "starting" as const,
+      });
       return { ok: true, focused: false, windowId: created.id, windowName };
     } catch (err) {
       console.error("[olive-agents] reopen of agent session failed:", err instanceof Error ? err.message : err);
       return { ok: false, focused: false };
     }
+  }
+
+  /**
+   * Register a managed record + mailbox watcher for an /ot-reopened session so
+   * its events (context checkpoints, run_idle, ready) flow back to the parent.
+   * Reopened children never occupy a background execution slot.
+   */
+  private registerReopenedRecord(link: ContextLinkData, spec: AgentLaunchSpec, mailboxDir: string, window?: AgentWindowInfo): void {
+    if (this.agents.has(link.agentId)) return;
+    const record: AgentRecord = {
+      id: link.agentId,
+      type: link.agentType,
+      description: link.description,
+      status: "running", // corrected by the child's boot bridge-state at ready
+      toolUses: 0,
+      startedAt: Date.now(),
+      lifetimeUsage: { input: 0, output: 0, cacheWrite: 0 },
+      compactionCount: 0,
+      originalPrompt: "",
+      effectivePrompt: "",
+      updatedAt: Date.now(),
+      runNumber: 0,
+      turnCount: 0,
+      maxTurns: spec.run.maxTurns,
+      isBackground: true,
+      childSession: {
+        sessionId: link.childSessionId,
+        sessionName: link.childSessionName,
+        sessionFile: link.childSessionFile,
+      },
+      mailboxDir,
+      launchSpec: spec,
+      slotActive: false,
+      ...(window ? { window } : {}),
+    };
+    this.agents.set(record.id, record);
+    this.emit({ type: "created", record });
+    const watcher = watchChildEvents(mailboxDir, (events) => {
+      for (const event of events) this.handleChildEvent(record.id, event, { description: record.description });
+    });
+    this.watchers.set(record.id, watcher);
+    // Window liveness poll so manual closes update the record.
+    const poll = setInterval(() => {
+      const rec = this.agents.get(record.id);
+      if (!rec?.window || rec.window.state === "closed") return;
+      void tmuxWindowAlive(this.deps.tmux, rec.window.id).then((alive) => {
+        const r = this.agents.get(record.id);
+        if (!r?.window || r.window.state === "closed") return;
+        if (!alive) {
+          r.window.state = "closed";
+          r.updatedAt = Date.now();
+          this.emit({ type: "updated", record: r });
+        }
+      });
+    }, WINDOW_POLL_MS);
+    poll.unref?.();
+    this.windowTimers.set(record.id, poll);
   }
 
   /** Remove a record (fleet cleanup). The Pi session file is preserved. */

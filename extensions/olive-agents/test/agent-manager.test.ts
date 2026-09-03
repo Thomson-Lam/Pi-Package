@@ -541,6 +541,45 @@ describe("AgentManager", () => {
     manager.dispose();
   });
 
+  it("/ot reopen registers a managed record and delivers checkpoints from the reopen mailbox", async () => {
+    const deps = makeDeps();
+    const onCheckpoint = vi.fn();
+    const manager = new AgentManager(undefined, 2, undefined, undefined, deps);
+    manager.setCallbacks({ onContextCheckpoint: onCheckpoint });
+    const childFile = join(work, "child.jsonl");
+    writeFileSync(childFile, "");
+    const link: ContextLinkData = {
+      version: 1, stage: "ready", agentId: "reopen-agent", agentType: "Review", description: "reopened",
+      childSessionId: "child-id", childSessionName: "child", childSessionFile: childFile,
+      createdAt: new Date().toISOString(), mailboxDir: join(work, "original-mailbox"), isBackground: true,
+      reopen: { type: "Review", description: "reopened", cwd: work, model: { provider: "test", id: "basic" }, tools: ["read"], noExtensions: true, extensionPaths: [], noSkills: true, maxTurns: 10 },
+    };
+    const result = await manager.reopenFromPersisted(link);
+    expect(result.ok).toBe(true);
+    const record = manager.getRecord("reopen-agent")!;
+    expect(record.mailboxDir).toContain("reopen");
+
+    // The child boots: ready, then reports its idle boot state.
+    emitChildEvent(record.mailboxDir!, { type: "ready", sessionId: "child-id", sessionFile: childFile });
+    const bootState = join(record.mailboxDir!, "bridge-state.json");
+    writeFileSync(bootState, JSON.stringify({ version: 1, status: "idle", mode: "interactive", updatedAt: Date.now() }));
+    emitChildEvent(record.mailboxDir!, { type: "run_idle", runNumber: 0, reason: "interrupted", turnCount: 0, toolUses: 0 });
+    await sleep(150);
+    expect(manager.getRecord("reopen-agent")?.status).toBe("idle");
+
+    // A checkpoint emitted into the reopen mailbox must reach the parent.
+    emitChildEvent(record.mailboxDir!, {
+      type: "context_checkpoint", runNumber: 1,
+      checkpoint: { version: 1, id: "cp-reopen", agentId: "reopen-agent", sourceSessionName: "child", createdAt: new Date().toISOString(), reason: "manual", selections: [], coveredEntryIds: ["m1"] },
+    });
+    await sleep(150);
+    expect(onCheckpoint).toHaveBeenCalledTimes(1);
+    expect(onCheckpoint.mock.calls[0]![1].id).toBe("cp-reopen");
+    expect(manager.acknowledgeCheckpoint("reopen-agent", "cp-reopen")).toBe(true);
+    expect(readPendingCommands(record.mailboxDir!)).toContainEqual({ type: "ack_checkpoint", checkpointId: "cp-reopen" });
+    manager.dispose();
+  });
+
   it("decision_required keeps the slot and foreground waiter pending until release", async () => {
     const deps = makeDeps();
     const onComplete = vi.fn();
