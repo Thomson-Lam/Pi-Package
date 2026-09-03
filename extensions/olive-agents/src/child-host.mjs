@@ -452,6 +452,12 @@ async function showDecisionGate(decision) {
       }
     } else if (choice === "Return to parent") {
       await returnContext(decision, ctx);
+    } else if (choice === undefined) {
+      // Escape/Ctrl+C cancels the outer decision selector. Transfer control to
+      // the native editor instead of leaving the parent parked at the gate.
+      enterInteractiveMode();
+      clearPendingForContinuation();
+      emitInteractiveIdle("interrupted");
     } else {
       ctx.ui.notify?.("Decision remains pending. Use /or to return, or enter another prompt to continue.", "info");
     }

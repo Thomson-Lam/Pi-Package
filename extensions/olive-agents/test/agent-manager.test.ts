@@ -679,6 +679,27 @@ describe("AgentManager", () => {
     manager.dispose();
   });
 
+  it("run_idle after a decision clears the gate and allows dismissal", async () => {
+    const deps = makeDeps({ focusedWindow: "@1" });
+    const manager = new AgentManager(undefined, 1, undefined, undefined, deps);
+    const id = await spawnBg(manager, makeCtx(), "interrupted decision");
+    const rec = manager.getRecord(id)!;
+    emitChildEvent(rec.mailboxDir!, { type: "ready", sessionId: "s" });
+    await sleep(100);
+    emitChildEvent(rec.mailboxDir!, { type: "run_started", runNumber: 1, maxTurns: 10 });
+    emitChildEvent(rec.mailboxDir!, { type: "decision_required", runNumber: 1, reason: "completed", result: "held", turnCount: 1, maxTurns: 10, toolUses: 0, requestedAt: Date.now() });
+    await sleep(150);
+    expect(manager.getRecord(id)?.status).toBe("awaiting_decision");
+    emitChildEvent(rec.mailboxDir!, { type: "run_idle", runNumber: 1, reason: "interrupted", turnCount: 1, toolUses: 0 });
+    await sleep(150);
+    expect(manager.getRecord(id)?.status).toBe("idle");
+    expect(manager.getRecord(id)?.decision).toBeUndefined();
+    expect(manager.hasRunning()).toBe(false);
+    expect(await manager.dismiss(id)).toBe("dismissed");
+    expect(manager.getRecord(id)).toBeUndefined();
+    manager.dispose();
+  });
+
   it("dismiss refuses running agents", async () => {
     const deps = makeDeps();
     const manager = new AgentManager(undefined, 2, undefined, undefined, deps);
