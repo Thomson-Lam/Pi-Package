@@ -12,7 +12,7 @@
  */
 
 import { randomUUID } from "node:crypto";
-import { existsSync, readdirSync, readFileSync } from "node:fs";
+import { existsSync, readdirSync, readFileSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import type { Model } from "@earendil-works/pi-ai";
@@ -20,7 +20,7 @@ import type { ExtensionAPI, ExtensionContext } from "@earendil-works/pi-coding-a
 import { getPackageDir } from "@earendil-works/pi-coding-agent";
 import { type AgentLaunchSpec, buildReopenDescriptor, prepareAgentLaunch, validateMaxTurns, writeLaunchSpec } from "./agent-runner.js";
 import { contextReturnToMarkdown, type ContextLedgerNode, type ContextLinkData, type ContextReturnCheckpoint } from "./context-ledger.js";
-import { type ChildEvent, ensureMailboxDir, readPendingDecision, removeMailboxDir, watchChildEvents, writeParentCommand } from "./event-mailbox.js";
+import { type ChildEvent, ensureMailboxDir, readPendingDecision, removeMailboxDir, watchChildEvents, writeJsonAtomic, writeParentCommand } from "./event-mailbox.js";
 import { createAgentWindow, execFromPi, findWindowByName as findTmuxWindowByName, focusWindow as focusTmuxWindow, killWindow as killTmuxWindow, shellQuote, windowAlive as tmuxWindowAlive, type TmuxExec } from "./tmux-window.js";
 import { agentSessionName, agentWindowName } from "./names.js";
 import { type AgentRecord, type AgentWindowInfo, type SubagentType, type ThinkingLevel } from "./types.js";
@@ -78,7 +78,7 @@ export interface ManagerDeps {
   childCommand: (specPath: string) => string;
 }
 
-const DEFAULT_MAX_CONCURRENT = 2;
+const DEFAULT_MAX_CONCURRENT = 5;
 /** Give a starting child this long to report ready before declaring launch failure. */
 const STARTUP_WATCHDOG_MS = 30_000;
 /** Window liveness poll interval while a record has a window. */
@@ -741,6 +741,57 @@ export class AgentManager {
     return "dismissed";
   }
 
+  /**
+   * Human-initiated hard clear (/ocl). Works on ANY record state — the human
+   * decides what is a zombie. Kills the tmux window (if alive), purges events
+   * the dying child may still have written, writes `released-decision.json`
+   * into the kept mailbox (so restoreFromPersisted skips it next session),
+   * releases the concurrency slot, and drops the record. The Pi session file
+   * and /ot context links are preserved. Returns "cleared" on success,
+   * "missing" for an unknown id, "failed" when the window refused to die.
+   */
+  async forceClear(id: string): Promise<"cleared" | "missing" | "failed"> {
+    const record = this.agents.get(id);
+    if (!record) return "missing";
+    this.stopWatchers(id);
+    // A queued launch has no window and no mailbox — just drop it.
+    this.queue = this.queue.filter((q) => q.id !== id);
+    // Kill a live child window first so it cannot keep writing events.
+    if (record.window && record.window.state !== "closed") {
+      const alive = await tmuxWindowAlive(this.deps.tmux, record.window.id);
+      if (alive && !(await killTmuxWindow(this.deps.tmux, record.window.id))) {
+        if (await tmuxWindowAlive(this.deps.tmux, record.window.id)) return "failed";
+      }
+      record.window.state = "closed";
+      // Let tmux actually reap the window before touching the mailbox so the
+      // child's final process_exit cannot race our released marker.
+      for (let attempt = 0; attempt < 3; attempt++) {
+        if (!(await tmuxWindowAlive(this.deps.tmux, record.window.id))) break;
+        await new Promise((r) => setTimeout(r, 150));
+      }
+    }
+    if (record.mailboxDir) {
+      try {
+        const eventsDir = join(record.mailboxDir, "events");
+        for (const name of readdirSync(eventsDir)) rmSync(join(eventsDir, name), { force: true });
+      } catch { /* events dir already gone */ }
+      try {
+        writeJsonAtomic(join(record.mailboxDir, "released-decision.json"), {
+          version: 1,
+          releasedAt: new Date().toISOString(),
+          reason: "cleared by /ocl",
+        });
+      } catch { /* mailbox unreachable; restore will skip via missing dir */ }
+    }
+    if (record.slotActive) {
+      this.runningBackground = Math.max(0, this.runningBackground - 1);
+      record.slotActive = false;
+    }
+    this.removeRecord(id, record, { keepMailbox: true });
+    void this.drainQueue();
+    return "cleared";
+  }
+
   /** Fail a launch that never became ready. */
   private failLaunch(id: string, message: string): void {
     const record = this.agents.get(id);
@@ -1197,11 +1248,17 @@ export class AgentManager {
     this.windowTimers.set(record.id, poll);
   }
 
-  /** Remove a record (fleet cleanup). The Pi session file is preserved. */
-  private removeRecord(id: string, record: AgentRecord): void {
+  /**
+   * Remove a record (fleet cleanup). The Pi session file is preserved.
+   * keepMailbox=true preserves the mailbox (with a released marker) so /ot
+   * metadata and the child session stay intact and restores skip it.
+   */
+  private removeRecord(id: string, record: AgentRecord, opts: { keepMailbox?: boolean } = {}): void {
     this.stopWatchers(id);
     this.agents.delete(id);
-    try { if (record.mailboxDir) removeMailboxDir(record.mailboxDir); } catch { /* ignore */ }
+    if (!opts.keepMailbox) {
+      try { if (record.mailboxDir) removeMailboxDir(record.mailboxDir); } catch { /* ignore */ }
+    }
     this.emit({ type: "removed", id });
   }
 

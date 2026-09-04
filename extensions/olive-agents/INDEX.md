@@ -3,8 +3,8 @@
 Description: Human-approved autonomous sub-agents: launch, lifecycle, tmux windows, and mailbox communication.
 
 Components:
-- `index.ts` — registers `/agents`, `/agent-session`, `/ot`, `/otn`, the `alt+a` shortcut, and the `Agent` / `get_subagent_result` tools; `/ot` starts agents from selected ledger contexts and `/otn` starts unlimited agents from current-session context; wires managers, approval, context ledger, and UI.
-- `src/agent-manager.ts` — child agent lifecycle state (tmux windows + filesystem mailbox); persists parent-session context links; reopens persisted sessions from /ot.
+- `index.ts` — registers `/agents`, `/agent-session`, `/ot`, `/otn`, `/ocl`, the `alt+a` shortcut, and the `Agent` / `get_subagent_result` tools; `/ot` starts agents from selected ledger contexts and `/otn` starts unlimited agents from current-session context; `/ocl` clears any agent (zombie or not) by killing its tmux window, writing a `released-decision.json` marker into the kept mailbox, and freeing its concurrency slot; wires managers, approval, context ledger, and UI.
+- `src/agent-manager.ts` — child agent lifecycle state (tmux windows + filesystem mailbox); persists parent-session context links; reopens persisted sessions from /ot; default background concurrency is 5; `forceClear` (used by `/ocl`) kills the window, releases the slot, and marks the kept mailbox released so restores skip it.
 - `src/agent-runner.ts` — launch-spec preparation (v3, optional ledger), max-turns/grace-turn normalization, and reopen descriptors.
 - `src/agent-types.ts` — embedded default + user-defined agent registry.
 - `src/approval.ts` — mandatory per-launch review/approval, with optional context-ledger building.
@@ -27,6 +27,7 @@ Components:
 
 Notes:
 - Context state persists into pi session JSONL files only (`olive-agent-context-link` in the parent, `olive-agent-context-ledger` plus incremental `olive-agent-context-return` checkpoints in the child); nothing is written to the project workspace.
+- Provider transport failures (e.g. "Not Found") now settle children with the real error + model label and guidance, persist the bridge state as idle (no phantom `running` slot on restore), and the Agent launch tool result injects model-switch guidance and an `/ocl` pointer when prior children failed that way.
 - Non-mutating compaction output uses pi's native summarizer without appending a compaction entry to the current session.
 - Automatic children open Continue/Return/Feedback when they settle; human interruption or input switches them to unlimited interactive mode, where only `/or` opens that selector. Both Return paths use the shared context builder, send only checkpoint-uncovered child messages, and add an optional native text-input note that arrives in the parent as a single user message in the same turn as the checkpoint.
 - Context-building flow: select messages → include existing context? (choose one agent; its parent chain follows automatically) → compact full conversation? → launch.

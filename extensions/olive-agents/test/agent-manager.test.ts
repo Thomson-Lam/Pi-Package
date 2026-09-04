@@ -5,7 +5,7 @@
  * filesystem mailbox.
  */
 
-import { mkdirSync, mkdtempSync, readdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
@@ -553,6 +553,51 @@ describe("AgentManager", () => {
     expect(await manager.dismiss(id)).toBe("failed");
     expect(manager.getRecord(id)).toBeDefined();
     expect(manager.getRecord(id)!.window?.state).toBe("alive");
+    manager.dispose();
+  });
+
+  it("/ocl forceClear releases the slot, keeps the mailbox with a released marker, and starts queued work", async () => {
+    const deps = makeDeps();
+    const manager = new AgentManager(undefined, 1, undefined, undefined, deps);
+    const ctx = makeCtx();
+
+    const id1 = await spawnBg(manager, ctx, "zombie-one");   // starts (slot taken)
+    const id2 = await spawnBg(manager, ctx, "queued-two");   // queued behind the slot
+    expect(manager.getRecord(id2)!.status).toBe("queued");
+
+    const mail1 = manager.getRecord(id1)!.mailboxDir!;
+    expect(await manager.forceClear(id1)).toBe("cleared");
+    expect(manager.getRecord(id1)).toBeUndefined();
+    // Mailbox kept (for /ot metadata) but marked released so restores skip it.
+    expect(existsSync(mail1)).toBe(true);
+    expect(existsSync(join(mail1, "released-decision.json"))).toBe(true);
+    // tmux window was killed.
+    expect(deps.tmux.mock.calls.some((call) => String(call[0][0]) === "kill-window")).toBe(true);
+    // Slot released -> the queued agent starts (gets a window) once drainQueue runs.
+    await sleep(300);
+    expect(manager.getRecord(id2)!.window).toBeDefined();
+
+    const mail2 = manager.getRecord(id2)!.mailboxDir!;
+    expect(await manager.forceClear(id2)).toBe("cleared");
+    expect(manager.getRecord(id2)).toBeUndefined();
+    expect(existsSync(join(mail2, "released-decision.json"))).toBe(true);
+    expect(manager.listAgents()).toHaveLength(0);
+    manager.dispose();
+  });
+
+  it("/ocl forceClear drops a queued record without creating a window or mailbox", async () => {
+    const deps = makeDeps();
+    const manager = new AgentManager(undefined, 1, undefined, undefined, deps);
+    const ctx = makeCtx();
+
+    const id1 = await spawnBg(manager, ctx, "slot-holder"); // takes the only slot
+    const id2 = await spawnBg(manager, ctx, "queued-drop"); // never started
+    const mail2 = manager.getRecord(id2)!.mailboxDir;
+    expect(mail2).toBeUndefined();
+
+    expect(await manager.forceClear(id2)).toBe("cleared");
+    expect(manager.getRecord(id2)).toBeUndefined();
+    expect(manager.getRecord(id1)).toBeDefined();
     manager.dispose();
   });
 

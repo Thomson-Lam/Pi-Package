@@ -264,6 +264,22 @@ function formatTaskNotification(record: AgentRecord, resultMaxLen: number): stri
   ].filter(Boolean).join('\n');
 }
 
+/**
+ * Guidance for provider transport/model failures (e.g. "Not Found"), injected
+ * into the Agent launch tool result so the main agent sees why prior children
+ * failed and what to do about it.
+ */
+function providerErrorHint(error: string | undefined): string {
+  if (!error || !/\bnot\s*found\b|404|provider transport|provider error/i.test(error)) return "";
+  const firstLine = error.trim().split(/\r?\n/)[0] ?? error;
+  return (
+    `\n\n== Provider failure ==\n${firstLine}\n` +
+    `Children inherit the parent's current model. Switch the parent's model (Ctrl+P) before relaunching, ` +
+    `or relaunch this agent with an explicit working \"model\" parameter (e.g. opencode-go/gpt-5.6-luna). ` +
+    `Stuck agents can be cleared with /ocl.`
+  );
+}
+
 /** Build AgentDetails from a base + record-specific fields. */
 function buildDetails(
   base: Pick<AgentDetails, "displayName" | "description" | "subagentType" | "modelName" | "tags">,
@@ -1521,6 +1537,13 @@ The child starts fresh and receives only the self-contained task prompt.
         isBackground: runInBackground,
       });
 
+      const stuckSlots = manager.listAgents().filter((r) =>
+        (r.status === "running" || r.status === "awaiting_decision") &&
+        (!r.window || r.window.state === "closed")
+      ).length;
+      const notFoundError = manager.listAgents().find((r) =>
+        r.error && /not\s*found|404|provider transport|provider error/i.test(r.error)
+      )?.error;
       const isQueued = record?.status === "queued";
       const fallbackNote = fellBack
         ? `Note: Unknown agent type "${rawType}" — using ${resolveType("general-purpose") ? "general-purpose" : "the fallback agent config"}.\n\n`
@@ -1534,6 +1557,8 @@ The child starts fresh and receives only the self-contained task prompt.
         `Description: ${params.description}\n` +
         (record?.childSession?.sessionFile ? `Session file: ${record.childSession.sessionFile}\n` : "") +
         (isQueued ? `Position: queued (max ${manager.getMaxConcurrent()} concurrent)\n` : "") +
+        (isQueued && stuckSlots > 0 ? `Note: ${stuckSlots} stuck agent(s) hold concurrency slot(s). Run /ocl to clear them, or wait for a slot.\n` : "") +
+        (notFoundError ? providerErrorHint(notFoundError) + "\n" : "") +
         (detached
           ? `\nThe current parent loop has ended. The parent can accept the next user prompt while the child continues.\n`
           : `\nThe current parent loop may continue while the child runs.\n`) +
@@ -1671,6 +1696,56 @@ The child starts fresh and receives only the self-contained task prompt.
     const norm = (s: string) => s.toLowerCase().replace(/\./g, "-").replace(/-\d{8}$/, "");
     if (norm(cfg.model) === norm(resolvedFull)) return label;
     return `${label} (→ ${resolvedFull.replace(/-\d{8}$/, "")})`;
+  }
+
+  /** Row label for the /ocl picker: status icon, description, window state. */
+  function clearAgentLabel(r: AgentRecord): string {
+    const icon = r.status === "awaiting_decision" ? "◆" : r.status === "running" ? "●" : r.status === "queued" ? "◌" : r.status === "idle" ? "◇" : "!";
+    const win = r.window ? (r.window.state === "closed" ? "window closed" : `tmux ${r.window.index}`) : "no window";
+    return `${icon} ${r.description || r.id} (${r.type}) — ${r.status} · ${win}`;
+  }
+
+  /**
+   * /ocl — human escape hatch. Clears any agent (zombie or not): kills its
+   * tmux window, writes a released marker into the kept mailbox (so restores
+   * skip it and /ot stays intact), releases its concurrency slot, and drops
+   * the record. Optional first argument matches an agent by id/name/type;
+   * without an argument a native SelectList lets the human pick.
+   */
+  async function clearAgentsCommand(ctx: ExtensionCommandContext, target?: string) {
+    const records = manager.listAgents();
+    if (records.length === 0) {
+      ctx.ui.notify("No agents in this parent session.", "info");
+      return;
+    }
+    if (target) {
+      const t = target.trim().toLowerCase();
+      const rec = records.find((r) =>
+        r.id.toLowerCase().startsWith(t) || r.description.toLowerCase().includes(t) || r.type.toLowerCase().includes(t),
+      );
+      if (!rec) {
+        ctx.ui.notify(`No agent matches "${target}".`, "warning");
+        return;
+      }
+      const outcome = await manager.forceClear(rec.id);
+      ctx.ui.notify(
+        outcome === "cleared" ? `Cleared "${rec.description}" (${rec.id}). Slot released.` : `Could not clear "${rec.description}" (${rec.id}): ${outcome}`,
+        outcome === "cleared" ? "info" : "warning",
+      );
+      return;
+    }
+    const options = ["Clear all listed", ...records.map(clearAgentLabel)];
+    const selection = await ctx.ui.select("Select an agent to clear (Esc cancels)", options);
+    if (!selection) return;
+    const ids = selection === "Clear all listed"
+      ? records.map((r) => r.id)
+      : records.filter((r, i) => options[i + 1] === selection).map((r) => r.id);
+    if (ids.length === 0) return;
+    let cleared = 0;
+    for (const id of ids) {
+      if ((await manager.forceClear(id)) === "cleared") cleared++;
+    }
+    ctx.ui.notify(`Cleared ${cleared} of ${ids.length} selected agent(s). Concurrency slot(s) freed.`, "info");
   }
 
   async function showAgentsMenu(ctx: ExtensionCommandContext) {
@@ -2684,6 +2759,10 @@ ${systemPrompt}
   pi.registerCommand("agents", {
     description: "Manage agent definitions and settings",
     handler: async (_args, ctx) => { await showAgentsMenu(ctx); },
+  });
+  pi.registerCommand("ocl", {
+    description: "Clear agents: kill the tmux window, mark released, free a concurrency slot (keeps session + /ot record)",
+    handler: async (_args, ctx) => { await clearAgentsCommand(ctx, Array.isArray(_args) ? _args[0] : typeof _args === "string" ? _args : undefined); },
   });
   pi.registerCommand("agent-session", {
     description: "Select an agent session and focus its tmux window",

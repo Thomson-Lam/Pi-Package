@@ -488,6 +488,33 @@ async function requestReconciliation(s) {
   }
 }
 
+function settleErrorEvent() {
+  const last = lastAssistant(session);
+  const rawErr =
+    (last && typeof last.errorMessage === "string" && last.errorMessage.trim()
+      ? last.errorMessage
+      : last?.diagnostics?.[0]?.error?.message) ||
+    "provider error with no output";
+  const modelLabel = spec.runtime.model
+    ? `${spec.runtime.model.provider}/${spec.runtime.model.id}`
+    : "unknown model";
+  const detail = /not\s*found|404|transport/i.test(rawErr)
+    ? `provider transport failure (${rawErr}) — the child could not run; switch the parent's model (Ctrl+P) or relaunch with a different model`
+    : rawErr;
+  return {
+    type: "run_settled",
+    runNumber: Math.max(1, runNumber),
+    status: "error",
+    result: assistantText(last) || undefined,
+    error: `provider error: ${detail} (model ${modelLabel})`,
+    turnCount,
+    toolUses,
+    compactions,
+    usage: usageOf(session),
+    releaseReason: "error",
+  };
+}
+
 function subscribeTo(s) {
   return s.subscribe((event) => {
     switch (event.type) {
@@ -529,7 +556,18 @@ function subscribeTo(s) {
         if (!event.aborted && event.result) compactions++;
         break;
       case "agent_settled": {
-        if (!inRun) break;
+        if (!inRun) {
+          // A failure before any agent_start (e.g. provider transport error on
+          // the very first call, phase before_message_stream_start) still must
+          // settle, or the parent record stays "running" forever. Surface it
+          // like any other error and mark the child idle so restores do not
+          // resurrect a phantom running slot.
+          if (lastAssistant(session)?.stopReason === "error") {
+            persistBridgeState("idle");
+            emitEvent(spec.bridge.mailboxDir, settleErrorEvent());
+          }
+          break;
+        }
         inRun = false;
         const status = settledStatus();
         const result = assistantText(lastAssistant(session));
@@ -569,8 +607,11 @@ function subscribeTo(s) {
           emitInteractiveIdle("interrupted");
           bridgeContext?.ui?.notify?.("Agent stopped and switched to interactive mode. Use /or to return selected context, or enter a prompt to continue.", "info");
         } else if (status === "error") {
-          // Unrecoverable failure: surface it so the parent cannot wait forever.
-          emitEvent(spec.bridge.mailboxDir, { type: "run_settled", runNumber, status, result: result || undefined, error: "provider error with no output", turnCount, toolUses, compactions, usage: usageOf(s), releaseReason: "error" });
+          // Unrecoverable failure: surface the real cause and never leave the
+          // durable bridge state as "running" (which restores as a phantom
+          // slot). The parent record settles as error; /ocl can clear it.
+          persistBridgeState("idle");
+          emitEvent(spec.bridge.mailboxDir, settleErrorEvent());
         }
         // "stopped" (parent abort command or a human Escape in the child) is
         // NOT a release: the parent must receive nothing until the human
