@@ -87,8 +87,8 @@ describe("toolDescriptionMode", () => {
   it("defaults to the full description", () => {
     const tools = setup();
     const desc: string = tools.get("Agent").description;
-    expect(desc).toContain("## Usage notes");
-    expect(desc).toContain("## Writing the prompt");
+    expect(desc).toContain("When using Agent:");
+    expect(desc).toContain("Return is the only child action");
     // The current default agent is listed dynamically.
     expect(desc).toContain("- general-purpose:");
   });
@@ -96,7 +96,7 @@ describe("toolDescriptionMode", () => {
   it("compact mode swaps in the short description with one-line type list", () => {
     const tools = setup({ toolDescriptionMode: "compact" });
     const desc: string = tools.get("Agent").description;
-    expect(desc).toContain("Launch an autonomous agent");
+    expect(desc).toContain("Launch a supervised child agent");
     expect(desc).not.toContain("## Usage notes");
     expect(desc).not.toContain("## Writing the prompt");
     // Type list keeps every agent but only the first sentence of each description.
@@ -109,16 +109,17 @@ describe("toolDescriptionMode", () => {
   it("invalid mode in the settings file is dropped — full description", () => {
     const tools = setup({ toolDescriptionMode: "tiny" });
     const desc: string = tools.get("Agent").description;
-    expect(desc).toContain("## Usage notes");
+    expect(desc).toContain("Successful launches terminate");
   });
 
-  it("compact keeps the current launch contracts", () => {
+  it("compact documents only the current launch contracts", () => {
     const tools = setup({ toolDescriptionMode: "compact" });
     const desc: string = tools.get("Agent").description;
-    for (const contract of ["run_in_background", "resume", "parent working directory", "self-contained"]) {
+    for (const contract of ["parent working directory", "self-contained", "max_turns"]) {
       expect(desc).toContain(contract);
     }
-    expect(desc).not.toContain("steer_subagent");
+    expect(desc).not.toContain("run_in_background");
+    expect(desc).not.toContain("resume");
     expect(desc).not.toContain('isolation: "worktree"');
   });
 
@@ -165,7 +166,7 @@ describe("toolDescriptionMode", () => {
     expect(params.type).toBe("object");
     expect(params.properties.context).toBeUndefined();
     expect(params.properties.inherit_context).toBeUndefined();
-    expect(tool.description).toContain("child starts fresh");
+    expect(tool.description).toContain("self-contained");
   });
 
 });

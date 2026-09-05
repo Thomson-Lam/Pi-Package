@@ -1,38 +1,29 @@
 # Olive-agents extension index
 
-Description: Human-approved autonomous sub-agents: launch, lifecycle, tmux windows, and mailbox communication.
+Description: Human-controlled supervised child agents. Every successful `Agent` launch is detached into its own tmux window; the child owns Continue, Feedback, and Return decisions.
 
 Components:
-- `index.ts` — registers `/agents`, `/agent-session`, `/ot`, `/otn`, `/ocl`, the `alt+a` shortcut, and the `Agent` / `get_subagent_result` tools; `/ot` starts agents from selected ledger contexts and `/otn` starts unlimited agents from current-session context; `/ocl` clears any agent (zombie or not) by killing its tmux window, writing a `released-decision.json` marker into the kept mailbox, and freeing its concurrency slot; wires managers, approval, context ledger, and UI.
-- `src/agent-manager.ts` — child agent lifecycle state (tmux windows + filesystem mailbox); persists parent-session context links; reopens persisted sessions from /ot; default background concurrency is 5; `forceClear` (used by `/ocl`) kills the window, releases the slot, and marks the kept mailbox released so restores skip it.
-- `src/agent-runner.ts` — launch-spec preparation (v3, optional ledger), max-turns/grace-turn normalization, and reopen descriptors.
+- `index.ts` — registers `/agents`, `/agent-session`, `/ot`, `/otn`, `/ocl`, the `alt+a` shortcut, and the Agent tool; `/ot` starts or reopens agents from selected ledger contexts, `/otn` starts an agent from current-session context, and `/ocl` clears a child/window and releases its slot.
+- `src/agent-manager.ts` — child lifecycle state (tmux windows + filesystem mailbox), concurrency queue, durable parent-session links, pending-decision restoration, and `/ot` reopening. Completion, errors, and child steering do not wake the parent.
+- `src/agent-runner.ts` — launch-spec preparation (v3, optional ledger), max-turn validation, and reopen descriptors.
 - `src/agent-types.ts` — embedded default + user-defined agent registry.
-- `src/approval.ts` — mandatory per-launch review/approval, with optional context-ledger building.
-- `src/child-host.mjs` — thin plain-ESM bootstrap around native Pi InteractiveMode: opens each child in tmux, wires mailbox/lifecycle control, switches human-interrupted runs to unlimited interactive mode, and routes automatic Return or `/or` through the shared TypeScript context builder.
+- `src/approval.ts` — mandatory per-launch review/approval, with optional context-ledger building; parent behavior is always detached.
+- `src/child-host.mjs` — plain-ESM bootstrap around native Pi InteractiveMode. Continue, Feedback, and Return are child-local; the parent mailbox accepts checkpoint acknowledgements only.
 - `src/child-extension-filter.mjs` — preserves the inline child-return bridge (`/or`) alongside the inherited parent-extension allow-list.
-- `src/context-ledger.ts` — durable context model: message extraction, snapshotting, prompt serialization, parent-context resolution, /ot graph loading, and agent-tree placement.
-- `src/cross-extension-rpc.ts` — ping/spawn/stop RPC over `pi.events`.
+- `src/context-ledger.ts` — durable context model, snapshotting, prompt serialization, parent-context resolution, `/ot` graph loading, and agent-tree placement.
 - `src/event-mailbox.ts` — filesystem mailbox between parent and child sessions, including acknowledged incremental context checkpoints.
-- `src/group-join.ts` — grouped completion notifications for background agents.
-- `src/tmux-window.ts` — tmux window creation/management for agent hosts, incl. stable-name lookups for reopen dedup.
-- `src/ui/` — fleet overview (`fleet-list.ts`), context selection (`context-selection.ts`), and /ot tree (`context-tree.ts`, which doubles as the inheritance picker via select mode), plus formatting (`format.ts`).
-- `src/settings.ts` — olive-agents settings persistence and tool-description modes.
-- `src/memory.ts` — per-agent persistent memory directories.
-- `src/model-resolver.ts` and `src/enabled-models.ts` — model resolution and enabled-model scoping.
-- `src/skill-loader.ts` — skill preloading roots.
-- `src/prompts.ts` — system prompt builder.
-- `src/usage.ts` — token usage shapes and accumulators.
-- `src/` remaining support modules — `custom-agents.ts`, `default-agents.ts`, `env.ts`, `invocation-config.ts`, `names.ts`, `nudge.ts`, `status-note.ts`, `types.ts`.
-- `test/` — unit coverage for manager, runner, approval, context ledger, tree placement, mailbox, model resolution, and UI.
+- `src/tmux-window.ts` — tmux window creation/management and stable-name lookups for reopen deduplication.
+- `src/ui/` — fleet overview, context selection/tree, and formatting.
+- `src/settings.ts` — olive-agents settings persistence and Agent tool-description modes.
+- `src/memory.ts`, `src/model-resolver.ts`, `src/enabled-models.ts`, `src/skill-loader.ts`, `src/prompts.ts`, `src/usage.ts` — supporting runtime behavior.
+- `src/` remaining support modules — `custom-agents.ts`, `default-agents.ts`, `env.ts`, `invocation-config.ts`, `names.ts`, `status-note.ts`, `types.ts`.
+- `test/` — coverage for manager lifecycle/queue/restore, context ledger, `/ot`, approval, mailbox, model resolution, skills, memory, tmux, and tool registration.
 
 Notes:
-- Context state persists into pi session JSONL files only (`olive-agent-context-link` in the parent, `olive-agent-context-ledger` plus incremental `olive-agent-context-return` checkpoints in the child); nothing is written to the project workspace.
-- Provider transport failures (e.g. "Not Found") now settle children with the real error + model label and guidance, persist the bridge state as idle (no phantom `running` slot on restore), and the Agent launch tool result injects model-switch guidance and an `/ocl` pointer when prior children failed that way.
-- Non-mutating compaction output uses pi's native summarizer without appending a compaction entry to the current session.
-- Automatic children open Continue/Return/Feedback when they settle; human interruption or input switches them to unlimited interactive mode, where only `/or` opens that selector. Both Return paths use the shared context builder, send only checkpoint-uncovered child messages, and add an optional native text-input note that arrives in the parent as a single user message in the same turn as the checkpoint.
-- Context-building flow: select messages → include existing context? (choose one agent; its parent chain follows automatically) → compact full conversation? → launch.
-- `/ot` renders agent sessions using context relationships only. Each row can show its passed context or focus/reopen the session; agents launched without context remain separate roots.
-- /ot rebuilds the tree from persisted entries after /resume; `--no-session` cannot rebuild.
+- Context state persists into pi session JSONL files only (`olive-agent-context-link` in the parent, `olive-agent-context-ledger` plus incremental child checkpoints); nothing is written to the project workspace.
+- A checkpoint is inserted into the parent before its receipt is persisted or `ack_checkpoint` is sent. Failed insertion leaves the checkpoint unacknowledged for later delivery; duplicate checkpoint IDs are deduplicated.
+- Provider failures settle children without waking the parent. The human supervises the child window and chooses Return when context should come back.
+- `/ot` rebuilds the tree from persisted entries after `/resume`; `--no-session` cannot rebuild.
 
 Related:
 - `../../AGENTS.md`

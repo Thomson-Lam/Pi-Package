@@ -19,7 +19,6 @@ export interface ApprovalRequest {
   model: Model<Api>;
   thinking: ThinkingLevel;
   maxTurns?: number;
-  runInBackground: boolean;
   /** Optional context preselected by an external picker such as /ot. */
   initialContext?: BuiltLedgerContext;
 }
@@ -50,7 +49,7 @@ export interface ApprovalContextInput {
 }
 
 export type ApprovalResult =
-  | { outcome: "launch"; prompt: string; model: Model<Api>; thinking: ThinkingLevel; maxTurns?: number; runInBackground: boolean; context?: BuiltLedgerContext }
+  | { outcome: "launch"; prompt: string; model: Model<Api>; thinking: ThinkingLevel; maxTurns?: number; context?: BuiltLedgerContext }
   | { outcome: "feedback"; feedback: string }
   | { outcome: "do-it-yourself"; prompt: string }
   | { outcome: "cancel" };
@@ -252,7 +251,7 @@ function buildSummary(request: ApprovalRequest, built?: BuiltLedgerContext, inhe
     `Model: ${modelId(request.model)}`,
     `Reasoning: ${request.thinking}`,
     `Turn limit: ${request.maxTurns == null ? "Unlimited" : `${request.maxTurns} work turns`}`,
-    `Parent behavior: ${request.runInBackground ? "Continue working" : "Detach from child"}`,
+    "Parent behavior: Detach from child",
     contextLine,
     "System prompt: subagent replacement prompt",
     "Runtime: parent working directory, active tools, and loaded extensions",
@@ -485,7 +484,6 @@ export async function approveManualLaunch(
         model: request.model,
         thinking: request.thinking,
         maxTurns: request.maxTurns,
-        runInBackground: request.runInBackground,
         ...(built ? { context: built } : {}),
       };
     }
@@ -513,7 +511,6 @@ export async function approveInvocation(
       "Review / edit task prompt",
       ...(contextInput ? ["Build context"] : []),
       "Launch",
-      `Change parent behavior (${request.runInBackground ? "Continue working" : "Detach from child"})`,
       `Change model (${modelId(request.model)})`,
       `Change reasoning (${request.thinking})`,
       "Feedback to main agent",
@@ -527,7 +524,7 @@ export async function approveInvocation(
     );
     if (!action || action === "Cancel") return { outcome: "cancel" };
     if (action === "Launch") {
-      return { outcome: "launch", prompt: request.prompt, model: request.model, thinking: request.thinking, maxTurns: request.maxTurns, runInBackground: request.runInBackground, ...(built ? { context: built } : {}) };
+      return { outcome: "launch", prompt: request.prompt, model: request.model, thinking: request.thinking, maxTurns: request.maxTurns, ...(built ? { context: built } : {}) };
     }
     if (action === "Review / edit task prompt") {
       const prompt = await ctx.ui.editor("Review subagent task prompt", request.prompt);
@@ -546,11 +543,6 @@ export async function approveInvocation(
     }
     if (action === "Do it yourself") {
       return { outcome: "do-it-yourself", prompt: request.prompt };
-    }
-    if (action.startsWith("Change parent behavior")) {
-      const selected = await ctx.ui.select("Parent behavior", ["Continue working", "Detach from child"]);
-      if (selected) request.runInBackground = selected === "Continue working";
-      continue;
     }
     if (action.startsWith("Change model")) {
       const models = (registry.getAvailable?.() ?? registry.getAll()) as Model<Api>[];

@@ -10,7 +10,7 @@ describe("settings persistence", () => {
   afterEach(() => { if (old == null) delete process.env.PI_CODING_AGENT_DIR; else process.env.PI_CODING_AGENT_DIR = old; rmSync(globalDir, { recursive: true, force: true }); rmSync(projectDir, { recursive: true, force: true }); });
 
   it("round-trips retained settings via the global file when no project file exists", () => {
-    const value = { maxConcurrent: 7, defaultMaxTurns: 30, graceTurns: 3, defaultJoinMode: "smart" as const, scopeModels: true, disableDefaultAgents: false, toolDescriptionMode: "compact" as const };
+    const value = { maxConcurrent: 7, defaultMaxTurns: 30, graceTurns: 3, scopeModels: true, disableDefaultAgents: false, toolDescriptionMode: "compact" as const };
     const result = saveSettings(value, projectDir);
     expect(result.persisted).toBe(true);
     expect(result.scope).toBe("global");
@@ -49,12 +49,12 @@ describe("settings persistence", () => {
 
   it("silently drops retired scheduling and UI settings", () => {
     mkdirSync(join(projectDir, ".pi"), { recursive: true });
-    writeFileSync(join(projectDir, ".pi", "olive-agents.json"), JSON.stringify({ schedulingEnabled: true, fleetView: false, widgetMode: "all", maxConcurrent: 4 }));
+    writeFileSync(join(projectDir, ".pi", "olive-agents.json"), JSON.stringify({ schedulingEnabled: true, fleetView: false, widgetMode: "all", defaultJoinMode: "smart", maxConcurrent: 4 }));
     expect(loadSettings(projectDir)).toEqual({ maxConcurrent: 4 });
   });
 
   it("applies only retained fields", () => {
-    const a = { setMaxConcurrent: vi.fn(), setDefaultMaxTurns: vi.fn(), setGraceTurns: vi.fn(), setDefaultJoinMode: vi.fn(), setScopeModels: vi.fn(), setDisableDefaultAgents: vi.fn(), setToolDescriptionMode: vi.fn() };
+    const a = { setMaxConcurrent: vi.fn(), setDefaultMaxTurns: vi.fn(), setGraceTurns: vi.fn(), setScopeModels: vi.fn(), setDisableDefaultAgents: vi.fn(), setToolDescriptionMode: vi.fn() };
     applySettings({ maxConcurrent: 4, scopeModels: true }, a);
     expect(a.setMaxConcurrent).toHaveBeenCalledWith(4);
     expect(a.setScopeModels).toHaveBeenCalledWith(true);

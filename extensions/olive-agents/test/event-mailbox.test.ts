@@ -8,6 +8,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import {
+  ackCommand,
   consumeChildEvents,
   emitChildEvent,
   ensureMailboxDir,
@@ -124,19 +125,24 @@ describe("pending decisions", () => {
 });
 
 describe("parent commands", () => {
-  it("writes and reads commands in order", () => {
-    writeParentCommand(dir, { type: "follow_up", message: "continue", maxTurns: 3 });
-    writeParentCommand(dir, { type: "abort" });
+  it("writes and reads checkpoint acknowledgements in order", () => {
+    writeParentCommand(dir, { type: "ack_checkpoint", checkpointId: "cp-1" });
+    writeParentCommand(dir, { type: "ack_checkpoint", checkpointId: "cp-2" });
     const cmds = readPendingCommands(dir);
-    expect(cmds.map((c) => c.type)).toEqual(["follow_up", "abort"]);
+    expect(cmds).toEqual([
+      { type: "ack_checkpoint", checkpointId: "cp-1" },
+      { type: "ack_checkpoint", checkpointId: "cp-2" },
+    ]);
   });
 
   it("consumes commands via ack", () => {
-    const f = writeParentCommand(dir, { type: "abort" });
+    const f = writeParentCommand(dir, { type: "ack_checkpoint", checkpointId: "cp-1" });
     const cmds = readPendingCommands(dir);
     expect(cmds).toHaveLength(1);
     // The child acks by filename; the file must then be gone.
     expect(existsSync(f)).toBe(true);
+    ackCommand(dir, f.split("/").pop()!);
+    expect(existsSync(f)).toBe(false);
   });
 
   it("survives a missing commands dir", () => {

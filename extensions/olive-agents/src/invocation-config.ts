@@ -1,12 +1,13 @@
-import type { AgentConfig, JoinMode, ThinkingLevel } from "./types.js";
+import type { AgentConfig, ThinkingLevel } from "./types.js";
 
 interface AgentInvocationParams {
   model?: string;
   thinking?: string;
   max_turns?: number;
-  run_in_background?: boolean;
 }
 
+/** Resolve the launch settings that are still meaningful for Agent calls.
+ * Legacy background-mode input is intentionally ignored. */
 export function resolveAgentInvocationConfig(
   agentConfig: AgentConfig | undefined,
   params: AgentInvocationParams,
@@ -15,7 +16,6 @@ export function resolveAgentInvocationConfig(
   modelFromParams: boolean;
   thinking?: ThinkingLevel;
   maxTurns?: number;
-  runInBackground: boolean;
 } {
   return {
     modelInput: agentConfig?.model ?? params.model,
@@ -24,10 +24,5 @@ export function resolveAgentInvocationConfig(
     // The parent tool call owns the work-turn budget. Agent frontmatter is
     // retained for manual/non-tool callers, but cannot override this value.
     maxTurns: params.max_turns,
-    runInBackground: agentConfig?.runInBackground ?? params.run_in_background ?? false,
   };
-}
-
-export function resolveJoinMode(defaultJoinMode: JoinMode, runInBackground: boolean): JoinMode | undefined {
-  return runInBackground ? defaultJoinMode : undefined;
 }

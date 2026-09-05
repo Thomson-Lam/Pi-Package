@@ -39,7 +39,6 @@ export interface ChildEventMap {
   tool_started: { runNumber?: number; toolName: string; target?: string };
   tool_finished: { runNumber?: number; toolName: string };
   turn_finished: { runNumber?: number; turnCount: number };
-  human_steer: { runNumber?: number; text: string };
   run_idle: { runNumber: number; reason: "completed" | "turn_limit" | "interrupted"; turnCount: number; toolUses: number; maxTurns?: number };
   decision_required: PendingDecisionState;
   context_checkpoint: { runNumber: number; checkpoint: ContextReturnCheckpoint };
@@ -64,10 +63,7 @@ export interface ChildEventMap {
 export type ChildEvent = { [K in keyof ChildEventMap]: { type: K } & ChildEventMap[K] }[keyof ChildEventMap];
 
 export interface ParentCommandMap {
-  follow_up: { message: string; maxTurns: number };
-  abort: {};
   ack_checkpoint: { checkpointId: string };
-  shutdown: {};
 }
 
 export type ParentCommand = { [K in keyof ParentCommandMap]: { type: K } & ParentCommandMap[K] }[keyof ParentCommandMap];

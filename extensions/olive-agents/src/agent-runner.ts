@@ -31,7 +31,6 @@ export type { AgentLaunchSpec } from "./types.js";
  */
 export const SUBAGENT_TOOL_NAMES = {
   AGENT: "Agent",
-  GET_RESULT: "get_subagent_result",
 } as const;
 
 /** Legacy default retained for settings compatibility; omitted maxTurns means unlimited. */

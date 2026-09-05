@@ -37,8 +37,6 @@ export interface AgentConfig {
   thinking?: ThinkingLevel;
   maxTurns?: number;
   systemPrompt: string;
-  /** Default for spawn: run in background. undefined = caller decides. */
-  runInBackground?: boolean;
   /** Persistent memory scope — agents with memory get a persistent directory and MEMORY.md */
   memory?: MemoryScope;
   /** true = this is an embedded default agent (informational) */
@@ -48,8 +46,6 @@ export interface AgentConfig {
   /** Where this agent was loaded from */
   source?: "default" | "project" | "global";
 }
-
-export type JoinMode = 'async' | 'group' | 'smart';
 
 /**
  * Fully serializable launch specification handed to child-host.mjs. No
@@ -147,14 +143,6 @@ export interface AgentRecord {
   toolUses: number;
   startedAt: number;
   completedAt?: number;
-  /** Set when result was already consumed via get_subagent_result — suppresses completion notification. */
-  resultConsumed?: boolean;
-  /** Batch grouping (smart join mode) — write-only bookkeeping. */
-  joinMode?: JoinMode;
-  /** Group id when the agent was part of a parallel batch. */
-  groupId?: string;
-  /** Steering messages queued before the child session was ready. */
-  pendingSteers?: string[];
   /** Original task submitted when this child was created. */
   originalPrompt: string;
   /** Most recently approved task/follow-up. */
@@ -179,14 +167,6 @@ export interface AgentRecord {
   };
   /** Human-readable terminal reason, separate from provider errors. */
   stopReason?: string;
-  /** Acknowledgement state for steering or follow-up commands. */
-  feedback?: {
-    kind: "steer" | "follow-up";
-    text: string;
-    state: "queued" | "delivered" | "awaiting-run" | "failed";
-    updatedAt: number;
-    error?: string;
-  };
   /** The tool_use_id from the original Agent tool call. */
   toolCallId?: string;
   /**
@@ -201,12 +181,6 @@ export interface AgentRecord {
   latestCheckpoint?: ContextReturnCheckpoint;
   /** Whether this record currently occupies a background execution slot. */
   slotActive?: boolean;
-  /**
-   * Whether completion is notification-backed. Agent tool launches set this
-   * true for both parent behaviors; `runInBackground` separately controls
-   * whether the current parent loop continues or terminates after launch.
-   */
-  isBackground?: boolean;
   /** Resolved spawn params, captured for UI display. Fixed at spawn time. */
   invocation?: AgentInvocation;
   /** Persistent child Pi session identity (set once the child reports ready). */
@@ -226,26 +200,6 @@ export interface AgentInvocation {
   modelName?: string;
   thinking?: ThinkingLevel;
   maxTurns?: number;
-  runInBackground?: boolean;
-}
-
-/** Details attached to custom notification messages for visual rendering. */
-export interface NotificationDetails {
-  id: string;
-  description: string;
-  status: string;
-  toolUses: number;
-  turnCount: number;
-  maxTurns?: number;
-  totalTokens: number;
-  durationMs: number;
-  sessionFile?: string;
-  error?: string;
-  resultPreview: string;
-  /** Notification kind — steering notifications are not completions. */
-  kind?: "completion" | "human-steer";
-  /** Additional agents in a group notification. */
-  others?: NotificationDetails[];
 }
 
 export interface EnvInfo {

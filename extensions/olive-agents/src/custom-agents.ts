@@ -71,7 +71,6 @@ function loadFromDir(dir: string, agents: Map<string, AgentConfig>, source: "pro
       thinking: str(fm.thinking) as ThinkingLevel | undefined,
       maxTurns: nonNegativeInt(fm.max_turns),
       systemPrompt: body.trim(),
-      runInBackground: fm.run_in_background != null ? fm.run_in_background === true : undefined,
       memory: parseMemory(fm.memory),
       enabled: fm.enabled !== false,  // default true; explicitly false disables
       source,

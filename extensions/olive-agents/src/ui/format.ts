@@ -165,7 +165,7 @@ export function buildInvocationTags(
   const tags: string[] = [];
   if (!invocation) return { tags };
   if (invocation.thinking) tags.push(`thinking: ${invocation.thinking}`);
-  tags.push(invocation.runInBackground ? "background" : "detached");
+  tags.push("detached");
   if (invocation.maxTurns != null) tags.push(`max turns: ${invocation.maxTurns}`);
   return { modelName: invocation.modelName, tags };
 }

@@ -5,10 +5,10 @@
  *
  *   - prepares launch specs and creates tmux windows (concurrency-queued)
  *   - watches each child's mailbox for lifecycle/tool events
- *   - forwards follow-up and explicit abort commands to the child
  *   - tracks per-record status, activity, usage and window state
  *
- * Foreground spawns bypass the concurrency queue and await run_settled.
+ * Every launch is supervised in the concurrency queue and detached from the
+ * parent. Child continuation and return decisions remain child-local.
  */
 
 import { randomUUID } from "node:crypto";
@@ -20,7 +20,7 @@ import type { ExtensionAPI, ExtensionContext } from "@earendil-works/pi-coding-a
 import { getPackageDir } from "@earendil-works/pi-coding-agent";
 import { type AgentLaunchSpec, buildReopenDescriptor, prepareAgentLaunch, validateMaxTurns, writeLaunchSpec } from "./agent-runner.js";
 import { contextReturnToMarkdown, type ContextLedgerNode, type ContextLinkData, type ContextReturnCheckpoint } from "./context-ledger.js";
-import { type ChildEvent, ensureMailboxDir, readPendingDecision, removeMailboxDir, watchChildEvents, writeJsonAtomic, writeParentCommand } from "./event-mailbox.js";
+import { emitChildEvent, type ChildEvent, ensureMailboxDir, readPendingDecision, removeMailboxDir, watchChildEvents, writeJsonAtomic, writeParentCommand } from "./event-mailbox.js";
 import { createAgentWindow, execFromPi, findWindowByName as findTmuxWindowByName, focusWindow as focusTmuxWindow, killWindow as killTmuxWindow, shellQuote, windowAlive as tmuxWindowAlive, type TmuxExec } from "./tmux-window.js";
 import { agentSessionName, agentWindowName } from "./names.js";
 import { type AgentRecord, type AgentWindowInfo, type SubagentType, type ThinkingLevel } from "./types.js";
@@ -37,10 +37,8 @@ export interface SpawnOptions {
   description: string;
   model?: Model<any>;
   maxTurns?: number;
-  signal?: AbortSignal;
   thinkingLevel?: ThinkingLevel;
   promptPolicy?: "native" | "inherit";
-  isBackground?: boolean;
   invocation?: AgentRecord["invocation"];
   /** Optional context ledger node accompanying this launch (persisted by the child). */
   ledgerNode?: ContextLedgerNode;
@@ -66,7 +64,6 @@ export type OnAgentComplete = (record: AgentRecord) => void;
 export type OnAgentStart = (record: AgentRecord) => void;
 export type OnAgentCompact = (record: AgentRecord, info: { reason: string; tokensBefore: number }) => void;
 export type OnAgentReady = (record: AgentRecord, identity: NonNullable<AgentRecord["childSession"]>) => void;
-export type OnHumanSteer = (record: AgentRecord, text: string) => void;
 export type OnContextCheckpoint = (record: AgentRecord, checkpoint: ContextReturnCheckpoint) => void;
 
 /** Injectable side-effect surface (tests provide mocks). */
@@ -91,7 +88,6 @@ function isActiveRecord(record: AgentRecord): boolean {
 function isWorkActive(record: AgentRecord): boolean {
   return record.status === "queued" || record.status === "running" || isDecisionPending(record);
 }
-function isTerminalRecord(record: AgentRecord): boolean { return !isActiveRecord(record); }
 
 function snapshotFromContext(ctx: unknown): SkillSnapshot[] | undefined {
   const getter = (ctx as { getSystemPromptOptions?: () => { skills?: unknown } } | undefined)?.getSystemPromptOptions;
@@ -139,16 +135,15 @@ export class AgentManager {
   private onStart?: OnAgentStart;
   private onCompact?: OnAgentCompact;
   private onReady?: OnAgentReady;
-  private onHumanSteer?: OnHumanSteer;
   private onContextCheckpoint?: OnContextCheckpoint;
   private onLink?: (link: ContextLinkData) => void;
+  private activeParentSessionFile?: string;
   private maxConcurrent: number;
   private queue: { id: string; args: { pi: ExtensionAPI; ctx: ExtensionContext; type: SubagentType; prompt: string; options: SpawnOptions } }[] = [];
   private runningBackground = 0;
   private deps: ManagerDeps;
   private watchers = new Map<string, ReturnType<typeof watchChildEvents>>();
   private windowTimers = new Map<string, ReturnType<typeof setInterval>>();
-  private settled = new Map<string, { promise: Promise<AgentRecord>; resolve: (r: AgentRecord) => void }>();
   private readyTimers = new Map<string, ReturnType<typeof setTimeout>>();
   private disposed = false;
 
@@ -172,13 +167,26 @@ export class AgentManager {
   }
 
   /** Callback wiring (set after construction to avoid long constructor args). */
-  setCallbacks(cb: { onReady?: OnAgentReady; onHumanSteer?: OnHumanSteer; onContextCheckpoint?: OnContextCheckpoint; onLink?: (link: ContextLinkData) => void }): void {
+  setCallbacks(cb: { onReady?: OnAgentReady; onContextCheckpoint?: OnContextCheckpoint; onLink?: (link: ContextLinkData) => void }): void {
     if (cb.onReady) this.onReady = cb.onReady;
-    if (cb.onHumanSteer) this.onHumanSteer = cb.onHumanSteer;
     if (cb.onContextCheckpoint) this.onContextCheckpoint = cb.onContextCheckpoint;
     if (cb.onLink) this.onLink = cb.onLink;
   }
 
+
+  /** Select which parent session may receive child checkpoints. */
+  setParentSessionFile(sessionFile: string | undefined): void {
+    this.activeParentSessionFile = sessionFile;
+    if (!sessionFile) {
+      for (const id of this.agents.keys()) this.stopMailboxWatcher(id);
+      return;
+    }
+    for (const record of this.agents.values()) {
+      if (record.childSession?.parentSessionFile === sessionFile && record.mailboxDir && !this.watchers.has(record.id)) {
+        this.startMailboxWatcher(record);
+      }
+    }
+  }
 
   subscribe(listener: (event: AgentManagerEvent) => void): () => void {
     this.listeners.add(listener);
@@ -245,13 +253,12 @@ export class AgentManager {
       runNumber: 0,
       turnCount: 0,
       maxTurns: typeof options.maxTurns === "number" ? options.maxTurns : undefined,
-      isBackground: options.isBackground,
       invocation: options.invocation,
     };
     this.agents.set(id, record);
     this.emit({ type: "created", record });
 
-    if (options.isBackground && this.runningBackground >= this.maxConcurrent) {
+    if (this.runningBackground >= this.maxConcurrent) {
       this.queue.push({ id, args: { pi, ctx, type, prompt, options } });
       return id;
     }
@@ -276,6 +283,7 @@ export class AgentManager {
 
     const parentSessionId = ctx.sessionManager.getSessionId();
     const parentSessionFile = ctx.sessionManager.getSessionFile();
+    if (this.activeParentSessionFile === undefined) this.activeParentSessionFile = parentSessionFile;
     // May be undefined when the parent runs with --no-session; the child then
     // persists under its own cwd's default session dir and appears as a root
     // session in /resume (no nesting possible).
@@ -287,8 +295,8 @@ export class AgentManager {
     const childSessionId = randomUUID();
     const model = options.model ?? ctx.model;
     if (!model) throw new Error("No effective model available for agent launch.");
-    // Command callers can expose Pi's current base prompt options; this also
-    // covers RPC/manual launches that did not explicitly carry a snapshot.
+    // Command callers can expose Pi's current base prompt options when a
+    // launch did not explicitly carry a snapshot.
     const skillsSnapshot = options.skillsSnapshot === undefined
       ? snapshotFromContext(ctx)
       : cloneSkillSnapshot(options.skillsSnapshot);
@@ -341,8 +349,8 @@ export class AgentManager {
           ledgerNodeId: spec.ledger?.node.id,
           parentLedgerId: spec.ledger?.node.parentId,
           createdAt: new Date().toISOString(),
+          parentSessionFile,
           mailboxDir,
-          isBackground: options.isBackground,
           reopen: buildReopenDescriptor(spec),
         });
       } catch {
@@ -371,18 +379,10 @@ export class AgentManager {
     record.window = { id: created.id, index: created.index, name: created.name, state: "starting" };
     record.startedAt = Date.now();
     record.updatedAt = Date.now();
-    if (options.isBackground) {
-      this.runningBackground++;
-      record.slotActive = true;
-    }
+    this.runningBackground++;
+    record.slotActive = true;
     this.onStart?.(record);
     this.emit({ type: "started", record });
-
-    // Wire parent abort signal.
-    if (options.signal) {
-      const onParentAbort = () => { void this.abort(id); };
-      options.signal.addEventListener("abort", onParentAbort, { once: true });
-    }
 
     // Watch the child mailbox.
     const watcher = watchChildEvents(mailboxDir, (events) => {
@@ -413,7 +413,6 @@ export class AgentManager {
           r.window.state = "closed";
           r.updatedAt = Date.now();
           this.emit({ type: "updated", record: r });
-          this.maybeAutoClear(r);
         }
       });
     }, WINDOW_POLL_MS);
@@ -459,8 +458,8 @@ export class AgentManager {
               ledgerNodeId: linkSpec.ledger?.node.id,
               parentLedgerId: linkSpec.ledger?.node.parentId,
               createdAt: new Date().toISOString(),
+              parentSessionFile: record.childSession?.parentSessionFile,
               mailboxDir: record.mailboxDir,
-              isBackground: record.isBackground,
               reopen: buildReopenDescriptor(linkSpec),
             });
           } catch {
@@ -468,7 +467,9 @@ export class AgentManager {
           }
         }
         this.emit({ type: "updated", record });
-        if (record.childSession) this.onReady?.(record, record.childSession);
+        if (record.childSession && record.childSession.parentSessionFile === this.activeParentSessionFile) {
+          this.onReady?.(record, record.childSession);
+        }
         const rt = this.readyTimers.get(id);
         if (rt) { clearTimeout(rt); this.readyTimers.delete(id); }
         break;
@@ -529,11 +530,7 @@ export class AgentManager {
       }
 
       case "human_steer": {
-        if (event.runNumber != null && event.runNumber !== record.runNumber) break;
-        record.feedback = { kind: "steer", text: event.text, state: "delivered", updatedAt: Date.now() };
-        record.updatedAt = Date.now();
-        this.emit({ type: "updated", record });
-        this.onHumanSteer?.(record, event.text);
+        // Human steering is child-local and must never wake the parent.
         break;
       }
 
@@ -558,9 +555,15 @@ export class AgentManager {
 
       case "context_checkpoint": {
         const checkpoint = event.checkpoint;
+        const owner = record.childSession?.parentSessionFile;
         const seen = new Set(record.checkpointIds ?? []);
         if (seen.has(checkpoint.id)) {
-          this.onContextCheckpoint?.(record, checkpoint);
+          if (owner && owner !== this.activeParentSessionFile) {
+            this.stopMailboxWatcher(record.id);
+            emitChildEvent(record.mailboxDir!, event);
+          } else {
+            this.onContextCheckpoint?.(record, checkpoint);
+          }
           break;
         }
         seen.add(checkpoint.id);
@@ -576,7 +579,15 @@ export class AgentManager {
           record.slotActive = false;
           void this.drainQueue();
         }
-        this.onContextCheckpoint?.(record, checkpoint);
+        if (owner && owner !== this.activeParentSessionFile) {
+          // The event was consumed by the watcher before the session switch.
+          // Put it back durably, then pause this mailbox until its owner is
+          // active again so it cannot be delivered to another parent.
+          this.stopMailboxWatcher(record.id);
+          emitChildEvent(record.mailboxDir!, event);
+        } else {
+          this.onContextCheckpoint?.(record, checkpoint);
+        }
         this.emit({ type: "updated", record });
         break;
       }
@@ -621,7 +632,6 @@ export class AgentManager {
         // resolve a foreground waiter or notify a background parent.
         record.updatedAt = Date.now();
         this.emit({ type: "updated", record });
-        this.maybeAutoClear(record);
         break;
       }
     }
@@ -652,46 +662,15 @@ export class AgentManager {
       : undefined;
     record.updatedAt = Date.now();
 
-    // Resolve any foreground/resume waiter.
-    const wait = this.settled.get(record.id);
-    if (wait) {
-      this.settled.delete(record.id);
-      wait.resolve(record);
+    if (record.slotActive) {
+      this.runningBackground = Math.max(0, this.runningBackground - 1);
+      record.slotActive = false;
     }
-
-    if (!record.isBackground) {
-      record.resultConsumed = true;
-      try { this.onComplete?.(record); } catch { /* ignore */ }
-    } else {
-      if (record.slotActive) {
-        this.runningBackground = Math.max(0, this.runningBackground - 1);
-        record.slotActive = false;
-      }
-      try { this.onComplete?.(record); } catch { /* ignore */ }
-      void this.drainQueue();
-    }
+    try { this.onComplete?.(record); } catch { /* ignore */ }
+    void this.drainQueue();
     this.emit({ type: "completed", record });
     // The tmux window stays open for human dismissal — result settlement has
     // no tmux side effect.
-  }
-
-  /**
-   * Mark a result as consumed (parent agent read it). Auto-clears the fleet
-   * record once the run is terminal AND its window is closed — everything
-   * about the agent has then been acknowledged. The Pi session file and the
-   * parent session's subagents:record entries remain as the archive.
-   */
-  consumeResult(id: string): void {
-    const record = this.agents.get(id);
-    if (!record) return;
-    record.resultConsumed = true;
-    this.maybeAutoClear(record);
-  }
-
-  private maybeAutoClear(record: AgentRecord): void {
-    if (!isTerminalRecord(record) || !record.resultConsumed) return;
-    if (record.window && record.window.state !== "closed") return;
-    this.removeRecord(record.id, record);
   }
 
   /**
@@ -802,13 +781,12 @@ export class AgentManager {
     record.reviewedAt = undefined;
     record.updatedAt = Date.now();
     this.stopWatchers(id);
-    const wait = this.settled.get(id);
-    if (wait) { this.settled.delete(id); wait.resolve(record); }
-    if (record.isBackground) {
+    if (record.slotActive) {
       this.runningBackground = Math.max(0, this.runningBackground - 1);
-      try { this.onComplete?.(record); } catch { /* ignore */ }
-      void this.drainQueue();
+      record.slotActive = false;
     }
+    try { this.onComplete?.(record); } catch { /* ignore */ }
+    void this.drainQueue();
     this.emit({ type: "completed", record });
   }
 
@@ -836,89 +814,6 @@ export class AgentManager {
     }
   }
 
-  /**
-   * Spawn an agent and wait for completion (foreground use). Foreground
-   * agents bypass the concurrency queue.
-   */
-  async spawnAndWait(
-    pi: ExtensionAPI,
-    ctx: ExtensionContext,
-    type: SubagentType,
-    prompt: string,
-    options: Omit<SpawnOptions, "isBackground">,
-  ): Promise<{ id: string; record: AgentRecord }> {
-    const id = await this.spawn(pi, ctx, type, prompt, { ...options, isBackground: false });
-    const record = this.agents.get(id)!;
-    await this.awaitSettled(id);
-    return { id, record };
-  }
-
-  /** Arm a promise resolved on the next run_settled for a record. */
-  private awaitSettled(id: string): Promise<AgentRecord> {
-    const existing = this.settled.get(id);
-    if (existing) return existing.promise;
-    let resolve!: (r: AgentRecord) => void;
-    const promise = new Promise<AgentRecord>((r) => { resolve = r; });
-    this.settled.set(id, { promise, resolve });
-    return promise;
-  }
-
-  /** Public waiter: resolves on the next run_settled for a record (or immediately if already settled). */
-  waitForSettled(id: string): Promise<AgentRecord> {
-    const record = this.agents.get(id);
-    if (record && (record.status === "completed" || record.status === "steered" || record.status === "aborted" || record.status === "stopped" || record.status === "error") && record.completedAt) {
-      return Promise.resolve(record);
-    }
-    return this.awaitSettled(id);
-  }
-
-  /**
-   * Resume a child agent session with a follow-up prompt. Ensures a live
-   * window (reopening the session if the window was closed), sends the
-   * follow-up, and awaits the resulting run_settled.
-   */
-  async resume(
-    id: string,
-    prompt: string,
-    _signal?: AbortSignal,
-    options: { model?: Model<any>; thinking?: ThinkingLevel; maxTurns?: number; resultConsumed?: boolean; wait?: boolean } = {},
-  ): Promise<AgentRecord | undefined> {
-    validateMaxTurns(options.maxTurns);
-    const record = this.agents.get(id);
-    if (!record || record.status === "running" || record.status === "queued" || record.status === "awaiting_decision") return undefined;
-    if (!record.mailboxDir || !record.launchSpec) return undefined;
-
-    // Ensure a live window (reopen the session if the window was closed).
-    if (!record.window || record.window.state === "closed") {
-      const ok = await this.reopenWindow(id);
-      if (!ok) {
-        record.error = "could not reopen agent session window";
-        record.updatedAt = Date.now();
-        this.emit({ type: "updated", record });
-        return record;
-      }
-    }
-
-    // Arm the waiter BEFORE sending the command so a fast child cannot race.
-    const wait = this.awaitSettled(id);
-    record.effectivePrompt = prompt;
-    record.maxTurns = options.maxTurns;
-    record.status = "running";
-    record.decision = undefined;
-    record.result = undefined;
-    record.error = undefined;
-    record.completedAt = undefined;
-    record.resultConsumed = options.resultConsumed ?? false;
-    record.feedback = { kind: "follow-up", text: prompt, state: "queued", updatedAt: Date.now() };
-    record.updatedAt = Date.now();
-    this.emit({ type: "updated", record });
-
-    writeParentCommand(record.mailboxDir, { type: "follow_up", message: prompt, maxTurns: options.maxTurns });
-    if (options.wait === false) return record;
-    await wait;
-    return this.agents.get(id);
-  }
-
   /** Acknowledge a durable context checkpoint after the parent persisted it. */
   acknowledgeCheckpoint(id: string, checkpointId: string): boolean {
     const record = this.agents.get(id);
@@ -943,40 +838,9 @@ export class AgentManager {
   }
 
   listAgents(): AgentRecord[] {
-    return [...this.agents.values()].sort((a, b) => b.startedAt - a.startedAt);
-  }
-
-  /** Abort a queued or running child. */
-  abort(id: string): boolean {
-    const record = this.agents.get(id);
-    if (!record) return false;
-
-    if (record.status === "queued") {
-      this.queue = this.queue.filter((q) => q.id !== id);
-      record.status = "stopped";
-      record.completedAt = Date.now();
-      record.updatedAt = Date.now();
-      record.reviewedAt = undefined;
-      record.stopReason = "stopped by user";
-      this.stopWatchers(id);
-      try { this.onComplete?.(record); } catch { /* ignore */ }
-      this.emit({ type: "completed", record });
-      return true;
-    }
-
-    if (record.status === "awaiting_decision") {
-      // The run is already stopped at a human gate. Preserve its held result;
-      // Escape or parent cancellation must not turn it into a parent response.
-      return true;
-    }
-    if (record.status !== "running") return false;
-    // Request a child-side abort, but do not settle locally. The child records
-    // an aborted pending decision, and only a later /or emits run_settled.
-    record.stopReason = "stop requested";
-    record.updatedAt = Date.now();
-    this.emit({ type: "updated", record });
-    if (record.mailboxDir) writeParentCommand(record.mailboxDir, { type: "abort" });
-    return true;
+    return [...this.agents.values()]
+      .filter((record) => !this.activeParentSessionFile || record.childSession?.parentSessionFile === this.activeParentSessionFile)
+      .sort((a, b) => b.startedAt - a.startedAt);
   }
 
   /** Focus the record's tmux window, reopening the session if closed. */
@@ -1085,9 +949,7 @@ export class AgentManager {
       toolUses: pending?.toolUses ?? 0, startedAt, lifetimeUsage: pending?.usage ? { ...pending.usage } : { input: 0, output: 0, cacheWrite: 0 },
       compactionCount: pending?.compactions ?? 0, originalPrompt: "", effectivePrompt: "", updatedAt: Date.now(),
       runNumber: pending?.runNumber ?? 0, turnCount: pending?.turnCount ?? 0, maxTurns: pending?.maxTurns ?? reopen.maxTurns,
-      // The original foreground tool call cannot survive a closed parent
-      // process. Treat restored records as notification-backed until release.
-      isBackground: true, childSession: { sessionId: link.childSessionId, sessionName: link.childSessionName, sessionFile: link.childSessionFile },
+      childSession: { sessionId: link.childSessionId, sessionName: link.childSessionName, sessionFile: link.childSessionFile, parentSessionFile: this.activeParentSessionFile },
       mailboxDir, launchSpec: spec,
       ...(live ? { window: { id: live.id, index: live.index, name: live.name, state: "alive" as const } } : {}),
     };
@@ -1121,8 +983,12 @@ export class AgentManager {
     const exec = this.deps.tmux;
     const windowName = agentWindowName(link.agentId, link.agentType);
 
-    // Fresh mailbox: launch specs and mailbox dirs are one-shot, never reused.
-    const mailboxDir = join(tmpdir(), "olive-agents", link.agentId, "reopen");
+    // Reopen the original mailbox whenever it is still available. The child
+    // writes checkpoints and reads acknowledgements there, including while a
+    // pending decision survives an /ot reopen.
+    const mailboxDir = link.mailboxDir && existsSync(link.mailboxDir)
+      ? link.mailboxDir
+      : join(tmpdir(), "olive-agents", link.agentId, "reopen");
     ensureMailboxDir(mailboxDir);
 
     const spec: AgentLaunchSpec = {
@@ -1198,26 +1064,30 @@ export class AgentManager {
    */
   private registerReopenedRecord(link: ContextLinkData, spec: AgentLaunchSpec, mailboxDir: string, window?: AgentWindowInfo): void {
     if (this.agents.has(link.agentId)) return;
+    const pending = readPendingDecision(mailboxDir);
+    let bridgeStatus: string | undefined;
+    try { bridgeStatus = JSON.parse(readFileSync(join(mailboxDir, "bridge-state.json"), "utf-8")).status; } catch {}
     const record: AgentRecord = {
       id: link.agentId,
       type: link.agentType,
       description: link.description,
-      status: "running", // corrected by the child's boot bridge-state at ready
-      toolUses: 0,
+      status: pending ? "awaiting_decision" : bridgeStatus === "idle" ? "idle" : "running",
+      decision: pending ? { ...pending } : undefined,
+      toolUses: pending?.toolUses ?? 0,
       startedAt: Date.now(),
       lifetimeUsage: { input: 0, output: 0, cacheWrite: 0 },
       compactionCount: 0,
       originalPrompt: "",
       effectivePrompt: "",
       updatedAt: Date.now(),
-      runNumber: 0,
-      turnCount: 0,
-      maxTurns: spec.run.maxTurns,
-      isBackground: true,
+      runNumber: pending?.runNumber ?? 0,
+      turnCount: pending?.turnCount ?? 0,
+      maxTurns: pending?.maxTurns ?? spec.run.maxTurns,
       childSession: {
         sessionId: link.childSessionId,
         sessionName: link.childSessionName,
         sessionFile: link.childSessionFile,
+        parentSessionFile: this.activeParentSessionFile,
       },
       mailboxDir,
       launchSpec: spec,
@@ -1262,24 +1132,31 @@ export class AgentManager {
     this.emit({ type: "removed", id });
   }
 
-  private stopWatchers(id: string): void {
+  private startMailboxWatcher(record: AgentRecord): void {
+    if (!record.mailboxDir || this.watchers.has(record.id)) return;
+    const watcher = watchChildEvents(record.mailboxDir, (events) => {
+      for (const event of events) this.handleChildEvent(record.id, event, { description: record.description });
+    });
+    this.watchers.set(record.id, watcher);
+  }
+
+  private stopMailboxWatcher(id: string): void {
     const watcher = this.watchers.get(id);
     if (watcher) { watcher.dispose(); this.watchers.delete(id); }
+  }
+
+  private stopWatchers(id: string): void {
+    this.stopMailboxWatcher(id);
     const timer = this.windowTimers.get(id);
     if (timer) { clearInterval(timer); this.windowTimers.delete(id); }
     const rt = this.readyTimers.get(id);
     if (rt) { clearTimeout(rt); this.readyTimers.delete(id); }
   }
 
-  /**
-   * Remove all completed/stopped/errored records immediately.
-   * Pass skipUnconsumed=true to preserve records the LLM has not read yet.
-   */
-  clearCompleted(skipUnconsumed = false): void {
+  /** Remove all completed/stopped/errored records immediately. */
+  clearCompleted(): void {
     for (const [id, record] of this.agents) {
-      if (isActiveRecord(record)) continue;
-      if (skipUnconsumed && !record.resultConsumed) continue;
-      this.removeRecord(id, record);
+      if (!isActiveRecord(record)) this.removeRecord(id, record);
     }
   }
 
@@ -1288,22 +1165,6 @@ export class AgentManager {
     return [...this.agents.values()].some(
       (r) => isWorkActive(r),
     );
-  }
-
-  /** Abort all active agents immediately (explicit parent stop). */
-  abortAll(): number {
-    const ids = [...this.agents.values()].filter(isActiveRecord).map((record) => record.id);
-    let count = 0;
-    for (const id of ids) if (this.abort(id)) count++;
-    return count;
-  }
-
-  /** Wait for all running and queued agents to settle. */
-  async waitForAll(): Promise<void> {
-    while (this.hasRunning()) {
-      await this.drainQueue();
-      await new Promise((r) => setTimeout(r, 250));
-    }
   }
 
   /**
@@ -1318,8 +1179,8 @@ export class AgentManager {
       this.stopWatchers(id);
     }
     this.agents.clear();
+    this.activeParentSessionFile = undefined;
     this.listeners.clear();
-    this.settled.clear();
     this.readyTimers.clear();
   }
 }

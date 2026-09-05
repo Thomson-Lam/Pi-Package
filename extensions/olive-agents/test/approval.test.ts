@@ -7,7 +7,7 @@ const model = { provider: "test", id: "basic", name: "Basic", reasoning: false }
 const registry = { getAll: () => [model], getAvailable: () => [model] };
 const request = {
   agentType: "Review", description: "Inspect code", prompt: "task", model,
-  thinking: "off" as const, maxTurns: 10, runInBackground: false,
+  thinking: "off" as const, maxTurns: 10,
 };
 
 function ctx(selection: string) {
@@ -38,19 +38,19 @@ describe("subagent approval", () => {
 
   it("launches the reviewed task without context fields", async () => {
     await expect(approveInvocation(ctx("Launch"), registry, request)).resolves.toEqual({
-      outcome: "launch", prompt: "task", model, thinking: "off", maxTurns: 10, runInBackground: false,
+      outcome: "launch", prompt: "task", model, thinking: "off", maxTurns: 10,
     });
   });
 
-  it("offers detach instead of blocking the parent on the child", async () => {
+  it("offers only detached launch behavior", async () => {
     let title = "";
-    const answers = ["Change parent behavior (Detach from child)", "Continue working", "Launch"];
     const result = await approveInvocation({
       mode: "tui",
-      ui: { select: async (value: string) => { title = value; return answers.shift(); } },
+      ui: { select: async (value: string) => { title = value; return "Launch"; } },
     } as unknown as ExtensionContext, registry, request);
-    expect(title).not.toContain("Wait for child");
-    expect(result).toMatchObject({ outcome: "launch", maxTurns: 10, runInBackground: true });
+    expect(title).toContain("Parent behavior: Detach from child");
+    expect(result).toMatchObject({ outcome: "launch", maxTurns: 10 });
+    expect(result).not.toHaveProperty("runInBackground");
   });
 
   it("starts with an external ledger context without offering current-session context building", async () => {

@@ -99,7 +99,7 @@ Workspace prompt.`);
     expect(result.get("dupe")?.systemPrompt).toBe("Workspace prompt.");
   });
 
-  it("loads a basic agent with all frontmatter fields", () => {
+  it("loads supported fields and silently ignores legacy background frontmatter", () => {
     writeAgent("auditor", `---
 description: Security Auditor
 tools: read, grep, find
@@ -121,7 +121,7 @@ You are a security auditor.`);
     expect(agent.model).toBe("anthropic/claude-opus-4-6");
     expect(agent.thinking).toBe("high");
     expect(agent.maxTurns).toBe(30);
-    expect(agent.runInBackground).toBe(true);
+    expect(agent).not.toHaveProperty("runInBackground");
     expect(agent.systemPrompt).toBe("You are a security auditor.");
   });
 
@@ -142,7 +142,7 @@ Just a prompt.`);
     expect(agent.model).toBeUndefined();
     expect(agent.thinking).toBeUndefined();
     expect(agent.maxTurns).toBeUndefined();
-    expect(agent.runInBackground).toBeUndefined();
+    expect(agent).not.toHaveProperty("runInBackground");
     expect(agent.systemPrompt).toBe("Just a prompt.");
   });
 

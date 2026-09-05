@@ -10,7 +10,7 @@
  *   2. creates the persistent agent SessionManager (nested under the parent)
  *   3. builds runtime services + session with the approved config
  *   4. subscribes to session events → writes child events to the mailbox
- *   5. polls the mailbox commands dir for follow_up/abort/shutdown
+ *   5. polls the mailbox commands dir for checkpoint acknowledgements
  *   6. runs InteractiveMode with the task prompt
  *   7. emits process_exit and exits when the TUI quits
  *
@@ -32,8 +32,10 @@ function writeJsonAtomic(filePath, data) {
   renameSync(tmp, filePath);
 }
 
+let eventSequence = 0;
 function emitEvent(mailboxDir, event) {
-  const file = join(mailboxDir, "events", `${Date.now().toString(36)}-${event.type}.json`);
+  const sequence = ++eventSequence;
+  const file = join(mailboxDir, "events", `${Date.now().toString(36)}-${sequence.toString(36)}-${event.type}.json`);
   writeJsonAtomic(file, event);
 }
 
@@ -165,9 +167,6 @@ const bridgeFactory = (pi) => {
         if (pendingDecision && !decisionGateActive) clearPendingForContinuation();
       }
     }
-    if (event?.source === "interactive" && event.streamingBehavior && text.trim()) {
-      emitEvent(spec.bridge.mailboxDir, { type: "human_steer", runNumber, text: text.slice(0, 500) });
-    }
   });
 };
 
@@ -240,12 +239,12 @@ let inRun = false;
 let runNumber = 0;
 let turnCount = 0;
 let toolUses = 0;
-let parentAborted = false;
 let compactions = 0;
 let currentMaxTurns = spec.run.maxTurns;
 let ceilingTriggered = false;
 let reconciliationRun = false;
 let pendingDecision = null;
+let pendingCheckpointId = null;
 let decisionGateActive = false;
 let interactiveMode = false;
 let workStarted = false;
@@ -257,6 +256,15 @@ if (pendingDecision?.runNumber) {
   runNumber = pendingDecision.runNumber;
   currentMaxTurns = pendingDecision.maxTurns;
   workStarted = true;
+  try {
+    const entries = sessionManager.getEntries();
+    const acknowledged = new Set(entries
+      .filter((entry) => entry?.type === "custom" && entry.customType === "olive-agent-context-return-ack")
+      .map((entry) => entry.data?.checkpointId)
+      .filter((id) => typeof id === "string"));
+    const returned = entries.filter((entry) => entry?.type === "custom" && entry.customType === "olive-agent-context-return" && typeof entry.data?.id === "string" && !acknowledged.has(entry.data.id));
+    pendingCheckpointId = returned.at(-1)?.data?.id ?? null;
+  } catch {}
 }
 // Manual unlimited launches (/otn, /ot → Launch an agent) run interactive from
 // the start: there is no ceiling, and completion must never open the automatic
@@ -309,7 +317,6 @@ function assistantText(msg) {
 }
 
 function settledStatus() {
-  if (parentAborted) return "stopped";
   const last = lastAssistant(session);
   if (last?.stopReason === "error") return "error";
   if (last?.stopReason === "aborted") return "stopped";
@@ -369,9 +376,9 @@ function enterAutomaticMode(maxTurns) {
 
 function clearPendingForContinuation() {
   pendingDecision = null;
+  pendingCheckpointId = null;
   ceilingTriggered = false;
   reconciliationRun = false;
-  parentAborted = false;
   try { rmSync(pendingDecisionPath, { force: true }); } catch {}
   try { session.setActiveToolsByName(originalTools); } catch {}
 }
@@ -410,14 +417,14 @@ async function returnContext(decision, ctx = bridgeContext) {
       runNumber: decision.runNumber,
       checkpoint: built.checkpoint,
     });
+    // Keep the decision durable until the parent acknowledges insertion. This
+    // gives /or and child reopen a manual recovery path without a retry daemon.
+    pendingCheckpointId = built.checkpoint.id;
   } catch (err) {
     ctx?.ui?.notify?.(`Could not return child context: ${err?.message ?? err}`, "error");
     return false;
   }
-  pendingDecision = null;
-  try { rmSync(pendingDecisionPath, { force: true }); } catch {}
-  persistBridgeState("idle");
-  ctx?.ui?.notify?.("Selected child context returned to the parent.", "info");
+  ctx?.ui?.notify?.("Selected child context returned to the parent. Waiting for delivery acknowledgement.", "info");
   return true;
 }
 
@@ -451,7 +458,12 @@ async function showDecisionGate(decision) {
         continuationPrompt = feedback;
       }
     } else if (choice === "Return to parent") {
-      await returnContext(decision, ctx);
+      const returned = await returnContext(decision, ctx);
+      if (!returned) {
+        // Keep the durable gate visible in state and make the retry path
+        // explicit instead of silently leaving the child parked.
+        ctx.ui.notify?.("Return was cancelled or failed. The decision remains pending; choose again or use /or.", "warning");
+      }
     } else if (choice === undefined) {
       // Escape/Ctrl+C cancels the outer decision selector. Transfer control to
       // the native editor instead of leaving the parent parked at the gate.
@@ -527,7 +539,6 @@ function subscribeTo(s) {
             runNumber++;
             turnCount = 0;
             toolUses = 0;
-            parentAborted = false;
             emitEvent(spec.bridge.mailboxDir, { type: "run_started", runNumber, maxTurns: currentMaxTurns, mode: interactiveMode ? "interactive" : "automatic" });
           }
         }
@@ -630,8 +641,6 @@ let lastSession = session;
 
 // ---- Command polling (parent → child) ----
 
-let shuttingDown = false;
-
 async function processCommands() {
   const { readdirSync } = await import("node:fs");
   const dir = join(spec.bridge.mailboxDir, "commands");
@@ -645,40 +654,28 @@ async function processCommands() {
       try { rmSync(path, { force: true }); } catch {}
       continue;
     }
-    try { rmSync(path, { force: true }); } catch {} // consume exactly once
-
-    try {
-      switch (cmd.type) {
-        case "follow_up":
-          if (!Number.isInteger(cmd.maxTurns) || cmd.maxTurns < 1) {
-            bridgeContext?.ui?.notify?.("Resume rejected: max_turns must be a positive integer.", "error");
-            break;
-          }
-          enterAutomaticMode(cmd.maxTurns);
-          clearPendingForContinuation();
-          if (session.isStreaming) await session.followUp(cmd.message);
-          else await session.prompt(cmd.message, { source: "extension" });
-          break;
-        case "abort":
-          parentAborted = true;
-          await session.abort();
-          break;
-        case "ack_checkpoint":
-          try {
-            bridgePi?.appendEntry?.("olive-agent-context-return-ack", {
-              version: 1,
-              checkpointId: cmd.checkpointId,
-              acknowledgedAt: new Date().toISOString(),
-            });
-          } catch {}
-          break;
-        case "shutdown":
-          shuttingDown = true;
-          process.exit(0);
-          break;
+    if (cmd.type === "ack_checkpoint") {
+      try {
+        if (!bridgePi?.appendEntry) throw new Error("child session bridge is unavailable");
+        await Promise.resolve(bridgePi.appendEntry("olive-agent-context-return-ack", {
+          version: 1,
+          checkpointId: cmd.checkpointId,
+          acknowledgedAt: new Date().toISOString(),
+        }));
+        // Delete only after the durable child acknowledgement succeeds. A
+        // failed append leaves the command for the next polling pass.
+        rmSync(path, { force: true });
+        if (cmd.checkpointId === pendingCheckpointId) {
+          pendingDecision = null;
+          pendingCheckpointId = null;
+          rmSync(pendingDecisionPath, { force: true });
+          persistBridgeState("idle");
+        }
+      } catch (err) {
+        console.error(`[olive-agent] checkpoint acknowledgement failed: ${err?.message ?? err}`);
       }
-    } catch (err) {
-      console.error(`[olive-agent] command ${cmd.type} failed: ${err?.message ?? err}`);
+    } else {
+      try { rmSync(path, { force: true }); } catch {}
     }
   }
 }
@@ -780,7 +777,7 @@ try {
 } finally {
   clearInterval(commandTimer);
   unsubscribe();
-  if (!shuttingDown) emitEvent(spec.bridge.mailboxDir, { type: "process_exit" });
+  emitEvent(spec.bridge.mailboxDir, { type: "process_exit" });
   try { await runtime.dispose(); } catch {}
   process.exit(0);
 }

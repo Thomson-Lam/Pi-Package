@@ -11,6 +11,7 @@ import { join } from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { AgentManager, defaultChildCommand, resolveNodeExecutable, type SpawnOptions } from "../src/agent-manager.js";
 import { emitChildEvent, ensureMailboxDir, readPendingCommands, removeMailboxDir, writePendingDecision } from "../src/event-mailbox.js";
+import { agentWindowName } from "../src/names.js";
 import type { ContextLinkData } from "../src/context-ledger.js";
 import type { AgentLaunchSpec } from "../src/types.js";
 
@@ -99,7 +100,6 @@ const sleep = (ms: number) => new Promise((r) => setTimeout(r, ms));
 async function spawnBg(manager: AgentManager, ctx: any, description = "review auth", opts: Partial<SpawnOptions> = {}) {
   return manager.spawn({ exec: vi.fn() } as any, ctx, "Review", "task", {
     description,
-    isBackground: true,
     maxTurns: 10,
     model: ctx.model,
     ...opts,
@@ -163,46 +163,6 @@ describe("AgentManager", () => {
     manager.dispose();
   });
 
-  it("resume retains the child's saved skill snapshot", async () => {
-    const deps = makeDeps();
-    const manager = new AgentManager(undefined, 2, undefined, undefined, deps);
-    const snapshot = [{
-      name: "saved", description: "Saved", filePath: join(work, "saved.md"), baseDir: work,
-      sourceInfo: { path: join(work, "saved.md"), source: "local", scope: "project", origin: "top-level" },
-      disableModelInvocation: false,
-    }];
-    const id = await spawnBg(manager, makeCtx(), "resume", { skillsSnapshot: snapshot as any });
-    const record = manager.getRecord(id)!;
-    emitChildEvent(record.mailboxDir!, { type: "ready", sessionId: "s", sessionFile: join(work, "resume.jsonl") });
-    await sleep(100);
-    emitChildEvent(record.mailboxDir!, { type: "run_idle", runNumber: 1, reason: "completed", turnCount: 1, toolUses: 0 });
-    await sleep(150);
-    await manager.resume(id, "continue", undefined, { model: makeCtx().model, thinking: "high", maxTurns: 2, wait: false });
-    expect(manager.getRecord(id)?.launchSpec?.runtime.skillsSnapshot).toEqual(snapshot);
-    expect(manager.getRecord(id)?.launchSpec?.runtime.skillsSnapshotAuthoritative).toBe(true);
-    manager.dispose();
-  });
-
-  it("foreground spawnAndWait returns the settled record", async () => {
-    const deps = makeDeps();
-    const manager = new AgentManager(undefined, 2, undefined, undefined, deps);
-    const ctx = makeCtx();
-
-    const wait = manager.spawnAndWait({ exec: vi.fn() } as any, ctx, "Review", "task", {
-      description: "fg",
-      model: ctx.model,
-      maxTurns: 10,
-    });
-    await sleep(100);
-    const record = manager.listAgents()[0]!;
-    emitChildEvent(record.mailboxDir!, { type: "ready", sessionId: "s", sessionFile: join(work, "c.jsonl") });
-    await sleep(150);
-    emitChildEvent(record.mailboxDir!, { type: "run_settled", runNumber: 1, status: "completed", result: "fg done", turnCount: 1, toolUses: 2 });
-    const { record: done } = await wait;
-    expect(done.result).toBe("fg done");
-    manager.dispose();
-  });
-
   it("accepts an unlimited run and its response-ready decision", async () => {
     const deps = makeDeps();
     const manager = new AgentManager(undefined, 2, undefined, undefined, deps);
@@ -210,8 +170,7 @@ describe("AgentManager", () => {
     const id = await manager.spawn({ exec: vi.fn() } as any, ctx, "Review", "task", {
       description: "unlimited",
       model: ctx.model,
-      isBackground: true,
-    });
+      });
     const record = manager.getRecord(id)!;
     expect(deps.prepare.mock.calls[0]![0].options.maxTurns).toBeUndefined();
     emitChildEvent(record.mailboxDir!, { type: "ready", sessionId: "s", sessionFile: join(work, "unlimited.jsonl") });
@@ -244,39 +203,6 @@ describe("AgentManager", () => {
     await sleep(300);
     expect(manager.getRecord(id2)!.window).toBeDefined();
     expect(deps.prepare).toHaveBeenCalledTimes(2);
-    manager.dispose();
-  });
-
-  it("abort on a queued agent stops it without a window", async () => {
-    const deps = makeDeps();
-    const manager = new AgentManager(undefined, 1, undefined, undefined, deps);
-    const ctx = makeCtx();
-    const id1 = await spawnBg(manager, ctx, "one");
-    const id2 = await spawnBg(manager, ctx, "two");
-    expect(manager.abort(id2)).toBe(true);
-    expect(manager.getRecord(id2)!.status).toBe("stopped");
-    manager.dispose();
-  });
-
-  it("abort keeps the foreground waiter pending until explicit /or release", async () => {
-    const deps = makeDeps();
-    const manager = new AgentManager(undefined, 1, undefined, undefined, deps);
-    const ctx = makeCtx();
-    let resolved = false;
-    const wait = manager.spawnAndWait({ exec: vi.fn() } as any, ctx, "Review", "task", { description: "fg", model: ctx.model, maxTurns: 10 }).then((value) => { resolved = true; return value; });
-    await sleep(100);
-    const record = manager.listAgents()[0]!;
-    emitChildEvent(record.mailboxDir!, { type: "ready", sessionId: "s" });
-    await sleep(100);
-    emitChildEvent(record.mailboxDir!, { type: "run_started", runNumber: 1, maxTurns: 10 });
-    await sleep(100);
-    expect(manager.abort(record.id)).toBe(true);
-    emitChildEvent(record.mailboxDir!, { type: "decision_required", runNumber: 1, reason: "aborted", result: "partial", turnCount: 1, maxTurns: 10, toolUses: 0, requestedAt: Date.now() });
-    await sleep(150);
-    expect(resolved).toBe(false);
-    expect(manager.getRecord(record.id)?.status).toBe("awaiting_decision");
-    emitChildEvent(record.mailboxDir!, { type: "run_settled", runNumber: 1, status: "stopped", result: "partial", turnCount: 1, toolUses: 0, releaseReason: "human_return", decisionReason: "aborted" });
-    expect((await wait).record.result).toBe("partial");
     manager.dispose();
   });
 
@@ -331,6 +257,30 @@ describe("AgentManager", () => {
     manager.dispose();
   });
 
+  it("defers returned checkpoints until their owning parent session is active", async () => {
+    const deps = makeDeps();
+    const onCheckpoint = vi.fn();
+    const manager = new AgentManager(undefined, 1, undefined, undefined, deps);
+    manager.setCallbacks({ onContextCheckpoint: onCheckpoint });
+    const ctx = makeCtx();
+    const id = await spawnBg(manager, ctx, "session-owned");
+    const rec = manager.getRecord(id)!;
+    emitChildEvent(rec.mailboxDir!, { type: "ready", sessionId: "s", sessionFile: join(work, "child.jsonl") });
+    await sleep(100);
+    manager.setParentSessionFile(join(work, "other-parent.jsonl"));
+    emitChildEvent(rec.mailboxDir!, {
+      type: "context_checkpoint", runNumber: 1,
+      checkpoint: { version: 1, id: "cp-other", agentId: id, sourceSessionName: "child", createdAt: new Date().toISOString(), reason: "manual", selections: [], coveredEntryIds: [] },
+    });
+    await sleep(150);
+    expect(onCheckpoint).not.toHaveBeenCalled();
+    manager.setParentSessionFile(join(work, "parent.jsonl"));
+    await sleep(50);
+    expect(onCheckpoint).toHaveBeenCalledTimes(1);
+    expect(onCheckpoint.mock.calls[0]![1].id).toBe("cp-other");
+    manager.dispose();
+  });
+
   it("child process death releases nothing and remains reopenable", async () => {
     const deps = makeDeps();
     const manager = new AgentManager(undefined, 1, undefined, undefined, deps);
@@ -345,36 +295,6 @@ describe("AgentManager", () => {
     expect(manager.getRecord(id)?.result).toBeUndefined();
     expect(manager.hasRunning()).toBe(true);
     expect(manager.getRecord(id)?.window?.state).toBe("closed");
-    manager.dispose();
-  });
-
-  it("abort on a running agent writes an abort command", async () => {
-    const deps = makeDeps();
-    const manager = new AgentManager(undefined, 2, undefined, undefined, deps);
-    const ctx = makeCtx();
-    const id = await spawnBg(manager, ctx);
-    emitChildEvent(manager.getRecord(id)!.mailboxDir!, { type: "ready", sessionId: "s", sessionFile: join(work, "c.jsonl") });
-    await sleep(200);
-    expect(manager.abort(id)).toBe(true);
-    expect(manager.getRecord(id)!.status).toBe("running");
-    expect(manager.getRecord(id)!.stopReason).toBe("stop requested");
-    manager.dispose();
-  });
-
-  it("human_steer events fire the onHumanSteer callback", async () => {
-    const deps = makeDeps();
-    const onSteer = vi.fn();
-    const manager = new AgentManager(undefined, 2, undefined, undefined, deps);
-    manager.setCallbacks({ onHumanSteer: onSteer });
-    const ctx = makeCtx();
-    const id = await spawnBg(manager, ctx);
-    const rec = manager.getRecord(id)!;
-    emitChildEvent(rec.mailboxDir!, { type: "ready", sessionId: "s", sessionFile: join(work, "c.jsonl") });
-    await sleep(200);
-    emitChildEvent(rec.mailboxDir!, { type: "human_steer", text: "look at this" });
-    await sleep(250);
-    expect(onSteer).toHaveBeenCalledTimes(1);
-    expect(onSteer.mock.calls[0]![1]).toBe("look at this");
     manager.dispose();
   });
 
@@ -476,28 +396,6 @@ describe("AgentManager", () => {
     emitChildEvent(rec.mailboxDir!, { type: "run_settled", runNumber: 1, status: "completed", result: "done", turnCount: 1, toolUses: 1 });
     await sleep(300);
     expect(manager.getRecord(id)!.window?.state).toBe("alive");
-    expect(deps.tmux).not.toHaveBeenCalledWith(expect.arrayContaining(["kill-window"]));
-    manager.dispose();
-  });
-
-  it("consumeResult keeps the live window; manual close then clears the record", async () => {
-    const deps = makeDeps();
-    const manager = new AgentManager(undefined, 2, undefined, undefined, deps);
-    const ctx = makeCtx();
-    const id = await spawnBg(manager, ctx);
-    const rec = manager.getRecord(id)!;
-    emitChildEvent(rec.mailboxDir!, { type: "ready", sessionId: "s", sessionFile: join(work, "c.jsonl") });
-    await sleep(200);
-    emitChildEvent(rec.mailboxDir!, { type: "run_settled", runNumber: 1, status: "completed", result: "done", turnCount: 1, toolUses: 1 });
-    await sleep(300);
-    // Consuming the result must NOT dismiss the still-open window.
-    manager.consumeResult(id);
-    expect(manager.getRecord(id)).toBeDefined();
-    expect(manager.getRecord(id)!.window?.state).toBe("alive");
-    // The human closes the window by exiting the child Pi session.
-    emitChildEvent(rec.mailboxDir!, { type: "process_exit" });
-    await sleep(250);
-    expect(manager.getRecord(id)).toBeUndefined();
     expect(deps.tmux).not.toHaveBeenCalledWith(expect.arrayContaining(["kill-window"]));
     manager.dispose();
   });
@@ -613,7 +511,7 @@ describe("AgentManager", () => {
     const link: ContextLinkData = {
       version: 1, stage: "ready", agentId: "restored-agent", agentType: "Review", description: "restored",
       childSessionId: "child-id", childSessionName: "child", childSessionFile: childFile,
-      createdAt: new Date().toISOString(), mailboxDir, isBackground: false,
+      createdAt: new Date().toISOString(), mailboxDir,
       reopen: {
         type: "Review", description: "restored", cwd: work, model: { provider: "test", id: "basic" },
         tools: ["read"], noExtensions: true, extensionPaths: [], noSkills: true,
@@ -642,7 +540,7 @@ describe("AgentManager", () => {
     const link: ContextLinkData = {
       version: 1, stage: "ready", agentId: "reopen-agent", agentType: "Review", description: "reopened",
       childSessionId: "child-id", childSessionName: "child", childSessionFile: childFile,
-      createdAt: new Date().toISOString(), mailboxDir: join(work, "original-mailbox"), isBackground: true,
+      createdAt: new Date().toISOString(), mailboxDir: join(work, "original-mailbox"),
       reopen: {
         type: "Review", description: "reopened", cwd: work, model: { provider: "test", id: "basic" },
         tools: ["read"], noExtensions: true, extensionPaths: [], noSkills: true,
@@ -682,12 +580,40 @@ describe("AgentManager", () => {
     manager.dispose();
   });
 
+  it("/ot reuses the original mailbox when focusing a live child", async () => {
+    const deps = makeDeps();
+    const base = deps.tmux;
+    const originalMailbox = join(work, "original-mailbox");
+    ensureMailboxDir(originalMailbox);
+    writePendingDecision(originalMailbox, { runNumber: 2, reason: "turn_limit", result: "held", turnCount: 3, maxTurns: 3, toolUses: 1, requestedAt: Date.now() });
+    writeFileSync(join(originalMailbox, "bridge-state.json"), JSON.stringify({ status: "awaiting_decision" }));
+    deps.tmux = vi.fn(async (args: string[]) => {
+      if (args[0] === "list-windows") return { code: 0, stdout: `@9\t9\t${agentWindowName("reopen-live", "Review")}\n`, stderr: "", killed: false };
+      return base(args);
+    });
+    const manager = new AgentManager(undefined, 2, undefined, undefined, deps);
+    const childFile = join(work, "child-live.jsonl");
+    writeFileSync(childFile, "");
+    const link: ContextLinkData = {
+      version: 1, stage: "ready", agentId: "reopen-live", agentType: "Review", description: "live child",
+      childSessionId: "child-id", childSessionName: "child", childSessionFile: childFile,
+      createdAt: new Date().toISOString(), mailboxDir: originalMailbox,
+      reopen: { type: "Review", description: "live child", cwd: work, model: { provider: "test", id: "basic" }, tools: ["read"], noExtensions: true, extensionPaths: [], noSkills: true, maxTurns: 3 },
+    };
+    const result = await manager.reopenFromPersisted(link);
+    expect(result).toMatchObject({ ok: true, focused: true });
+    expect(manager.getRecord("reopen-live")?.mailboxDir).toBe(originalMailbox);
+    expect(manager.getRecord("reopen-live")?.status).toBe("awaiting_decision");
+    expect(manager.getRecord("reopen-live")?.decision?.result).toBe("held");
+    manager.dispose();
+  });
+
   it("decision_required keeps the slot and foreground waiter pending until release", async () => {
     const deps = makeDeps();
     const onComplete = vi.fn();
     const manager = new AgentManager(onComplete, 1, undefined, undefined, deps);
     const ctx = makeCtx();
-    const id = await manager.spawn({ exec: vi.fn() } as any, ctx, "Review", "task", { description: "decision", model: ctx.model, maxTurns: 3, isBackground: true });
+    const id = await manager.spawn({ exec: vi.fn() } as any, ctx, "Review", "task", { description: "decision", model: ctx.model, maxTurns: 3 });
     const rec = manager.getRecord(id)!;
     emitChildEvent(rec.mailboxDir!, { type: "ready", sessionId: "s" });
     await sleep(100);
@@ -708,19 +634,18 @@ describe("AgentManager", () => {
     manager.dispose();
   });
 
-  it("awaiting decision cannot be dismissed or released by abort", async () => {
+  it("error settlement releases the slot without returning context", async () => {
     const deps = makeDeps();
     const manager = new AgentManager(undefined, 1, undefined, undefined, deps);
-    const id = await spawnBg(manager, makeCtx(), "decision");
+    const id = await spawnBg(manager, makeCtx(), "error child");
     const rec = manager.getRecord(id)!;
     emitChildEvent(rec.mailboxDir!, { type: "ready", sessionId: "s" });
     await sleep(100);
-    emitChildEvent(rec.mailboxDir!, { type: "decision_required", runNumber: 1, reason: "turn_limit", result: "status", turnCount: 10, maxTurns: 10, toolUses: 1, requestedAt: Date.now() });
+    emitChildEvent(rec.mailboxDir!, { type: "run_settled", runNumber: 1, status: "error", error: "provider failed", turnCount: 1, toolUses: 0, releaseReason: "error" });
     await sleep(150);
-    expect(await manager.dismiss(id)).toBe("active");
-    expect(manager.abort(id)).toBe(true);
-    expect(manager.getRecord(id)?.status).toBe("awaiting_decision");
-    expect(manager.hasRunning()).toBe(true);
+    expect(manager.getRecord(id)?.status).toBe("error");
+    expect(manager.getRecord(id)?.result).toBeUndefined();
+    expect(manager.hasRunning()).toBe(false);
     manager.dispose();
   });
 

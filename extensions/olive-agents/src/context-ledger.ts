@@ -112,10 +112,10 @@ export interface ContextLinkData {
   /** Node id this child's context extends (the source agent's own node). */
   parentLedgerId?: string;
   createdAt: string;
+  /** Parent JSONL that owns this child and its returned checkpoints. */
+  parentSessionFile?: string;
   /** Durable bridge used to reattach parent tracking after parent-session resume. */
   mailboxDir?: string;
-  /** Original parent behavior; restored sessions notify only after explicit return. */
-  isBackground?: boolean;
   /** Sanitized launch metadata — enough to reopen the session in a fresh window. */
   reopen?: ReopenDescriptor;
 }

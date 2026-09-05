@@ -25,7 +25,6 @@ function makeAgentConfig(overrides: Partial<AgentConfig> = {}): AgentConfig {
     builtinToolNames: ["read", "grep"],
     extensions: false,
     skills: false,
-    runInBackground: false,
     ...overrides,
   };
 }
@@ -75,10 +74,8 @@ describe("agent type registry", () => {
       expect(cfg?.isDefault).toBe(true);
     });
 
-    it("default agents do not lock run mode", () => {
-      for (const name of ["general-purpose"]) {
-        expect(getAgentConfig(name)?.runInBackground, `${name}.runInBackground`).toBeUndefined();
-      }
+    it("default agents do not expose a parent run mode", () => {
+      expect(getAgentConfig("general-purpose")).not.toHaveProperty("runInBackground");
     });
 
     it("getDefaultAgentNames returns default agent names", () => {

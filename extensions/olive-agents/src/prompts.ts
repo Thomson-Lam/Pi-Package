@@ -34,7 +34,7 @@ Platform: ${env.platform}`;
   const extrasSuffix = extraSections.length > 0 ? "\n\n" + extraSections.join("\n") : "";
 
   const header = `You are a pi coding agent sub-agent.
-You have been invoked to handle a specific task autonomously.
+You have been invoked to handle a specific task under human supervision.
 
 ${envBlock}`;
   const instructions = config.systemPrompt?.trim()
