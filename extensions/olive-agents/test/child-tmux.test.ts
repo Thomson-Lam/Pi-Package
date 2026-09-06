@@ -30,11 +30,11 @@ describe("child parent window handling", () => {
     const { calls, exec } = fakeExec({
       [`list-windows -a -F ${format}`]: { code: 0 },
       "display-message -p #{session_id}": { code: 0, stdout: "$0\n" },
-      "new-window -d -t $0 -n [P] parent -c /tmp -P -F #{window_id} pi --session '/tmp/parent session.jsonl'": { code: 0, stdout: "@7\n" },
+      "new-window -d -t $0 -n [P] Test-tmux-naming -c /tmp -P -F #{window_id} pi --session '/tmp/parent session.jsonl'": { code: 0, stdout: "@7\n" },
       "select-window -t @7": { code: 0 },
     });
-    expect(await focusOrOpenParent({ parentSessionFile: "/tmp/parent session.jsonl", cwd: "/tmp" }, exec)).toBe("opened");
-    expect(calls.at(-2)).toEqual(["new-window", "-d", "-t", "$0", "-n", "[P] parent", "-c", "/tmp", "-P", "-F", "#{window_id}", "pi --session '/tmp/parent session.jsonl'"]);
+    expect(await focusOrOpenParent({ parentSessionFile: "/tmp/parent session.jsonl", parentWindowName: "Test-tmux-naming", cwd: "/tmp" }, exec)).toBe("opened");
+    expect(calls.at(-2)).toEqual(["new-window", "-d", "-t", "$0", "-n", "[P] Test-tmux-naming", "-c", "/tmp", "-P", "-F", "#{window_id}", "pi --session '/tmp/parent session.jsonl'"]);
   });
 
   it("does nothing when no parent session file or tmux session exists", async () => {

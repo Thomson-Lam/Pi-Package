@@ -9,6 +9,13 @@ function quote(value) {
   return `'${String(value).replace(/'/g, `'"'"'`)}'`;
 }
 
+function parentWindowLabel(name) {
+  const base = String(name || "parent").replace(/^\[P\]\s*/i, "");
+  const safe = base.replace(/\s+/g, "-").replace(/[^a-zA-Z0-9._-]+/g, "-").replace(/-+/g, "-").replace(/^-+|-+$/g, "") || "parent";
+  const clipped = safe.length > 44 ? safe.slice(0, 44).replace(/-+$/g, "") : safe;
+  return `[P] ${clipped}`;
+}
+
 async function tmux(args) {
   try {
     const result = await execFileAsync("tmux", args, { encoding: "utf8" });
@@ -31,7 +38,7 @@ function markedParentWindow(output, sessionFile) {
 }
 
 /** Focus an existing parent window, or open the parent session in a new one. */
-export async function focusOrOpenParent({ parentSessionFile, cwd }, exec = tmux) {
+export async function focusOrOpenParent({ parentSessionFile, parentWindowName, cwd }, exec = tmux) {
   if (!parentSessionFile) return "unavailable";
 
   const listed = await exec([
@@ -50,7 +57,7 @@ export async function focusOrOpenParent({ parentSessionFile, cwd }, exec = tmux)
   if (session.code !== 0 || !session.stdout.trim()) return "unavailable";
 
   const created = await exec([
-    "new-window", "-d", "-t", session.stdout.trim(), "-n", "[P] parent",
+    "new-window", "-d", "-t", session.stdout.trim(), "-n", parentWindowLabel(parentWindowName),
     "-c", cwd, "-P", "-F", "#{window_id}", "pi --session " + quote(parentSessionFile),
   ]);
   if (created.code !== 0) return "unavailable";

@@ -61,6 +61,8 @@ export interface AgentLaunchSpec {
     id: string;
     name: string;
     parentFile?: string;
+    /** Visible tmux name of the parent window, used if /or must reopen it. */
+    parentWindowName?: string;
     /** Session directory for the child file; absent = pi's default for the child cwd. */
     sessionDir?: string;
     /** When set, the child OPENS this existing session file instead of creating a new one. */

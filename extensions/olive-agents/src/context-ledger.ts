@@ -124,6 +124,8 @@ export interface ReopenDescriptor {
   type: string;
   description: string;
   cwd: string;
+  /** Visible parent tmux name used when /or reopens a missing parent window. */
+  parentWindowName?: string;
   /** Parent-resolved project trust; absent only for legacy reopen metadata. */
   projectTrusted?: boolean;
   model: { provider: string; id: string };
@@ -336,18 +338,13 @@ export function finalizeContextReturn(input: FinalizeContextReturnInput): Contex
 
 export function contextReturnToMarkdown(checkpoint: ContextReturnCheckpoint): string {
   const parts: string[] = ["## context"];
-  let n = 1;
   if (checkpoint.summary?.trim()) {
-    parts.push(`## agent (${n++})\n${checkpoint.summary.trim()}`);
+    parts.push(checkpoint.summary.trim());
   }
   for (const selection of checkpoint.selections) {
     // Title each section by its author so the parent can tell who said what.
     const title = selection.role === "user" ? "## User" : selection.role === "assistant" ? "## Agent" : "";
-    parts.push(
-      title
-        ? `## agent (${n++})\n\n${title}\n${selection.text}`
-        : `## agent (${n++})\n${selection.text}`,
-    );
+    parts.push(title ? `${title}\n${selection.text}` : selection.text);
   }
   return parts.length > 1 ? parts.join("\n\n") : "## context";
 }

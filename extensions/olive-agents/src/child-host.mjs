@@ -388,6 +388,7 @@ async function returnContext(decision, ctx = bridgeContext) {
     try {
       const parentWindow = await focusOrOpenParent({
         parentSessionFile: spec.session.parentFile,
+        parentWindowName: spec.session.parentWindowName,
         cwd: spec.runtime.cwd,
       });
       if (parentWindow === "unavailable") {

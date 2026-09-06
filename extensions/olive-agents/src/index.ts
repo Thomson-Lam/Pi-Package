@@ -429,7 +429,7 @@ export default function (pi: ExtensionAPI) {
         return;
       }
       const markdown = contextReturnToMarkdown(checkpoint);
-      // Markdown-only format: `## context` + numbered `## agent (N)` sections.
+      // Markdown-only format: `## context` plus the returned context sections.
       // No XML wrapper, no metadata bullets, no footer.
       const content = markdown;
       // Serialize only concurrent returns or a busy parent. The checkpoint

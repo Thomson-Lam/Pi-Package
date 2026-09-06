@@ -176,7 +176,7 @@ describe("serialization", () => {
     expect(md).toContain("hello world");
   });
 
-  it("contextReturnToMarkdown renders ## context with numbered ## agent (N) sections", () => {
+  it("contextReturnToMarkdown renders ## context without numbered agent headers", () => {
     const checkpoint = {
       version: 1 as const,
       id: "cp-1",
@@ -192,8 +192,9 @@ describe("serialization", () => {
     };
     const md = contextReturnToMarkdown(checkpoint);
     expect(md).toMatch(/^## context/);
-    expect(md).toContain("## agent (1)\n\n## Agent\nfirst result");
-    expect(md).toContain("## agent (2)\n\n## User\nsecond note");
+    expect(md).toContain("## Agent\nfirst result");
+    expect(md).toContain("## User\nsecond note");
+    expect(md).not.toContain("## agent (");
     expect(md).not.toContain("### ");
   });
 });

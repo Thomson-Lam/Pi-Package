@@ -21,7 +21,7 @@ import { getPackageDir } from "@earendil-works/pi-coding-agent";
 import { type AgentLaunchSpec, buildReopenDescriptor, prepareAgentLaunch, validateMaxTurns, writeLaunchSpec } from "./agent-runner.js";
 import { contextReturnToMarkdown, type ContextLedgerNode, type ContextLinkData, type ContextReturnCheckpoint } from "./context-ledger.js";
 import { emitChildEvent, type ChildEvent, ensureMailboxDir, readPendingDecision, removeMailboxDir, watchChildEvents, writeJsonAtomic, writeParentCommand } from "./event-mailbox.js";
-import { createAgentWindow, execFromPi, findWindowByAgentId, findWindowByName as findTmuxWindowByName, focusWindow as focusTmuxWindow, killWindow as killTmuxWindow, shellQuote, windowAlive as tmuxWindowAlive, type TmuxExec } from "./tmux-window.js";
+import { createAgentWindow, currentWindowName, execFromPi, findWindowByAgentId, findWindowByName as findTmuxWindowByName, focusWindow as focusTmuxWindow, killWindow as killTmuxWindow, shellQuote, windowAlive as tmuxWindowAlive, type TmuxExec } from "./tmux-window.js";
 import { agentSessionName, agentWindowName, legacyAgentWindowName } from "./names.js";
 import { type AgentRecord, type AgentWindowInfo, type SubagentType, type ThinkingLevel } from "./types.js";
 
@@ -284,6 +284,7 @@ export class AgentManager {
     ensureMailboxDir(mailboxDir);
 
     const childSessionId = randomUUID();
+    const parentWindowName = await currentWindowName(this.deps.tmux);
     const model = options.model ?? ctx.model;
     if (!model) throw new Error("No effective model available for agent launch.");
     const { spec, warnings } = await this.deps.prepare({
@@ -301,6 +302,7 @@ export class AgentManager {
       agentId: id,
       childSessionId,
       parentSessionFile,
+      parentWindowName,
       sessionDir,
       mailboxDir,
       ledgerNode: options.ledgerNode,
@@ -916,7 +918,13 @@ export class AgentManager {
     const spec: AgentLaunchSpec = {
       version: 3,
       agent: { id: link.agentId, type: link.agentType, displayName: link.agentType, description: link.description },
-      session: { id: link.childSessionId, name: link.childSessionName, sessionDir: reopen.sessionDir, openFile: link.childSessionFile },
+      session: {
+        id: link.childSessionId,
+        name: link.childSessionName,
+        parentWindowName: reopen.parentWindowName,
+        sessionDir: reopen.sessionDir,
+        openFile: link.childSessionFile,
+      },
       runtime: {
         cwd: reopen.cwd, packageDir: getPackageDir(), projectTrusted: reopen.projectTrusted, model: reopen.model,
         thinking: reopen.thinking, tools: reopen.tools,
@@ -988,6 +996,7 @@ export class AgentManager {
       session: {
         id: link.childSessionId,
         name: link.childSessionName,
+        parentWindowName: reopen.parentWindowName,
         sessionDir: reopen.sessionDir,
         openFile: sessionFile,
       },

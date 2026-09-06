@@ -146,12 +146,11 @@ describe("parent window markers", () => {
         if (args[0] === "display-message") return { code: 0, stdout: "@4\n", stderr: "", killed: false };
         return { code: 0, stdout: "", stderr: "", killed: false };
       };
-      expect(await markParentWindow(exec, "/tmp/parent.jsonl", "inspect auth")).toBe(true);
+      expect(await markParentWindow(exec, "/tmp/parent.jsonl")).toBe(true);
       expect(calls).toEqual([
         ["display-message", "-p", "#{window_id}"],
         ["set-window-option", "-t", "@4", "@olive-parent-session-file", "/tmp/parent.jsonl"],
         ["set-window-option", "-t", "@4", "@olive-parent-pid", String(process.pid)],
-        ["rename-window", "-t", "@4", "[P] inspect-auth"],
       ]);
     } finally {
       if (previous === undefined) delete process.env.TMUX;

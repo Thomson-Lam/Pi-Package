@@ -77,6 +77,7 @@ export interface PrepareLaunchInput {
   /** Prompt policy selected by the caller; omitted means inherited behavior. */
   promptPolicy?: "native" | "inherit";
   parentSessionFile?: string;
+  parentWindowName?: string;
   sessionDir?: string;
   mailboxDir: string;
   /** Optional context ledger node accompanying this launch. */
@@ -160,6 +161,7 @@ export async function prepareAgentLaunch(input: PrepareLaunchInput): Promise<Pre
       id: input.childSessionId,
       name: agentSessionName(input.description),
       parentFile: input.parentSessionFile,
+      ...(input.parentWindowName ? { parentWindowName: input.parentWindowName } : {}),
       sessionDir: input.sessionDir,
     },
     runtime: {
@@ -208,6 +210,7 @@ export function buildReopenDescriptor(spec: AgentLaunchSpec): ReopenDescriptor {
     type: spec.agent.type,
     description: spec.agent.description,
     cwd: spec.runtime.cwd,
+    parentWindowName: spec.session.parentWindowName,
     projectTrusted: spec.runtime.projectTrusted,
     model: spec.runtime.model,
     thinking: spec.runtime.thinking,

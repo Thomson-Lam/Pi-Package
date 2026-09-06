@@ -11,7 +11,6 @@
 
 import type { ExecResult, ExtensionAPI } from "@earendil-works/pi-coding-agent";
 import type { AgentWindowInfo } from "./types.js";
-import { parentWindowName } from "./names.js";
 
 export { agentWindowName, parentWindowName } from "./names.js";
 
@@ -109,6 +108,13 @@ export async function killWindow(exec: TmuxExec, windowId: string): Promise<bool
   return result.code === 0;
 }
 
+/** Current window name of the pane we run in. */
+export async function currentWindowName(exec: TmuxExec): Promise<string | undefined> {
+  if (!process.env.TMUX) return undefined;
+  const result = await exec(["display-message", "-p", "#{window_name}"]);
+  return result.code === 0 ? result.stdout.trim() : undefined;
+}
+
 /** Current window id of the pane we run in (used for focus restoration). */
 export async function currentWindowId(exec: TmuxExec): Promise<string | undefined> {
   if (!process.env.TMUX) return undefined;
@@ -122,21 +128,13 @@ export const PARENT_PROCESS_WINDOW_OPTION = "@olive-parent-pid";
 export const AGENT_ID_WINDOW_OPTION = "@olive-agent-id";
 
 /** Mark the current tmux window as hosting a live parent Pi session. */
-export async function markParentWindow(exec: TmuxExec, sessionFile: string | undefined, name?: string): Promise<boolean> {
+export async function markParentWindow(exec: TmuxExec, sessionFile: string | undefined): Promise<boolean> {
   if (!sessionFile) return false;
   const windowId = await currentWindowId(exec);
   if (!windowId) return false;
   const marked = await exec(["set-window-option", "-t", windowId, PARENT_SESSION_WINDOW_OPTION, sessionFile]);
   const pid = await exec(["set-window-option", "-t", windowId, PARENT_PROCESS_WINDOW_OPTION, String(process.pid)]);
-  let label = name;
-  if (!label) {
-    const current = await exec(["display-message", "-p", "#{window_name}"]);
-    if (current.code === 0) label = current.stdout.trim();
-  }
-  const renamed = label
-    ? await exec(["rename-window", "-t", windowId, parentWindowName(label)])
-    : { code: 0 };
-  return marked.code === 0 && pid.code === 0 && renamed.code === 0;
+  return marked.code === 0 && pid.code === 0;
 }
 
 /** Clear the parent marker when the Pi process shuts down normally. */
