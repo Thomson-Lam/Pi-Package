@@ -24,8 +24,9 @@ export function shellQuote(value: string): string {
 
 /** Find the current tmux session id (e.g. "$0"). Returns undefined outside tmux. */
 export async function currentTmuxSession(exec: TmuxExec): Promise<string | undefined> {
-  if (!process.env.TMUX) return undefined;
-  const result = await exec(["display-message", "-p", "#{session_id}"]);
+  const pane = process.env.TMUX_PANE;
+  if (!process.env.TMUX || !pane) return undefined;
+  const result = await exec(["display-message", "-p", "-t", pane, "#{session_id}"]);
   return result.code === 0 ? result.stdout.trim() : undefined;
 }
 
@@ -110,15 +111,17 @@ export async function killWindow(exec: TmuxExec, windowId: string): Promise<bool
 
 /** Current window name of the pane we run in. */
 export async function currentWindowName(exec: TmuxExec): Promise<string | undefined> {
-  if (!process.env.TMUX) return undefined;
-  const result = await exec(["display-message", "-p", "#{window_name}"]);
+  const pane = process.env.TMUX_PANE;
+  if (!process.env.TMUX || !pane) return undefined;
+  const result = await exec(["display-message", "-p", "-t", pane, "#{window_name}"]);
   return result.code === 0 ? result.stdout.trim() : undefined;
 }
 
 /** Current window id of the pane we run in (used for focus restoration). */
 export async function currentWindowId(exec: TmuxExec): Promise<string | undefined> {
-  if (!process.env.TMUX) return undefined;
-  const result = await exec(["display-message", "-p", "#{window_id}"]);
+  const pane = process.env.TMUX_PANE;
+  if (!process.env.TMUX || !pane) return undefined;
+  const result = await exec(["display-message", "-p", "-t", pane, "#{window_id}"]);
   return result.code === 0 ? result.stdout.trim() : undefined;
 }
 

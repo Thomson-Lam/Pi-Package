@@ -478,10 +478,15 @@ export default function (pi: ExtensionAPI) {
   let currentCtx: ExtensionContext | undefined;
   pi.on("session_start", async (_event, ctx) => {
     currentCtx = ctx;
-    void markParentWindow(
-      execFromPi(pi),
-      ctx.sessionManager.getSessionFile(),
-    ).catch(() => {});
+    try {
+      const marked = await markParentWindow(
+        execFromPi(pi),
+        ctx.sessionManager.getSessionFile(),
+      );
+      if (!marked) console.error("[olive-agents] failed to mark parent tmux window");
+    } catch (error) {
+      console.error("[olive-agents] failed to mark parent tmux window:", error instanceof Error ? error.message : error);
+    }
     receivedCheckpointIds.clear();
     for (const entry of ctx.sessionManager.getEntries()) {
       if (entry.type === "custom" && entry.customType === "olive-agent-context-return-received") {

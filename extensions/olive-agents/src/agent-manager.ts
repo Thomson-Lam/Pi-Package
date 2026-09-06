@@ -21,7 +21,7 @@ import { getPackageDir } from "@earendil-works/pi-coding-agent";
 import { type AgentLaunchSpec, buildReopenDescriptor, prepareAgentLaunch, validateMaxTurns, writeLaunchSpec } from "./agent-runner.js";
 import { contextReturnToMarkdown, type ContextLedgerNode, type ContextLinkData, type ContextReturnCheckpoint } from "./context-ledger.js";
 import { emitChildEvent, type ChildEvent, ensureMailboxDir, readPendingDecision, removeMailboxDir, watchChildEvents, writeJsonAtomic, writeParentCommand } from "./event-mailbox.js";
-import { createAgentWindow, currentWindowName, execFromPi, findWindowByAgentId, findWindowByName as findTmuxWindowByName, focusWindow as focusTmuxWindow, killWindow as killTmuxWindow, shellQuote, windowAlive as tmuxWindowAlive, type TmuxExec } from "./tmux-window.js";
+import { createAgentWindow, currentTmuxSession, currentWindowName, execFromPi, findWindowByAgentId, findWindowByName as findTmuxWindowByName, focusWindow as focusTmuxWindow, killWindow as killTmuxWindow, shellQuote, windowAlive as tmuxWindowAlive, type TmuxExec } from "./tmux-window.js";
 import { agentSessionName, agentWindowName, legacyAgentWindowName } from "./names.js";
 import { type AgentRecord, type AgentWindowInfo, type SubagentType, type ThinkingLevel } from "./types.js";
 
@@ -350,11 +350,10 @@ export class AgentManager {
 
     // tmux session lookup — must be inside tmux.
     const exec = this.deps.tmux;
-    const sessionResult = await exec(["display-message", "-p", "#{session_id}"]);
-    if (sessionResult.code !== 0) {
+    const tmuxSession = await currentTmuxSession(exec);
+    if (!tmuxSession) {
       throw new Error("Agent sessions require tmux: launch pi inside a tmux session (this workflow is tmux-first).");
     }
-    const tmuxSession = sessionResult.stdout.trim();
 
     const command = this.deps.childCommand(specPath);
     const created = await createAgentWindow(exec, tmuxSession, {
@@ -859,9 +858,8 @@ export class AgentManager {
     if (!sessionFile || !existsSync(sessionFile)) return false;
 
     const exec = this.deps.tmux;
-    const sessionResult = await exec(["display-message", "-p", "#{session_id}"]);
-    if (sessionResult.code !== 0) return false;
-    const tmuxSession = sessionResult.stdout.trim();
+    const tmuxSession = await currentTmuxSession(exec);
+    if (!tmuxSession) return false;
 
     const cwd = spec.runtime.cwd;
 
@@ -1026,9 +1024,8 @@ export class AgentManager {
       return { ok: true, focused: true, windowId: existing.id, windowName };
     }
 
-    const sessionResult = await exec(["display-message", "-p", "#{session_id}"]);
-    if (sessionResult.code !== 0) return { ok: false, focused: false };
-    const tmuxSession = sessionResult.stdout.trim();
+    const tmuxSession = await currentTmuxSession(exec);
+    if (!tmuxSession) return { ok: false, focused: false };
 
     const specPath = join(mailboxDir, "reopen.json");
     writeLaunchSpec(specPath, spec);

@@ -37,6 +37,13 @@ function markedParentWindow(output, sessionFile) {
   return undefined;
 }
 
+async function windowExists(exec, windowId) {
+  const result = await exec([
+    "display-message", "-p", "-t", windowId, "#{window_id}",
+  ]);
+  return result.code === 0 && result.stdout.trim() === windowId;
+}
+
 /** Focus an existing parent window, or open the parent session in a new one. */
 export async function focusOrOpenParent({ parentSessionFile, parentWindowName, cwd }, exec = tmux) {
   if (!parentSessionFile) return "unavailable";
@@ -48,12 +55,21 @@ export async function focusOrOpenParent({ parentSessionFile, parentWindowName, c
   if (listed.code === 0) {
     const existing = markedParentWindow(listed.stdout, parentSessionFile);
     if (existing) {
-      const focused = await exec(["select-window", "-t", existing]);
-      if (focused.code === 0) return "focused";
+      for (let attempt = 0; attempt < 2; attempt++) {
+        const focused = await exec(["select-window", "-t", existing]);
+        if (focused.code === 0) return "focused";
+        if (!(await windowExists(exec, existing))) break;
+        if (attempt === 0) await new Promise((resolve) => setTimeout(resolve, 100));
+      }
+      // A failed select means reopen only when the marked window is actually
+      // gone. Never create a duplicate for a window that still exists.
+      if (await windowExists(exec, existing)) return "unavailable";
     }
   }
 
-  const session = await exec(["display-message", "-p", "#{session_id}"]);
+  const pane = process.env.TMUX_PANE;
+  if (!pane) return "unavailable";
+  const session = await exec(["display-message", "-p", "-t", pane, "#{session_id}"]);
   if (session.code !== 0 || !session.stdout.trim()) return "unavailable";
 
   const created = await exec([

@@ -41,7 +41,7 @@ function makeDeps(options: { focusedWindow?: string } = {}) {
   const focused = options.focusedWindow ?? "@parent";
   const tmux = vi.fn(async (args: string[]) => {
     const key = args.join(" ");
-    if (key === "display-message -p #{session_id}") return { code: 0, stdout: "$0", stderr: "", killed: false };
+    if (args[0] === "display-message" && args.includes("#{session_id}")) return { code: 0, stdout: "$0", stderr: "", killed: false };
     if (key === "display-message -p #{window_id}") return { code: 0, stdout: focused, stderr: "", killed: false };
     if (key.startsWith("new-window ")) {
       windowSeq++;

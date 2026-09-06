@@ -138,7 +138,9 @@ describe("window control by stable id", () => {
 describe("parent window markers", () => {
   it("marks the current window with the parent session file", async () => {
     const previous = process.env.TMUX;
+    const previousPane = process.env.TMUX_PANE;
     process.env.TMUX = "1";
+    process.env.TMUX_PANE = "%4";
     try {
       const calls: string[][] = [];
       const exec: TmuxExec = async (args) => {
@@ -148,13 +150,15 @@ describe("parent window markers", () => {
       };
       expect(await markParentWindow(exec, "/tmp/parent.jsonl")).toBe(true);
       expect(calls).toEqual([
-        ["display-message", "-p", "#{window_id}"],
+        ["display-message", "-p", "-t", "%4", "#{window_id}"],
         ["set-window-option", "-t", "@4", "@olive-parent-session-file", "/tmp/parent.jsonl"],
         ["set-window-option", "-t", "@4", "@olive-parent-pid", String(process.pid)],
       ]);
     } finally {
       if (previous === undefined) delete process.env.TMUX;
       else process.env.TMUX = previous;
+      if (previousPane === undefined) delete process.env.TMUX_PANE;
+      else process.env.TMUX_PANE = previousPane;
     }
   });
 
