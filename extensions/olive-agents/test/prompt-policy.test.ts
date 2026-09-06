@@ -95,6 +95,65 @@ describe("child prompt policy", () => {
     expect(bridge?.commands.has("or")).toBe(true);
   });
 
+  it("keeps the child return command unsuffixed when Olive is inherited", async () => {
+    const cwd = mkdtempSync(resolve(tmpdir(), "olive-child-command-"));
+    workspaces.push(cwd);
+    const agentDir = mkdtempSync(resolve(tmpdir(), "olive-child-command-agent-"));
+    workspaces.push(agentDir);
+
+    const parent = SessionManager.create(cwd, cwd);
+    parent.appendMessage({ role: "user", content: "parent" });
+    const child = SessionManager.create(cwd, cwd, {
+      id: "child-command-test",
+      parentSession: parent.getSessionFile(),
+    });
+    const faux = fauxProvider();
+    const modelRuntime = await ModelRuntime.create({ refreshOnCreate: false });
+    modelRuntime.registerNativeProvider(faux.provider);
+    const olivePath = resolve(process.cwd(), "extensions/olive-agents/index.ts");
+    const services = await createAgentSessionServices({
+      cwd,
+      agentDir,
+      modelRuntime,
+      resourceLoaderOptions: {
+        additionalExtensionPaths: [olivePath],
+        extensionFactories: [{
+          name: "olive-agent-bridge",
+          factory: (pi: any) => pi.registerCommand("or", {
+            description: "Return new child context to the parent",
+            handler: async () => {},
+          }),
+        }],
+        extensionsOverride: (base) => ({
+          ...base,
+          extensions: base.extensions.filter((extension) =>
+            extension.path === olivePath || keepChildExtension(extension.path, [])
+          ),
+        }),
+        noContextFiles: true,
+        noPromptTemplates: true,
+        noSkills: true,
+      },
+    });
+    const { session } = await createAgentSessionFromServices({
+      services,
+      sessionManager: child,
+      model: faux.getModel(),
+      tools: ["read"],
+    });
+
+    await session.extensionRunner.emit({ type: "session_start", reason: "startup" });
+    const returnCommands = session.extensionRunner.getRegisteredCommands()
+      .filter((command) => command.name === "or")
+      .map((command) => ({ invocationName: command.invocationName, description: command.description }));
+    expect(returnCommands).toEqual([{
+      invocationName: "or",
+      description: "Return new child context to the parent",
+    }]);
+    await session.extensionRunner.emit({ type: "session_shutdown", reason: "quit" });
+    session.dispose();
+  });
+
   it("keeps all extensions while restoring the native Pi prompt", async () => {
     const { nativePrompt, receivedPrompt } = await inspectPrompt("native");
     expect(receivedPrompt).toBe(nativePrompt);

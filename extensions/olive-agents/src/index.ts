@@ -390,9 +390,6 @@ export default function (pi: ExtensionAPI) {
   }
 
   const receivedCheckpointIds = new Set<string>();
-  /** True once the parent-session no-op /or has been registered. */
-  let parentOrRegistered: boolean | undefined;
-
   // Serialize checkpoint deliveries: two returns must never race the parent's
   // run guard ("Agent is already processing a prompt"), and a user message is
   // never sent without a delivery mode (which throws while streaming).
@@ -503,21 +500,6 @@ export default function (pi: ExtensionAPI) {
   let currentCtx: ExtensionContext | undefined;
   pi.on("session_start", async (_event, ctx) => {
     currentCtx = ctx;
-    if (parentOrRegistered !== true) {
-      try {
-        const header = ctx.sessionManager.getEntries().find((e) => (e as { type?: string }).type === "session");
-        const hasParent = Boolean((header as { parentSession?: string } | undefined)?.parentSession);
-        if (!hasParent) {
-          parentOrRegistered = true;
-          pi.registerCommand("or", {
-            description: "No-op: this session is not a child agent session",
-            handler: async (_args, commandCtx) => {
-              commandCtx.ui.notify?.("/or only returns context from a child agent session — nothing to do here.", "info");
-            },
-          });
-        }
-      } catch { /* best effort */ }
-    }
     receivedCheckpointIds.clear();
     for (const entry of ctx.sessionManager.getEntries()) {
       if (entry.type === "custom" && entry.customType === "olive-agent-context-return-received") {

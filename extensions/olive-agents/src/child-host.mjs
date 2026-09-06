@@ -120,24 +120,8 @@ const bridgeFactory = (pi) => {
 
   pi.on("session_start", (_event, ctx) => { bridgeContext = ctx; });
 
-  /**
-   * /or may only return context to a parent, so it must no-op when the
-   * current session is not a child (no parentSession in the JSONL header).
-   * The header is authoritative for reopened sessions; the launch spec's
-   * parentFile is the fallback for fresh sessions.
-   */
-  const isChildSession = () => {
-    try {
-      const entries = sessionManager?.getEntries?.() ?? [];
-      const header = entries.find((e) => e?.type === "session");
-      if (header) return Boolean(header.parentSession);
-    } catch { /* fall through to spec */ }
-    return Boolean(spec?.session?.parentFile);
-  };
-
-  // Register /or only for genuine children: a parent session must never even
-  // expose the command, regardless of how the bridge happens to load.
-  if (isChildSession()) {
+  // This host only runs for Olive child sessions. Register the return command
+  // unconditionally, including for reopened children and ephemeral parents.
   pi.registerCommand("or", {
     description: "Return new child context to the parent",
     handler: async (_args, ctx) => {
@@ -154,7 +138,6 @@ const bridgeFactory = (pi) => {
       await returnContext(decision, ctx);
     },
   });
-  }
   // Any direct human work transfers control from the delegated automatic run
   // to an unlimited interactive conversation. The initial task payload is
   // delivered through the same input channel but is NOT a human intervention,
