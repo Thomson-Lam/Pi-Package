@@ -588,7 +588,7 @@ describe("AgentManager", () => {
     writePendingDecision(originalMailbox, { runNumber: 2, reason: "turn_limit", result: "held", turnCount: 3, maxTurns: 3, toolUses: 1, requestedAt: Date.now() });
     writeFileSync(join(originalMailbox, "bridge-state.json"), JSON.stringify({ status: "awaiting_decision" }));
     deps.tmux = vi.fn(async (args: string[]) => {
-      if (args[0] === "list-windows") return { code: 0, stdout: `@9\t9\t${agentWindowName("reopen-live", "Review")}\n`, stderr: "", killed: false };
+      if (args[0] === "list-windows") return { code: 0, stdout: `@9\t9\t${agentWindowName("live child")}\n`, stderr: "", killed: false };
       return base(args);
     });
     const manager = new AgentManager(undefined, 2, undefined, undefined, deps);

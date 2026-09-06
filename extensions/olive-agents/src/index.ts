@@ -500,7 +500,10 @@ export default function (pi: ExtensionAPI) {
   let currentCtx: ExtensionContext | undefined;
   pi.on("session_start", async (_event, ctx) => {
     currentCtx = ctx;
-    void markParentWindow(execFromPi(pi), ctx.sessionManager.getSessionFile()).catch(() => {});
+    void markParentWindow(
+      execFromPi(pi),
+      ctx.sessionManager.getSessionFile(),
+    ).catch(() => {});
     receivedCheckpointIds.clear();
     for (const entry of ctx.sessionManager.getEntries()) {
       if (entry.type === "custom" && entry.customType === "olive-agent-context-return-received") {

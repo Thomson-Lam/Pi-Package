@@ -41,24 +41,53 @@ export function hashString(s: string): number {
   return h >>> 0;
 }
 
-/** Zellij-style codename, deterministic from a seed (e.g. the agent id). */
+/** Legacy fleet codename retained for existing fleet-row presentation. */
 export function zellijName(seed: string): string {
+  const h = hashString(seed);
+  return `${ZELLIJ_ADJECTIVES[h % ZELLIJ_ADJECTIVES.length]}-${ZELLIJ_NOUNS[Math.floor(h / ZELLIJ_ADJECTIVES.length) % ZELLIJ_NOUNS.length]}`;
+}
+
+/** Short agent-type label used by the fleet view. */
+export function agentTypeSlug(type: string): string {
+  if (type.toLowerCase() === "general-purpose") return "general";
+  return type.toLowerCase().replace(/[^a-z0-9-]+/g, "-").replace(/^-+|-+$/g, "").slice(0, 16) || "agent";
+}
+
+/** Legacy lookup name for windows created before description-based labels. */
+export function legacyAgentWindowName(seed: string, type: string): string {
   const h = hashString(seed);
   const adj = ZELLIJ_ADJECTIVES[h % ZELLIJ_ADJECTIVES.length]!;
   const noun = ZELLIJ_NOUNS[Math.floor(h / ZELLIJ_ADJECTIVES.length) % ZELLIJ_NOUNS.length]!;
-  return `${adj}-${noun}`;
+  const slug = type.toLowerCase() === "general-purpose"
+    ? "general"
+    : type.toLowerCase().replace(/[^a-z0-9-]+/g, "-").replace(/^-+|-+$/g, "").slice(0, 16) || "agent";
+  return `${adj}-${noun}-${slug}`.slice(0, 48);
 }
 
-/** Short agent-type tag: general-purpose → "general", others slugified. */
-export function agentTypeSlug(type: string): string {
-  const t = type.toLowerCase();
-  if (t === "general-purpose") return "general";
-  return t.replace(/[^a-z0-9-]+/g, "-").replace(/^-+|-+$/g, "").slice(0, 16) || "agent";
+function truncateAtDelimiter(value: string, max: number): string {
+  if (value.length <= max) return value;
+  const clipped = value.slice(0, max);
+  const delimiter = clipped.lastIndexOf("-");
+  return (delimiter > 0 ? clipped.slice(0, delimiter) : clipped).replace(/-+$/g, "");
 }
 
-/** tmux window name: "<codename>-<type>", e.g. "sparkling-panda-general". */
-export function agentWindowName(seed: string, type: string): string {
-  return `${zellijName(seed)}-${agentTypeSlug(type)}`.slice(0, 48);
+/** Convert a task description into a readable, tmux-safe window name. */
+export function agentWindowName(description: string): string {
+  const name = description
+    .normalize("NFKC")
+    .trim()
+    .replace(/\s+/g, "-")
+    .replace(/[^a-zA-Z0-9._-]+/g, "-")
+    .replace(/-+/g, "-")
+    .replace(/^-+|-+$/g, "");
+  return truncateAtDelimiter(name, 48) || "agent";
+}
+
+/** Mark a window as hosting an agent that can have child agents. */
+export function parentWindowName(name: string): string {
+  const label = name.match(/\[S\]:\s*(.+)$/)?.[1] ?? name;
+  const base = agentWindowName(label.replace(/^\[P\]\s*/i, ""));
+  return `[P] ${truncateAtDelimiter(base, 44)}`;
 }
 
 /** Local HH:MM timestamp. */

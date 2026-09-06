@@ -50,7 +50,7 @@ export async function focusOrOpenParent({ parentSessionFile, cwd }, exec = tmux)
   if (session.code !== 0 || !session.stdout.trim()) return "unavailable";
 
   const created = await exec([
-    "new-window", "-d", "-t", session.stdout.trim(), "-n", "olive-parent",
+    "new-window", "-d", "-t", session.stdout.trim(), "-n", "[P] parent",
     "-c", cwd, "-P", "-F", "#{window_id}", "pi --session " + quote(parentSessionFile),
   ]);
   if (created.code !== 0) return "unavailable";

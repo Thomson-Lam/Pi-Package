@@ -1,57 +1,24 @@
-/** Names for agent windows, fleet rows, and saved /resume sessions. */
-
 import { describe, expect, it } from "vitest";
-import {
-  agentSessionName,
-  agentTypeSlug,
-  agentWindowName,
-  hashString,
-  localTimeStamp,
-  zellijName,
-  ZELLIJ_ADJECTIVES,
-  ZELLIJ_NOUNS,
-} from "../src/names.js";
-
-describe("zellijName", () => {
-  it("produces adjective-noun codenames from Zellij's word lists", () => {
-    for (const seed of ["a", "abc123", "review-42", "general-purpose"]) {
-      const [adj, noun] = zellijName(seed).split("-");
-      expect(ZELLIJ_ADJECTIVES).toContain(adj);
-      expect(ZELLIJ_NOUNS).toContain(noun);
-    }
-  });
-
-  it("is deterministic across calls", () => {
-    expect(zellijName("a1b2c3d4")).toBe(zellijName("a1b2c3d4"));
-  });
-
-  it("differs for different seeds", () => {
-    expect(zellijName("a1b2c3d4")).not.toBe(zellijName("e5f6g7h8"));
-  });
-
-  it("hashString is stable", () => {
-    expect(hashString("a1b2c3d4")).toBe(hashString("a1b2c3d4"));
-  });
-});
-
-describe("agentTypeSlug", () => {
-  it("maps the built-ins", () => {
-    expect(agentTypeSlug("general-purpose")).toBe("general");
-    expect(agentTypeSlug("Review")).toBe("review");
-  });
-  it("slugifies custom types", () => {
-    expect(agentTypeSlug("Security Auditor")).toBe("security-auditor");
-  });
-});
+import { agentSessionName, agentWindowName, parentWindowName } from "../src/names.js";
 
 describe("agentWindowName", () => {
-  it("combines codename and type slug", () => {
-    expect(agentWindowName("a1b2c3d4", "general-purpose")).toMatch(/^[a-z]+-[a-z]+-general$/);
-    expect(agentWindowName("a1b2c3d4", "Review")).toMatch(/^[a-z]+-[a-z]+-review$/);
+  it("uses the task description", () => {
+    expect(agentWindowName("Inspect auth flow")).toBe("Inspect-auth-flow");
   });
-  it("is deterministic and length-bounded", () => {
-    expect(agentWindowName("a1b2c3d4", "Review")).toBe(agentWindowName("a1b2c3d4", "Review"));
-    expect(agentWindowName("a1b2c3d4", "x".repeat(100)).length).toBeLessThanOrEqual(48);
+  it("sanitizes punctuation, whitespace, and bounds length", () => {
+    expect(agentWindowName("  inspect / auth\nflow!!!  ")).toBe("inspect-auth-flow");
+    expect(agentWindowName("x".repeat(100)).length).toBeLessThanOrEqual(48);
+    expect(agentWindowName("")).toBe("agent");
+  });
+});
+
+describe("parentWindowName", () => {
+  it("prefixes the child description with [P]", () => {
+    expect(parentWindowName("21:20-[S]: inspect auth")).toBe("[P] inspect-auth");
+  });
+  it("truncates the complete label without leaving a trailing delimiter", () => {
+    expect(parentWindowName("x".repeat(100))).toMatch(/^\[P\] x+$/);
+    expect(parentWindowName("[P] inspect-auth")).toBe("[P] inspect-auth");
   });
 });
 
@@ -59,14 +26,5 @@ describe("agentSessionName", () => {
   it("uses '<HH:MM>-[S]: <description>'", () => {
     expect(agentSessionName("inspect approval flickering"))
       .toMatch(/^\d{2}:\d{2}-\[S\]: inspect approval flickering$/);
-  });
-  it("stays deterministic within the same minute", () => {
-    expect(agentSessionName("Review auth")).toBe(agentSessionName("Review auth"));
-  });
-});
-
-describe("localTimeStamp", () => {
-  it("is HH:MM", () => {
-    expect(localTimeStamp()).toMatch(/^\d{2}:\d{2}$/);
   });
 });

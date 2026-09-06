@@ -40,18 +40,8 @@ describe("shellQuote", () => {
 });
 
 describe("agentWindowName", () => {
-  it("produces a zellij-style codename with a type slug", () => {
-    expect(agentWindowName("a1b2c3d4e5f6g7", "Review")).toMatch(/^[a-z]+-[a-z]+-review$/);
-  });
-  it("is deterministic per seed", () => {
-    expect(agentWindowName("a1b2c3d4e5f6g7", "Review")).toBe(agentWindowName("a1b2c3d4e5f6g7", "Review"));
-  });
-  it("maps general-purpose to general and sanitizes other types", () => {
-    expect(agentWindowName("x", "general-purpose")).toMatch(/-general$/);
-    expect(agentWindowName("x", "My Agent/Type!")).toMatch(/-my-agent-type$/);
-  });
-  it("is bounded in length", () => {
-    expect(agentWindowName("a1b2c3d4e5f6g7", "x".repeat(100)).length).toBeLessThanOrEqual(48);
+  it("uses a readable task description", () => {
+    expect(agentWindowName("Inspect auth flow")).toBe("Inspect-auth-flow");
   });
 });
 
@@ -156,11 +146,12 @@ describe("parent window markers", () => {
         if (args[0] === "display-message") return { code: 0, stdout: "@4\n", stderr: "", killed: false };
         return { code: 0, stdout: "", stderr: "", killed: false };
       };
-      expect(await markParentWindow(exec, "/tmp/parent.jsonl")).toBe(true);
+      expect(await markParentWindow(exec, "/tmp/parent.jsonl", "inspect auth")).toBe(true);
       expect(calls).toEqual([
         ["display-message", "-p", "#{window_id}"],
         ["set-window-option", "-t", "@4", "@olive-parent-session-file", "/tmp/parent.jsonl"],
         ["set-window-option", "-t", "@4", "@olive-parent-pid", String(process.pid)],
+        ["rename-window", "-t", "@4", "[P] inspect-auth"],
       ]);
     } finally {
       if (previous === undefined) delete process.env.TMUX;

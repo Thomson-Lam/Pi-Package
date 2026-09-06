@@ -11,8 +11,9 @@
 
 import type { ExecResult, ExtensionAPI } from "@earendil-works/pi-coding-agent";
 import type { AgentWindowInfo } from "./types.js";
+import { parentWindowName } from "./names.js";
 
-export { agentWindowName } from "./names.js";
+export { agentWindowName, parentWindowName } from "./names.js";
 
 /** Minimal exec surface (pi.exec is compatible; tests inject a mock). */
 export type TmuxExec = (args: string[]) => Promise<ExecResult>;
@@ -50,6 +51,7 @@ export interface CreateWindowOptions {
   name: string;
   cwd: string;
   command: string;
+  agentId?: string;
 }
 
 /**
@@ -77,6 +79,9 @@ export async function createAgentWindow(
   }
   // Keep the window name stable (tmux automatic-rename would rewrite it).
   await exec(["set-window-option", "-t", match[1]!, "automatic-rename", "off"]);
+  if (options.agentId) {
+    await exec(["set-window-option", "-t", match[1]!, AGENT_ID_WINDOW_OPTION, options.agentId]);
+  }
   return { id: match[1]!, index: Number(match[2]), name: options.name };
 }
 
@@ -114,15 +119,24 @@ export async function currentWindowId(exec: TmuxExec): Promise<string | undefine
 /** Marker used to find a parent Pi window after the parent process exits. */
 export const PARENT_SESSION_WINDOW_OPTION = "@olive-parent-session-file";
 export const PARENT_PROCESS_WINDOW_OPTION = "@olive-parent-pid";
+export const AGENT_ID_WINDOW_OPTION = "@olive-agent-id";
 
 /** Mark the current tmux window as hosting a live parent Pi session. */
-export async function markParentWindow(exec: TmuxExec, sessionFile: string | undefined): Promise<boolean> {
+export async function markParentWindow(exec: TmuxExec, sessionFile: string | undefined, name?: string): Promise<boolean> {
   if (!sessionFile) return false;
   const windowId = await currentWindowId(exec);
   if (!windowId) return false;
   const marked = await exec(["set-window-option", "-t", windowId, PARENT_SESSION_WINDOW_OPTION, sessionFile]);
   const pid = await exec(["set-window-option", "-t", windowId, PARENT_PROCESS_WINDOW_OPTION, String(process.pid)]);
-  return marked.code === 0 && pid.code === 0;
+  let label = name;
+  if (!label) {
+    const current = await exec(["display-message", "-p", "#{window_name}"]);
+    if (current.code === 0) label = current.stdout.trim();
+  }
+  const renamed = label
+    ? await exec(["rename-window", "-t", windowId, parentWindowName(label)])
+    : { code: 0 };
+  return marked.code === 0 && pid.code === 0 && renamed.code === 0;
 }
 
 /** Clear the parent marker when the Pi process shuts down normally. */
@@ -170,9 +184,18 @@ export async function findWindowByName(exec: TmuxExec, name: string): Promise<{ 
   if (result.code !== 0) return undefined;
   for (const line of result.stdout.split("\n")) {
     const [id, index, windowName] = line.split("\t");
-    if (windowName === name && id && index) {
-      return { id, index: Number(index), name };
-    }
+    if (windowName === name && id && index) return { id, index: Number(index), name };
+  }
+  return undefined;
+}
+
+/** Find a child window by its stable identity, independent of its label. */
+export async function findWindowByAgentId(exec: TmuxExec, agentId: string): Promise<{ id: string; index: number; name: string } | undefined> {
+  const result = await exec(["list-windows", "-F", `#{window_id}\t#{window_index}\t#{window_name}\t#{${AGENT_ID_WINDOW_OPTION}}`]);
+  if (result.code !== 0) return undefined;
+  for (const line of result.stdout.split("\n")) {
+    const [id, index, name, markedId] = line.split("\t");
+    if (markedId === agentId && id && index && name !== undefined) return { id, index: Number(index), name };
   }
   return undefined;
 }

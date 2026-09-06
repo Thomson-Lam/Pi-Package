@@ -21,8 +21,8 @@ import { getPackageDir } from "@earendil-works/pi-coding-agent";
 import { type AgentLaunchSpec, buildReopenDescriptor, prepareAgentLaunch, validateMaxTurns, writeLaunchSpec } from "./agent-runner.js";
 import { contextReturnToMarkdown, type ContextLedgerNode, type ContextLinkData, type ContextReturnCheckpoint } from "./context-ledger.js";
 import { emitChildEvent, type ChildEvent, ensureMailboxDir, readPendingDecision, removeMailboxDir, watchChildEvents, writeJsonAtomic, writeParentCommand } from "./event-mailbox.js";
-import { createAgentWindow, execFromPi, findWindowByName as findTmuxWindowByName, focusWindow as focusTmuxWindow, killWindow as killTmuxWindow, shellQuote, windowAlive as tmuxWindowAlive, type TmuxExec } from "./tmux-window.js";
-import { agentSessionName, agentWindowName } from "./names.js";
+import { createAgentWindow, execFromPi, findWindowByAgentId, findWindowByName as findTmuxWindowByName, focusWindow as focusTmuxWindow, killWindow as killTmuxWindow, shellQuote, windowAlive as tmuxWindowAlive, type TmuxExec } from "./tmux-window.js";
+import { agentSessionName, agentWindowName, legacyAgentWindowName } from "./names.js";
 import { type AgentRecord, type AgentWindowInfo, type SubagentType, type ThinkingLevel } from "./types.js";
 import { cloneSkillSnapshot, type SkillSnapshot } from "./skill-snapshot.js";
 
@@ -371,7 +371,8 @@ export class AgentManager {
 
     const command = this.deps.childCommand(specPath);
     const created = await createAgentWindow(exec, tmuxSession, {
-      name: agentWindowName(id, type),
+      name: agentWindowName(options.description),
+      agentId: id,
       cwd: spec.runtime.cwd,
       command,
     });
@@ -892,7 +893,8 @@ export class AgentManager {
 
     const command = this.deps.childCommand(specPath);
     const created = await createAgentWindow(exec, tmuxSession, {
-      name: agentWindowName(record.id, spec.agent.type),
+      name: agentWindowName(record.description),
+      agentId: record.id,
       cwd,
       command,
     });
@@ -920,8 +922,10 @@ export class AgentManager {
     // If an earlier parent already consumed the release, do not resurrect the
     // completed child merely because its tmux review window is still open.
     if (released && !hasQueuedEvents) return false;
-    const windowName = agentWindowName(link.agentId, link.agentType);
-    const live = await findTmuxWindowByName(this.deps.tmux, windowName);
+    const windowName = agentWindowName(link.description);
+    const live = await findWindowByAgentId(this.deps.tmux, link.agentId)
+      ?? await findTmuxWindowByName(this.deps.tmux, windowName)
+      ?? await findTmuxWindowByName(this.deps.tmux, legacyAgentWindowName(link.agentId, link.agentType));
     if (!pending && !released && !live && !bridgeState) return false;
 
     const spec: AgentLaunchSpec = {
@@ -981,7 +985,7 @@ export class AgentManager {
     }
 
     const exec = this.deps.tmux;
-    const windowName = agentWindowName(link.agentId, link.agentType);
+    const windowName = agentWindowName(link.description);
 
     // Reopen the original mailbox whenever it is still available. The child
     // writes checkpoints and reads acknowledgements there, including while a
@@ -1024,7 +1028,9 @@ export class AgentManager {
       bridge: { mailboxDir },
     };
 
-    const existing = await findTmuxWindowByName(exec, windowName);
+    const existing = await findWindowByAgentId(exec, link.agentId)
+      ?? await findTmuxWindowByName(exec, windowName)
+      ?? await findTmuxWindowByName(exec, legacyAgentWindowName(link.agentId, link.agentType));
     if (existing) {
       await focusTmuxWindow(exec, existing.id);
       this.registerReopenedRecord(link, spec, mailboxDir, {
@@ -1044,6 +1050,7 @@ export class AgentManager {
     try {
       const created = await createAgentWindow(exec, tmuxSession, {
         name: windowName,
+        agentId: link.agentId,
         cwd: reopen.cwd,
         command,
       });
