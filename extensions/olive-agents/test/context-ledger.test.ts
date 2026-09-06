@@ -86,8 +86,8 @@ function link(sm: SM, child: SM, node: ContextLedgerNode | undefined, opts: Part
     createdAt: new Date().toISOString(),
     reopen: {
       type: "general-purpose", description: "child", cwd: work,
-      model: { provider: "test", id: "basic" }, tools: [], noExtensions: true,
-      extensionPaths: [], noSkills: false,
+      model: { provider: "test", id: "basic" }, tools: [],
+      extensionPaths: [],
     },
     ...opts,
   };

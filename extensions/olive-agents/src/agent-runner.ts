@@ -3,9 +3,9 @@
  *
  * The parent prepares everything the child needs to boot a native Pi
  * InteractiveMode over a persistent agent session (see REVIEW-UX-SPEC.md):
- * system prompt, tool allowlist, extension path list, model/thinking, session
- * identity and mailbox wiring. The child host (child-host.mjs) consumes the
- * serialized spec; it performs no independent configuration discovery.
+ * system prompt, tool allowlist, additive extension path hints, model/thinking,
+ * session identity and mailbox wiring. The child host (child-host.mjs) uses
+ * Pi's normal resource discovery alongside those launch-specific values.
  */
 
 import type { Model } from "@earendil-works/pi-ai";
@@ -15,10 +15,8 @@ import { getAgentConfig, getConfig } from "./agent-types.js";
 import { type ContextLedgerNode, type ReopenDescriptor } from "./context-ledger.js";
 import { detectEnv } from "./env.js";
 import { buildAgentPrompt, type PromptExtras } from "./prompts.js";
-import { preloadSkills } from "./skill-loader.js";
 import { agentSessionName } from "./names.js";
 import type { AgentLaunchSpec, SubagentType, ThinkingLevel } from "./types.js";
-import { cloneSkillSnapshot, type SkillSnapshot } from "./skill-snapshot.js";
 import { writeJsonAtomic } from "./event-mailbox.js";
 
 // Re-export for callers that historically imported the spec from agent-runner.
@@ -85,8 +83,6 @@ export interface PrepareLaunchInput {
   ledgerNode?: ContextLedgerNode;
   /** Attached-context markdown delivered to the child as a custom message. */
   contextMessage?: string;
-  /** Launch-time snapshot of the parent's resolved Pi skills. */
-  skillsSnapshot?: SkillSnapshot[];
 }
 
 export interface PrepareLaunchResult {
@@ -108,23 +104,16 @@ export async function prepareAgentLaunch(input: PrepareLaunchInput): Promise<Pre
   const agentConfig = getAgentConfig(type);
   const warnings: string[] = [];
 
-  // Children always run in the parent's working directory.
+  // Children always run in the parent's working directory and follow the
+  // parent's already-resolved project trust decision.
   const effectiveCwd = ctx.cwd;
+  const projectTrusted = typeof ctx.isProjectTrusted === "function"
+    ? ctx.isProjectTrusted()
+    : true;
 
   const env = await detectEnv(pi, effectiveCwd);
 
-  // Build prompt extras (skill preloading)
   const extras: PromptExtras = {};
-  const skills = config.skills;
-  const noSkills = skills === false || Array.isArray(skills);
-  const skillsSnapshot = cloneSkillSnapshot(input.skillsSnapshot);
-
-  // A parent snapshot is authoritative for the child, so do not add a
-  // profile's named-skill prompt blocks alongside the inherited resource set.
-  if (Array.isArray(skills) && skillsSnapshot === undefined) {
-    const loaded = preloadSkills(skills, effectiveCwd);
-    if (loaded.length > 0) extras.skillBlocks = loaded;
-  }
 
   // general-purpose is an alias for Pi's native system prompt. An omitted
   // type inherits the parent's extension runtime and its active prompt hooks.
@@ -141,24 +130,21 @@ export async function prepareAgentLaunch(input: PrepareLaunchInput): Promise<Pre
       description: config.description,
       builtinToolNames: config.builtinToolNames,
       extensions: config.extensions,
-      skills: config.skills,
       systemPrompt: "",
       isDefault: false,
     };
     systemPrompt = buildAgentPrompt(fallback, effectiveCwd, env, extras);
   }
 
-  // Copy the parent runtime exactly. Active tool names preserve the parent's
-  // tool selection; source paths from all registered tools preserve the set of
-  // loaded extension modules (including extensions with currently inactive
-  // tools).
+  // Preserve the parent's active tool selection. Extension source paths are
+  // only additive hints; the child performs normal Pi extension discovery so
+  // extensions without tools are not lost.
   const allowedTools = pi.getActiveTools();
   const finalExtensionPaths = [...new Set(
     pi.getAllTools()
       .map((tool) => tool.sourceInfo?.path)
       .filter((path): path is string => Boolean(path) && !path.startsWith("<")),
   )];
-  const noExtensions = finalExtensionPaths.length === 0;
   const effectivePrompt = prompt;
 
   const config2 = getConfig(type);
@@ -179,15 +165,11 @@ export async function prepareAgentLaunch(input: PrepareLaunchInput): Promise<Pre
     runtime: {
       cwd: effectiveCwd,
       packageDir: getPackageDir(),
+      projectTrusted,
       model: { provider: options.model.provider, id: options.model.id },
       thinking: options.thinking,
       tools: allowedTools,
-      noExtensions,
       extensionPaths: finalExtensionPaths,
-      noSkills,
-      ...(skillsSnapshot === undefined
-        ? {}
-        : { skillsSnapshot, skillsSnapshotAuthoritative: true }),
       ...(systemPrompt === undefined ? {} : { systemPrompt }),
       ...(input.promptPolicy ? { promptPolicy: input.promptPolicy } : {}),
     },
@@ -226,18 +208,14 @@ export function buildReopenDescriptor(spec: AgentLaunchSpec): ReopenDescriptor {
     type: spec.agent.type,
     description: spec.agent.description,
     cwd: spec.runtime.cwd,
+    projectTrusted: spec.runtime.projectTrusted,
     model: spec.runtime.model,
     thinking: spec.runtime.thinking,
     tools: spec.runtime.tools,
-    noExtensions: spec.runtime.noExtensions,
     extensionPaths: spec.runtime.extensionPaths,
-    noSkills: spec.runtime.noSkills,
     systemPrompt: spec.runtime.systemPrompt,
     promptPolicy: spec.runtime.promptPolicy,
     sessionDir: spec.session.sessionDir,
     maxTurns: spec.run.maxTurns,
-    ...(spec.runtime.skillsSnapshot === undefined
-      ? (spec.runtime.skillsSnapshotAuthoritative ? { skillsSnapshot: [], skillsSnapshotAuthoritative: true } : {})
-      : { skillsSnapshot: cloneSkillSnapshot(spec.runtime.skillsSnapshot)!, skillsSnapshotAuthoritative: true }),
   };
 }

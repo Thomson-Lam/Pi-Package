@@ -3,7 +3,7 @@ import { resolveAgentInvocationConfig } from "../src/invocation-config.js";
 import type { AgentConfig } from "../src/types.js";
 
 function makeConfig(overrides: Partial<AgentConfig> = {}): AgentConfig {
-  return { name: "Explore", description: "Explore", extensions: false, skills: false, systemPrompt: "Test agent", ...overrides };
+  return { name: "Explore", description: "Explore", extensions: false, systemPrompt: "Test agent", ...overrides };
 }
 
 describe("resolveAgentInvocationConfig", () => {

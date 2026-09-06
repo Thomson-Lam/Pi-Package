@@ -34,7 +34,6 @@ import {
 import { readFileSync } from "node:fs";
 import { join } from "node:path";
 import type { ThinkingLevel } from "./types.js";
-import type { SkillSnapshot } from "./skill-snapshot.js";
 
 // ---- Entry types ---------------------------------------------------------
 
@@ -125,16 +124,12 @@ export interface ReopenDescriptor {
   type: string;
   description: string;
   cwd: string;
+  /** Parent-resolved project trust; absent only for legacy reopen metadata. */
+  projectTrusted?: boolean;
   model: { provider: string; id: string };
   thinking?: ThinkingLevel;
   tools: string[];
-  noExtensions: boolean;
   extensionPaths: string[];
-  noSkills: boolean;
-  /** Launch-time parent skill snapshot; absent on legacy links. */
-  skillsSnapshot?: SkillSnapshot[];
-  /** Distinguishes an authoritative empty snapshot from legacy absence. */
-  skillsSnapshotAuthoritative?: boolean;
   systemPrompt?: string;
   promptPolicy?: "native" | "inherit";
   sessionDir?: string;

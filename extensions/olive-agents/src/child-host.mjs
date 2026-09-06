@@ -8,7 +8,7 @@
  * deleted immediately after reading. The host:
  *   1. imports @earendil-works/pi-coding-agent from the parent's package dir
  *   2. creates the persistent agent SessionManager (nested under the parent)
- *   3. builds runtime services + session with the approved config
+ *   3. builds runtime services + session with normal Pi resource discovery
  *   4. subscribes to session events → writes child events to the mailbox
  *   5. polls the mailbox commands dir for checkpoint acknowledgements
  *   6. runs InteractiveMode with the task prompt
@@ -20,7 +20,6 @@
 import { chmodSync, readFileSync, renameSync, rmSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { pathToFileURL } from "node:url";
-import { keepChildExtension } from "./child-extension-filter.mjs";
 import { focusOrOpenParent } from "./child-tmux.mjs";
 import { registerPromptPolicy } from "./prompt-policy.mjs";
 
@@ -86,7 +85,7 @@ try {
   }
 }
 
-const { SessionManager, createAgentSessionRuntime, createAgentSessionServices, createAgentSessionFromServices, getAgentDir, ModelRuntime, InteractiveMode } = codingAgent;
+const { SessionManager, SettingsManager, createAgentSessionRuntime, createAgentSessionServices, createAgentSessionFromServices, getAgentDir, ModelRuntime, InteractiveMode } = codingAgent;
 
 // ---- Session + runtime ----
 
@@ -155,36 +154,18 @@ const bridgeFactory = (pi) => {
 };
 
 const createRuntime = async ({ cwd, agentDir, sessionManager: sm }) => {
+  const settingsManager = SettingsManager.create(cwd, agentDir, {
+    projectTrusted: spec.runtime.projectTrusted ?? true,
+  });
   const services = await createAgentSessionServices({
     cwd,
     agentDir,
     modelRuntime,
+    settingsManager,
     resourceLoaderOptions: {
-      noExtensions: spec.runtime.noExtensions,
+      // Keep normal Pi discovery enabled. Additional paths are additive hints
+      // from the parent and are not an extension allow-list.
       additionalExtensionPaths: spec.runtime.extensionPaths.length > 0 ? spec.runtime.extensionPaths : undefined,
-      extensionsOverride: spec.runtime.noExtensions
-        ? undefined
-        : (base) => ({
-            ...base,
-            // The allow-list contains parent extension file paths, but the
-            // child-return bridge is an inline extension. Preserve it or /or
-            // is filtered out before the child session is bound.
-            extensions: base.extensions.filter((extension) =>
-              keepChildExtension(extension.path, spec.runtime.extensionPaths)
-            ),
-          }),
-      noSkills: spec.runtime.noSkills,
-      // An Olive snapshot is authoritative, including an empty array. Let Pi
-      // install it through its native resource loader so prompt metadata and
-      // /skill:* commands use the same resolved resources as the parent.
-      ...(spec.runtime.skillsSnapshotAuthoritative === true
-        ? {
-            skillsOverride: () => ({
-              skills: Array.isArray(spec.runtime.skillsSnapshot) ? spec.runtime.skillsSnapshot : [],
-              diagnostics: [],
-            }),
-          }
-        : {}),
       noPromptTemplates: true,
       noThemes: false,
       noContextFiles: true,

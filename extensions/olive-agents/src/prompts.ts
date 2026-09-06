@@ -4,10 +4,9 @@
 
 import type { AgentConfig, EnvInfo } from "./types.js";
 
-/** Extra sections to inject into the agent system prompt (memory and skills). */
+/** Extra sections to inject into the agent system prompt. */
 export interface PromptExtras {
   memoryBlock?: string;
-  skillBlocks?: { name: string; content: string }[];
 }
 
 /**
@@ -28,9 +27,6 @@ Platform: ${env.platform}`;
 
   const extraSections: string[] = [];
   if (extras?.memoryBlock) extraSections.push(extras.memoryBlock);
-  for (const skill of extras?.skillBlocks ?? []) {
-    extraSections.push(`\n# Preloaded Skill: ${skill.name}\n${skill.content}`);
-  }
   const extrasSuffix = extraSections.length > 0 ? "\n\n" + extraSections.join("\n") : "";
 
   const header = `You are a pi coding agent sub-agent.

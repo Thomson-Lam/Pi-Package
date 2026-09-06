@@ -24,7 +24,6 @@ import { emitChildEvent, type ChildEvent, ensureMailboxDir, readPendingDecision,
 import { createAgentWindow, execFromPi, findWindowByAgentId, findWindowByName as findTmuxWindowByName, focusWindow as focusTmuxWindow, killWindow as killTmuxWindow, shellQuote, windowAlive as tmuxWindowAlive, type TmuxExec } from "./tmux-window.js";
 import { agentSessionName, agentWindowName, legacyAgentWindowName } from "./names.js";
 import { type AgentRecord, type AgentWindowInfo, type SubagentType, type ThinkingLevel } from "./types.js";
-import { cloneSkillSnapshot, type SkillSnapshot } from "./skill-snapshot.js";
 
 /** Tool activity callback (kept for foreground streaming compatibility). */
 export interface ToolActivity {
@@ -44,8 +43,6 @@ export interface SpawnOptions {
   ledgerNode?: ContextLedgerNode;
   /** Attached-context markdown injected into the child as a custom message. */
   contextMessage?: string;
-  /** Launch-time snapshot of the parent's resolved Pi skills. */
-  skillsSnapshot?: SkillSnapshot[];
   onToolActivity?: (activity: ToolActivity) => void;
   onTurnEnd?: (turnCount: number) => void;
   onAssistantUsage?: (usage: { input: number; output: number; cacheWrite: number }) => void;
@@ -87,12 +84,6 @@ function isActiveRecord(record: AgentRecord): boolean {
 }
 function isWorkActive(record: AgentRecord): boolean {
   return record.status === "queued" || record.status === "running" || isDecisionPending(record);
-}
-
-function snapshotFromContext(ctx: unknown): SkillSnapshot[] | undefined {
-  const getter = (ctx as { getSystemPromptOptions?: () => { skills?: unknown } } | undefined)?.getSystemPromptOptions;
-  if (typeof getter !== "function") return undefined;
-  try { return cloneSkillSnapshot(getter.call(ctx)?.skills); } catch { return undefined; }
 }
 
 /** Human-readable tool action label. */
@@ -295,11 +286,6 @@ export class AgentManager {
     const childSessionId = randomUUID();
     const model = options.model ?? ctx.model;
     if (!model) throw new Error("No effective model available for agent launch.");
-    // Command callers can expose Pi's current base prompt options when a
-    // launch did not explicitly carry a snapshot.
-    const skillsSnapshot = options.skillsSnapshot === undefined
-      ? snapshotFromContext(ctx)
-      : cloneSkillSnapshot(options.skillsSnapshot);
     const { spec, warnings } = await this.deps.prepare({
       pi,
       ctx,
@@ -319,7 +305,6 @@ export class AgentManager {
       mailboxDir,
       ledgerNode: options.ledgerNode,
       ...(options.contextMessage ? { contextMessage: options.contextMessage } : {}),
-      ...(skillsSnapshot === undefined ? {} : { skillsSnapshot }),
     });
 
     for (const warning of warnings) {
@@ -933,12 +918,9 @@ export class AgentManager {
       agent: { id: link.agentId, type: link.agentType, displayName: link.agentType, description: link.description },
       session: { id: link.childSessionId, name: link.childSessionName, sessionDir: reopen.sessionDir, openFile: link.childSessionFile },
       runtime: {
-        cwd: reopen.cwd, packageDir: getPackageDir(), model: reopen.model,
-        thinking: reopen.thinking, tools: reopen.tools, noExtensions: reopen.noExtensions,
-        extensionPaths: reopen.extensionPaths, noSkills: reopen.noSkills,
-        ...(reopen.skillsSnapshotAuthoritative
-          ? { skillsSnapshot: reopen.skillsSnapshot ?? [], skillsSnapshotAuthoritative: true }
-          : {}),
+        cwd: reopen.cwd, packageDir: getPackageDir(), projectTrusted: reopen.projectTrusted, model: reopen.model,
+        thinking: reopen.thinking, tools: reopen.tools,
+        extensionPaths: reopen.extensionPaths,
         ...(reopen.systemPrompt === undefined ? {} : { systemPrompt: reopen.systemPrompt }),
         ...(reopen.promptPolicy ? { promptPolicy: reopen.promptPolicy } : {}),
       },
@@ -1012,15 +994,11 @@ export class AgentManager {
       runtime: {
         cwd: reopen.cwd,
         packageDir: getPackageDir(),
+        projectTrusted: reopen.projectTrusted,
         model: reopen.model,
         thinking: reopen.thinking,
         tools: reopen.tools,
-        noExtensions: reopen.noExtensions,
         extensionPaths: reopen.extensionPaths,
-        noSkills: reopen.noSkills,
-        ...(reopen.skillsSnapshotAuthoritative
-          ? { skillsSnapshot: reopen.skillsSnapshot ?? [], skillsSnapshotAuthoritative: true }
-          : {}),
         ...(reopen.systemPrompt === undefined ? {} : { systemPrompt: reopen.systemPrompt }),
         ...(reopen.promptPolicy ? { promptPolicy: reopen.promptPolicy } : {}),
       },

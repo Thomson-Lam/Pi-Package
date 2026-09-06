@@ -66,7 +66,6 @@ function loadFromDir(dir: string, agents: Map<string, AgentConfig>, source: "pro
       disallowedTools: csvListOptional(fm.disallowed_tools),
       extensions: inheritField(fm.extensions ?? fm.inherit_extensions),
       excludeExtensions: csvListOptional(fm.exclude_extensions),
-      skills: inheritField(fm.skills ?? fm.inherit_skills),
       model: str(fm.model),
       thinking: str(fm.thinking) as ThinkingLevel | undefined,
       maxTurns: nonNegativeInt(fm.max_turns),
@@ -148,7 +147,7 @@ function parseMemory(val: unknown): MemoryScope | undefined {
 }
 
 /**
- * Parse an inherit field (extensions, skills).
+ * Parse an inherit field (extensions).
  * omitted/true → true (inherit all); false/"none"/empty → false; csv → listed names.
  */
 function inheritField(val: unknown): true | string[] | false {

@@ -64,7 +64,6 @@ import { clearParentWindow, execFromPi, findWindowByName, focusWindow, markParen
 import { openContextTree } from "./ui/context-tree.js";
 import { buildContextUI } from "./ui/context-selection.js";
 import { getLifetimeTotal, type LifetimeUsage } from "./usage.js";
-import { cloneSkillSnapshot, type SkillSnapshot } from "./skill-snapshot.js";
 
 // ---- Shared helpers ----
 
@@ -270,27 +269,6 @@ function buildDetails(
 }
 
 export default function (pi: ExtensionAPI) {
-  // Captured from Pi's resolved prompt inputs at parent launch time. This is
-  // intentionally a snapshot: children do not follow later resource changes.
-  let parentSkillsSnapshot: SkillSnapshot[] | undefined;
-
-  const skillsForLaunch = (ctx: unknown): SkillSnapshot[] | undefined => {
-    const getter = (ctx as { getSystemPromptOptions?: () => { skills?: unknown } } | undefined)?.getSystemPromptOptions;
-    if (typeof getter === "function") {
-      try {
-        const snapshot = cloneSkillSnapshot(getter.call(ctx)?.skills);
-        if (snapshot !== undefined) return snapshot;
-      } catch { /* fall back to the latest lifecycle snapshot */ }
-    }
-    return cloneSkillSnapshot(parentSkillsSnapshot);
-  };
-
-  // Normal Agent-tool launches happen after this event. It exposes Pi's
-  // already-resolved project, global, package, and runtime-discovered skills.
-  pi.on("before_agent_start", (event) => {
-    parentSkillsSnapshot = cloneSkillSnapshot(event.systemPromptOptions.skills);
-  });
-
   // The plain child bootstrap requests this shared TypeScript flow over the
   // in-process event bus. This keeps /or and automatic Return on the exact
   // same selector/compaction implementation as launch approval.
@@ -888,7 +866,6 @@ The child uses the parent working directory, active tools, and loaded extensions
 
     execute: async (toolCallId, params, _signal, _onUpdate, ctx) => {
       fleet.setUICtx(ctx.ui as unknown as FleetUICtx);
-      const launchSkillsSnapshot = skillsForLaunch(ctx);
       reloadCustomAgents();
 
       const rawType = params.subagent_type as SubagentType | undefined;
@@ -955,7 +932,6 @@ The child uses the parent working directory, active tools, and loaded extensions
           invocation: agentInvocation,
           ...(ledgerNode ? { ledgerNode } : {}),
           ...(contextMessage ? { contextMessage } : {}),
-          ...(launchSkillsSnapshot === undefined ? {} : { skillsSnapshot: launchSkillsSnapshot }),
         });
       } catch (err) {
         return textResult(err instanceof Error ? err.message : String(err));
@@ -1177,7 +1153,6 @@ The child uses the parent working directory, active tools, and loaded extensions
 
   /** Launch a new agent from an existing /ot ledger context. */
   async function launchAgentFromContext(ctx: ExtensionCommandContext, inheritedNodes: ContextLedgerNode[]) {
-    const launchSkillsSnapshot = skillsForLaunch(ctx);
     reloadCustomAgents();
     const available = getAvailableTypes();
     if (available.length === 0) {
@@ -1267,7 +1242,6 @@ The child uses the parent working directory, active tools, and loaded extensions
         invocation,
         ...(ledgerNode ? { ledgerNode } : {}),
         ...(contextMessage ? { contextMessage } : {}),
-        ...(launchSkillsSnapshot === undefined ? {} : { skillsSnapshot: launchSkillsSnapshot }),
       });
     } catch (err) {
       ctx.ui.notify(err instanceof Error ? err.message : String(err), "warning");
@@ -1282,7 +1256,6 @@ The child uses the parent working directory, active tools, and loaded extensions
 
   /** Build context from this session and launch an unlimited parent-prompt agent. */
   async function launchNewAgent(ctx: ExtensionCommandContext) {
-    const launchSkillsSnapshot = skillsForLaunch(ctx);
     let branch;
     try {
       branch = ctx.sessionManager.getBranch();
@@ -1355,7 +1328,6 @@ The child uses the parent working directory, active tools, and loaded extensions
         invocation,
         ...(ledgerNode ? { ledgerNode } : {}),
         ...(contextMessage ? { contextMessage } : {}),
-        ...(launchSkillsSnapshot === undefined ? {} : { skillsSnapshot: launchSkillsSnapshot }),
       });
     } catch (err) {
       ctx.ui.notify(err instanceof Error ? err.message : String(err), "warning");
@@ -1525,8 +1497,6 @@ The child uses the parent working directory, active tools, and loaded extensions
     if (cfg.model) fmFields.push(`model: ${cfg.model}`);
     if (cfg.thinking) fmFields.push(`thinking: ${cfg.thinking}`);
     if (cfg.maxTurns) fmFields.push(`max_turns: ${cfg.maxTurns}`);
-    if (cfg.skills === false) fmFields.push("skills: false");
-    else if (Array.isArray(cfg.skills)) fmFields.push(`skills: ${cfg.skills.join(", ")}`);
     if (cfg.memory) fmFields.push(`memory: ${cfg.memory}`);
 
     const content = `---\n${fmFields.join("\n")}\n---\n\n${cfg.systemPrompt}\n`;
@@ -1616,7 +1586,6 @@ The child uses the parent working directory, active tools, and loaded extensions
   }
 
   async function showGenerateWizard(ctx: ExtensionCommandContext, targetDir: string) {
-    const launchSkillsSnapshot = skillsForLaunch(ctx);
     const description = await ctx.ui.input("Describe what this agent should do");
     if (!description) return;
 
@@ -1644,7 +1613,6 @@ The file format is a markdown file with YAML frontmatter and a system prompt bod
 description: <one-line description shown in UI>
 model: <optional model as "provider/modelId", e.g. "anthropic/claude-haiku-4-5". Omit to inherit parent model>
 thinking: <optional thinking level: ${THINKING_LEVELS.join(", ")}. Omit to inherit>
-skills: <true (inherit all), false (none), or comma-separated skill names to preload into prompt. Default: true>
 memory: <"user" (global), "project" (per-project), or "local" (gitignored per-project) for persistent memory. Omit for none>
 ---
 
@@ -1661,7 +1629,6 @@ Write the file using the write tool. Only write the file, nothing else.`;
         description: `Generate ${name} agent`,
         maxTurns: 5,
         promptPolicy: "native",
-        ...(launchSkillsSnapshot === undefined ? {} : { skillsSnapshot: launchSkillsSnapshot }),
       });
       ctx.ui.notify(`Agent definition generation started in a supervised child (${id}).`, "info");
     } catch (err) {

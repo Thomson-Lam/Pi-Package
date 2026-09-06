@@ -138,7 +138,6 @@ Just a prompt.`);
     expect(agent.description).toBe("minimal"); // defaults to filename
     expect(agent.builtinToolNames).toEqual(BUILTIN_TOOL_NAMES); // all tools
     expect(agent.extensions).toBe(true); // inherit all
-    expect(agent.skills).toBe(true); // inherit all
     expect(agent.model).toBeUndefined();
     expect(agent.thinking).toBeUndefined();
     expect(agent.maxTurns).toBeUndefined();
@@ -172,7 +171,6 @@ No tools.`);
   it("handles extensions: false → no extensions", () => {
     writeAgent("noext", `---
 extensions: false
-skills: false
 ---
 
 No extensions.`);
@@ -180,13 +178,11 @@ No extensions.`);
     const result = loadCustomAgents(tmpDir);
     const agent = result.get("noext")!;
     expect(agent.extensions).toBe(false);
-    expect(agent.skills).toBe(false);
   });
 
   it("handles extension allowlist", () => {
     writeAgent("partial", `---
 extensions: web-search, mcp-server
-skills: planning, review
 ---
 
 Partial access.`);
@@ -194,7 +190,6 @@ Partial access.`);
     const result = loadCustomAgents(tmpDir);
     const agent = result.get("partial")!;
     expect(agent.extensions).toEqual(["web-search", "mcp-server"]);
-    expect(agent.skills).toEqual(["planning", "review"]);
   });
 
   it("parses exclude_extensions CSV", () => {
@@ -433,7 +428,6 @@ tools: read
   it("supports inherit_extensions as alternative to extensions", () => {
     writeAgent("altkey", `---
 inherit_extensions: false
-inherit_skills: false
 ---
 
 Alt keys.`);
@@ -441,13 +435,11 @@ Alt keys.`);
     const result = loadCustomAgents(tmpDir);
     const agent = result.get("altkey")!;
     expect(agent.extensions).toBe(false);
-    expect(agent.skills).toBe(false);
   });
 
   it("extensions: none → false", () => {
     writeAgent("extnone", `---
 extensions: none
-skills: none
 ---
 
 None.`);
@@ -455,13 +447,11 @@ None.`);
     const result = loadCustomAgents(tmpDir);
     const agent = result.get("extnone")!;
     expect(agent.extensions).toBe(false);
-    expect(agent.skills).toBe(false);
   });
 
   it("extensions: true → true (inherit all)", () => {
     writeAgent("exttrue", `---
 extensions: true
-skills: true
 ---
 
 All.`);
@@ -469,7 +459,6 @@ All.`);
     const result = loadCustomAgents(tmpDir);
     const agent = result.get("exttrue")!;
     expect(agent.extensions).toBe(true);
-    expect(agent.skills).toBe(true);
   });
 
   it("handles enabled: false frontmatter", () => {

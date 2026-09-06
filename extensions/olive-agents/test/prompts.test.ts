@@ -3,7 +3,7 @@ import { buildAgentPrompt } from "../src/prompts.js";
 import type { AgentConfig } from "../src/types.js";
 
 const config: AgentConfig = {
-  name: "review", description: "Review", extensions: true, skills: false,
+  name: "review", description: "Review", extensions: true,
   systemPrompt: "Review carefully.",
 };
 const env = { isGitRepo: true, branch: "main", platform: "linux" };
@@ -17,12 +17,8 @@ describe("buildAgentPrompt", () => {
     expect(result).not.toContain("sub_agent_context");
   });
 
-  it("adds configured skill and memory blocks", () => {
-    const result = buildAgentPrompt(config, "/workspace", env, {
-      memoryBlock: "# Memory",
-      skillBlocks: [{ name: "api", content: "Use REST." }],
-    });
+  it("adds the configured memory block", () => {
+    const result = buildAgentPrompt(config, "/workspace", env, { memoryBlock: "# Memory" });
     expect(result).toContain("# Memory");
-    expect(result).toContain("Preloaded Skill: api");
   });
 });

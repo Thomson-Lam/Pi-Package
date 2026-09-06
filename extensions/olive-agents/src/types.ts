@@ -9,7 +9,6 @@
 import type { ModelThinkingLevel } from "@earendil-works/pi-ai";
 import type { ContextLedgerNode, ContextReturnCheckpoint } from "./context-ledger.js";
 import type { LifetimeUsage } from "./usage.js";
-import type { SkillSnapshot } from "./skill-snapshot.js";
 
 export type ThinkingLevel = ModelThinkingLevel;
 
@@ -31,8 +30,6 @@ export interface AgentConfig {
   /** Legacy metadata retained for custom-agent compatibility; launch uses parent extensions exactly. */
   extensions: true | string[] | false;
   excludeExtensions?: string[];
-  /** true = inherit all, string[] = only listed, false = none */
-  skills: true | string[] | false;
   model?: string;
   thinking?: ThinkingLevel;
   maxTurns?: number;
@@ -72,16 +69,12 @@ export interface AgentLaunchSpec {
   runtime: {
     cwd: string;
     packageDir: string;
+    /** Parent-resolved project trust; absent only for legacy launch metadata. */
+    projectTrusted?: boolean;
     model: { provider: string; id: string };
     thinking?: ThinkingLevel;
     tools: string[];
-    noExtensions: boolean;
     extensionPaths: string[];
-    noSkills: boolean;
-    /** Launch-time copy of the parent's resolved Pi skills. */
-    skillsSnapshot?: SkillSnapshot[];
-    /** True when skillsSnapshot is authoritative, including when it is empty. */
-    skillsSnapshotAuthoritative?: boolean;
     /** Replacement prompt for custom profiles; absent uses Pi's native system prompt. */
     systemPrompt?: string;
     /** Prompt composition policy for the child runtime. */

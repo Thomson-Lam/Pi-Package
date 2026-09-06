@@ -24,7 +24,6 @@ function makeAgentConfig(overrides: Partial<AgentConfig> = {}): AgentConfig {
     description: "Test agent",
     builtinToolNames: ["read", "grep"],
     extensions: false,
-    skills: false,
     ...overrides,
   };
 }
@@ -66,7 +65,6 @@ describe("agent type registry", () => {
       expect(config.displayName).toBe("Agent");
       expect(config.builtinToolNames).toEqual(BUILTIN_TOOL_NAMES);
       expect(config.extensions).toBe(true);
-      expect(config.skills).toBe(true);
     });
 
     it("default agents are marked isDefault", () => {
@@ -179,7 +177,6 @@ describe("agent type registry", () => {
         description: "Security auditor",
         builtinToolNames: ["read", "grep"],
         extensions: false,
-        skills: true,
       })]]);
       registerAgents(agents);
 
@@ -188,20 +185,17 @@ describe("agent type registry", () => {
       expect(config.description).toBe("Security auditor");
       expect(config.builtinToolNames).toEqual(["read", "grep"]);
       expect(config.extensions).toBe(false);
-      expect(config.skills).toBe(true);
     });
 
     it("getConfig returns extension allowlist for user agents", () => {
       const agents = new Map([["partial", makeAgentConfig({
         name: "partial",
         extensions: ["web-search"],
-        skills: ["planning"],
       })]]);
       registerAgents(agents);
 
       const config = getConfig("partial");
       expect(config.extensions).toEqual(["web-search"]);
-      expect(config.skills).toEqual(["planning"]);
     });
 
     it("getToolNamesForType works for user agents", () => {

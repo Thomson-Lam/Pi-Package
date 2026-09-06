@@ -29,9 +29,7 @@ const CANNED_SPEC: AgentLaunchSpec = {
     model: { provider: "test", id: "basic" },
     thinking: "high",
     tools: ["read", "bash"],
-    noExtensions: true,
     extensionPaths: [],
-    noSkills: true,
     systemPrompt: "system",
   },
   run: { prompt: "do it", maxTurns: 10, graceTurns: 5 },
@@ -66,9 +64,6 @@ function makeDeps(options: { focusedWindow?: string } = {}) {
       runtime: {
         ...CANNED_SPEC.runtime,
         cwd: input.ctx.cwd,
-        ...(input.skillsSnapshot === undefined
-          ? {}
-          : { skillsSnapshot: input.skillsSnapshot, skillsSnapshotAuthoritative: true }),
       },
     };
     return { spec, warnings: [] };
@@ -146,20 +141,6 @@ describe("AgentManager", () => {
     expect(settled.turnCount).toBe(3);
     expect(onComplete).toHaveBeenCalledTimes(1);
     expect(manager.hasRunning()).toBe(false);
-    manager.dispose();
-  });
-
-  it("forwards an authoritative skill snapshot through spawn preparation", async () => {
-    const deps = makeDeps();
-    const manager = new AgentManager(undefined, 2, undefined, undefined, deps);
-    const snapshot = [{
-      name: "guidance", description: "Guidance", filePath: join(work, "SKILL.md"), baseDir: work,
-      sourceInfo: { path: join(work, "SKILL.md"), source: "local", scope: "project", origin: "top-level" },
-      disableModelInvocation: false,
-    }];
-    await spawnBg(manager, makeCtx(), "snapshot", { skillsSnapshot: snapshot as any });
-    expect(deps.prepare.mock.calls[0]![0].skillsSnapshot).toEqual(snapshot);
-    expect(manager.getRecord(deps.prepare.mock.calls[0]![0].agentId)?.launchSpec?.runtime.skillsSnapshot).toEqual(snapshot);
     manager.dispose();
   });
 
@@ -514,15 +495,12 @@ describe("AgentManager", () => {
       createdAt: new Date().toISOString(), mailboxDir,
       reopen: {
         type: "Review", description: "restored", cwd: work, model: { provider: "test", id: "basic" },
-        tools: ["read"], noExtensions: true, extensionPaths: [], noSkills: true,
-        skillsSnapshot: [], skillsSnapshotAuthoritative: true, maxTurns: 3,
+        tools: ["read"], extensionPaths: [], maxTurns: 3,
       },
     };
     expect(await manager.restoreFromPersisted(link)).toBe(true);
     expect(manager.getRecord(link.agentId)?.status).toBe("awaiting_decision");
     expect(manager.getRecord(link.agentId)?.decision?.result).toBe("held");
-    expect(manager.getRecord(link.agentId)?.launchSpec?.runtime.skillsSnapshot).toEqual([]);
-    expect(manager.getRecord(link.agentId)?.launchSpec?.runtime.skillsSnapshotAuthoritative).toBe(true);
     emitChildEvent(mailboxDir, { type: "run_settled", runNumber: 2, status: "completed", result: "held", turnCount: 3, toolUses: 1, releaseReason: "human_return", decisionReason: "turn_limit" });
     await sleep(200);
     expect(manager.getRecord(link.agentId)?.status).toBe("completed");
@@ -543,21 +521,13 @@ describe("AgentManager", () => {
       createdAt: new Date().toISOString(), mailboxDir: join(work, "original-mailbox"),
       reopen: {
         type: "Review", description: "reopened", cwd: work, model: { provider: "test", id: "basic" },
-        tools: ["read"], noExtensions: true, extensionPaths: [], noSkills: true,
-        skillsSnapshot: [{
-          name: "guidance", description: "Guidance", filePath: join(work, "SKILL.md"), baseDir: work,
-          sourceInfo: { path: join(work, "SKILL.md"), source: "local", scope: "project", origin: "top-level" },
-          disableModelInvocation: false,
-        }],
-        skillsSnapshotAuthoritative: true, maxTurns: 10,
+        tools: ["read"], extensionPaths: [], maxTurns: 10,
       },
     };
     const result = await manager.reopenFromPersisted(link);
     expect(result.ok).toBe(true);
     const record = manager.getRecord("reopen-agent")!;
     expect(record.mailboxDir).toContain("reopen");
-    expect(record.launchSpec?.runtime.skillsSnapshot?.[0]?.name).toBe("guidance");
-    expect(record.launchSpec?.runtime.skillsSnapshotAuthoritative).toBe(true);
 
     // The child boots: ready, then reports its idle boot state.
     emitChildEvent(record.mailboxDir!, { type: "ready", sessionId: "child-id", sessionFile: childFile });
@@ -598,7 +568,7 @@ describe("AgentManager", () => {
       version: 1, stage: "ready", agentId: "reopen-live", agentType: "Review", description: "live child",
       childSessionId: "child-id", childSessionName: "child", childSessionFile: childFile,
       createdAt: new Date().toISOString(), mailboxDir: originalMailbox,
-      reopen: { type: "Review", description: "live child", cwd: work, model: { provider: "test", id: "basic" }, tools: ["read"], noExtensions: true, extensionPaths: [], noSkills: true, maxTurns: 3 },
+      reopen: { type: "Review", description: "live child", cwd: work, model: { provider: "test", id: "basic" }, tools: ["read"], extensionPaths: [], maxTurns: 3 },
     };
     const result = await manager.reopenFromPersisted(link);
     expect(result).toMatchObject({ ok: true, focused: true });

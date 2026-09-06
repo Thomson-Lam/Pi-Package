@@ -144,7 +144,6 @@ export function getConfig(type: string): {
   description: string;
   builtinToolNames: string[];
   extensions: true | string[] | false;
-  skills: true | string[] | false;
 } {
   const key = resolveKey(type);
   const config = key ? agents.get(key) : undefined;
@@ -154,7 +153,6 @@ export function getConfig(type: string): {
       description: config.description,
       builtinToolNames: config.builtinToolNames ?? BUILTIN_TOOL_NAMES,
       extensions: config.extensions,
-      skills: config.skills,
     };
   }
 
@@ -166,7 +164,6 @@ export function getConfig(type: string): {
       description: gp.description,
       builtinToolNames: gp.builtinToolNames ?? BUILTIN_TOOL_NAMES,
       extensions: gp.extensions,
-      skills: gp.skills,
     };
   }
 
@@ -176,7 +173,6 @@ export function getConfig(type: string): {
     description: "General-purpose agent for complex, multi-step tasks",
     builtinToolNames: BUILTIN_TOOL_NAMES,
     extensions: true,
-    skills: true,
   };
 }
 
