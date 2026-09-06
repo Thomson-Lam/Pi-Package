@@ -111,6 +111,45 @@ export async function currentWindowId(exec: TmuxExec): Promise<string | undefine
   return result.code === 0 ? result.stdout.trim() : undefined;
 }
 
+/** Marker used to find a parent Pi window after the parent process exits. */
+export const PARENT_SESSION_WINDOW_OPTION = "@olive-parent-session-file";
+export const PARENT_PROCESS_WINDOW_OPTION = "@olive-parent-pid";
+
+/** Mark the current tmux window as hosting a live parent Pi session. */
+export async function markParentWindow(exec: TmuxExec, sessionFile: string | undefined): Promise<boolean> {
+  if (!sessionFile) return false;
+  const windowId = await currentWindowId(exec);
+  if (!windowId) return false;
+  const marked = await exec(["set-window-option", "-t", windowId, PARENT_SESSION_WINDOW_OPTION, sessionFile]);
+  const pid = await exec(["set-window-option", "-t", windowId, PARENT_PROCESS_WINDOW_OPTION, String(process.pid)]);
+  return marked.code === 0 && pid.code === 0;
+}
+
+/** Clear the parent marker when the Pi process shuts down normally. */
+export async function clearParentWindow(exec: TmuxExec): Promise<boolean> {
+  const windowId = await currentWindowId(exec);
+  if (!windowId) return false;
+  const session = await exec(["set-window-option", "-t", windowId, "-u", PARENT_SESSION_WINDOW_OPTION]);
+  const pid = await exec(["set-window-option", "-t", windowId, "-u", PARENT_PROCESS_WINDOW_OPTION]);
+  return session.code === 0 && pid.code === 0;
+}
+
+/** Find a window marked as hosting the specified parent session. */
+export async function findParentWindow(
+  exec: TmuxExec,
+  sessionFile: string,
+): Promise<{ id: string; session: string; index: number; name: string } | undefined> {
+  const result = await exec(["list-windows", "-a", "-F", `#{window_id}\t#{session_name}\t#{window_index}\t#{window_name}\t#{${PARENT_SESSION_WINDOW_OPTION}}`]);
+  if (result.code !== 0) return undefined;
+  for (const line of result.stdout.split("\n")) {
+    const [id, session, index, name, markedFile] = line.split("\t");
+    if (markedFile === sessionFile && id && session && index && name !== undefined) {
+      return { id, session, index: Number(index), name };
+    }
+  }
+  return undefined;
+}
+
 /** Convenience binding for extension code holding a pi instance. */
 export function execFromPi(pi: Pick<ExtensionAPI, "exec">): TmuxExec {
   return (args: string[]) => pi.exec("tmux", args);

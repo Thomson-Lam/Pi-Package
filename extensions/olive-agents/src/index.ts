@@ -16,7 +16,7 @@ import { clampThinkingLevel } from "@earendil-works/pi-ai";
 import { Type } from "typebox";
 import { AgentManager } from "./agent-manager.js";
 import { getDefaultMaxTurns, getGraceTurns, normalizeMaxTurns, SUBAGENT_TOOL_NAMES, setDefaultMaxTurns, setGraceTurns, validateMaxTurns } from "./agent-runner.js";
-import { approveInvocation, approveManualLaunch, availableThinkingLevels, buildLedgerContext, selectSubagentModel, type ApprovalContextInput, type BuiltLedgerContext } from "./approval.js";
+import { approveInvocation, buildLedgerContext, selectInheritedContext, type ApprovalContextInput, type BuiltLedgerContext } from "./approval.js";
 import { getAgentConfig, getAllTypes, getAvailableTypes, isDefaultsDisabled, registerAgents, resolveType, setDefaultsDisabled } from "./agent-types.js";
 import {
   CONTEXT_LINK_ENTRY,
@@ -60,7 +60,7 @@ import {
   type Theme,
 } from "./ui/format.js";
 import { FleetList, type FleetUICtx } from "./ui/fleet-list.js";
-import { execFromPi, findWindowByName, focusWindow } from "./tmux-window.js";
+import { clearParentWindow, execFromPi, findWindowByName, focusWindow, markParentWindow } from "./tmux-window.js";
 import { openContextTree } from "./ui/context-tree.js";
 import { buildContextUI } from "./ui/context-selection.js";
 import { getLifetimeTotal, type LifetimeUsage } from "./usage.js";
@@ -500,6 +500,7 @@ export default function (pi: ExtensionAPI) {
   let currentCtx: ExtensionContext | undefined;
   pi.on("session_start", async (_event, ctx) => {
     currentCtx = ctx;
+    void markParentWindow(execFromPi(pi), ctx.sessionManager.getSessionFile()).catch(() => {});
     receivedCheckpointIds.clear();
     for (const entry of ctx.sessionManager.getEntries()) {
       if (entry.type === "custom" && entry.customType === "olive-agent-context-return-received") {
@@ -559,6 +560,7 @@ export default function (pi: ExtensionAPI) {
   // On shutdown, detach local tracking without stopping child hosts. Each child
   // owns its tmux window and must survive the parent Pi window closing.
   pi.on("session_shutdown", async () => {
+    void clearParentWindow(execFromPi(pi)).catch(() => {});
     currentCtx = undefined;
     unsubscribeReturnBuilder();
     fleet.dispose();
@@ -1275,7 +1277,7 @@ The child uses the parent working directory, active tools, and loaded extensions
     ctx.ui.notify(`Started ${getDisplayName(subagentType)} detached (${id}).`, "info");
   }
 
-  /** Build context from this session and launch an unlimited general-purpose agent. */
+  /** Build context from this session and launch an unlimited parent-prompt agent. */
   async function launchNewAgent(ctx: ExtensionCommandContext) {
     const launchSkillsSnapshot = skillsForLaunch(ctx);
     let branch;
@@ -1286,62 +1288,44 @@ The child uses the parent working directory, active tools, and loaded extensions
       return;
     }
 
-    const selectedContext = await buildContextUI({ ctx, branch });
+    const selectedContext = await buildContextUI({
+      ctx,
+      branch,
+      nextHint: "existing context?",
+    });
     if (!selectedContext) return;
-    if (selectedContext.selectedIds.length === 0) {
-      ctx.ui.notify("Select at least one context message to start an agent.", "warning");
+
+    const contextInput = makeApprovalContextInput(ctx);
+    const inheritedNodes = contextInput
+      ? await selectInheritedContext(ctx, contextInput)
+      : [];
+    const builtContext = selectedContext.selectedIds.length > 0 || inheritedNodes.length > 0
+      ? { ...selectedContext, inheritedNodes }
+      : undefined;
+
+    const model = ctx.model;
+    if (!model) {
+      ctx.ui.notify("Subagent launch blocked: no effective model is available.", "warning");
       return;
     }
+    const thinking = clampThinkingLevel(model, pi.getThinkingLevel()) as ThinkingLevel;
+    const subagentType = "general-purpose";
+    const promptPolicy: "inherit" = "inherit";
 
-    const models = (ctx.modelRegistry.getAvailable?.() ?? ctx.modelRegistry.getAll()) as Parameters<typeof selectSubagentModel>[1];
-    const model = await selectSubagentModel(ctx, models, ctx.model, "Select subagent model");
-    if (!model) return;
-
-    if (isScopeModelsEnabled()) {
-      const allowed = resolveEnabledModels(readEnabledModels(ctx.cwd), ctx.modelRegistry, ctx.cwd);
-      if (allowed && !isModelInScope(model, allowed)) {
-        ctx.ui.notify(
-          `Selected model "${model.provider}/${model.id}" is outside the enabled model scope.`,
-          "warning",
-        );
-      }
-    }
-
-    const thinking = await ctx.ui.select(
-      "Select subagent reasoning level",
-      availableThinkingLevels(model),
-    );
-    if (!thinking) return;
-
-    const agentChoice = await ctx.ui.select(
-      "Select agent",
-      ["inherit (default)", "general purpose"],
-    );
-    if (!agentChoice) return;
-
-    reloadCustomAgents();
-    const resolvedGeneralPurpose = resolveType("general-purpose");
-    if (agentChoice === "general purpose" && (!resolvedGeneralPurpose || !getAvailableTypes().includes(resolvedGeneralPurpose))) {
-      ctx.ui.notify("No enabled general-purpose agent is available.", "warning");
-      return;
-    }
-    const subagentType = resolvedGeneralPurpose ?? "general-purpose";
-    const promptPolicy: "native" | "inherit" = agentChoice === "general purpose" ? "native" : "inherit";
-    const agentLabel = agentChoice === "general purpose" ? getDisplayName(subagentType) : "inherited agent";
-
-    const enteredPrompt = await ctx.ui.editor(`Task for ${agentLabel}`, "");
+    const enteredPrompt = await ctx.ui.editor("Task for Agent", "");
     const prompt = enteredPrompt?.trim();
     if (!prompt) return;
 
     const description = prompt.split("\n").find(line => line.trim())!.trim().slice(0, 80);
-    const approved = await withApproval(() => approveManualLaunch(ctx, {
-      agentType: agentChoice === "general purpose" ? subagentType : "inherit (default)",
+    const approved = await withApproval(() => approveInvocation(ctx, ctx.modelRegistry, {
+      agentType: subagentType,
       description,
       prompt,
       model,
-      thinking: thinking as ThinkingLevel,
-      initialContext: { ...selectedContext, inheritedNodes: [] },
-    }));
+      thinking,
+      maxTurns: undefined,
+      ...(builtContext ? { initialContext: builtContext } : {}),
+    }, contextInput));
 
     if (approved.outcome === "feedback") {
       pi.sendUserMessage(`feedback: ${approved.feedback}`);

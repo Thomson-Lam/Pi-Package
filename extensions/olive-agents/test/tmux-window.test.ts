@@ -7,9 +7,11 @@ import {
   agentWindowName,
   createAgentWindow,
   currentTmuxSession,
+  findParentWindow,
   focusWindow,
   killWindow,
   listWindows,
+  markParentWindow,
   maxWindowIndex,
   shellQuote,
   type TmuxExec,
@@ -140,6 +142,43 @@ describe("window control by stable id", () => {
       "kill-window -t @99": { code: 1 },
     });
     expect(await killWindow(exec, "@99")).toBe(false);
+  });
+});
+
+describe("parent window markers", () => {
+  it("marks the current window with the parent session file", async () => {
+    const previous = process.env.TMUX;
+    process.env.TMUX = "1";
+    try {
+      const calls: string[][] = [];
+      const exec: TmuxExec = async (args) => {
+        calls.push(args);
+        if (args[0] === "display-message") return { code: 0, stdout: "@4\n", stderr: "", killed: false };
+        return { code: 0, stdout: "", stderr: "", killed: false };
+      };
+      expect(await markParentWindow(exec, "/tmp/parent.jsonl")).toBe(true);
+      expect(calls).toEqual([
+        ["display-message", "-p", "#{window_id}"],
+        ["set-window-option", "-t", "@4", "@olive-parent-session-file", "/tmp/parent.jsonl"],
+        ["set-window-option", "-t", "@4", "@olive-parent-pid", String(process.pid)],
+      ]);
+    } finally {
+      if (previous === undefined) delete process.env.TMUX;
+      else process.env.TMUX = previous;
+    }
+  });
+
+  it("finds a marked parent window across tmux sessions", async () => {
+    const exec = mockExec({
+      "list-windows -a -F #{window_id}\t#{session_name}\t#{window_index}\t#{window_name}\t#{@olive-parent-session-file}": {
+        code: 0,
+        stdout: "@1\tmain\t0\tshell\t/tmp/other.jsonl\n@2\tmain\t1\tparent\t/tmp/parent.jsonl\n",
+      },
+    });
+    expect(await findParentWindow(exec, "/tmp/parent.jsonl")).toEqual({
+      id: "@2", session: "main", index: 1, name: "parent",
+    });
+    expect(await findParentWindow(exec, "/tmp/missing.jsonl")).toBeUndefined();
   });
 });
 

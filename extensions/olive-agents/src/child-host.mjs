@@ -21,6 +21,7 @@ import { chmodSync, readFileSync, renameSync, rmSync, writeFileSync } from "node
 import { join } from "node:path";
 import { pathToFileURL } from "node:url";
 import { keepChildExtension } from "./child-extension-filter.mjs";
+import { focusOrOpenParent } from "./child-tmux.mjs";
 import { registerPromptPolicy } from "./prompt-policy.mjs";
 
 // ---- Mailbox helpers (self-contained; keep in sync with event-mailbox.ts) ----
@@ -403,6 +404,17 @@ async function returnContext(decision, ctx = bridgeContext) {
     // Keep the decision durable until the parent acknowledges insertion. This
     // gives /or and child reopen a manual recovery path without a retry daemon.
     pendingCheckpointId = built.checkpoint.id;
+    try {
+      const parentWindow = await focusOrOpenParent({
+        parentSessionFile: spec.session.parentFile,
+        cwd: spec.runtime.cwd,
+      });
+      if (parentWindow === "unavailable") {
+        ctx?.ui?.notify?.("Context returned, but the parent window could not be opened or focused.", "warning");
+      }
+    } catch (err) {
+      ctx?.ui?.notify?.(`Context returned, but the parent window could not be focused: ${err?.message ?? err}`, "warning");
+    }
   } catch (err) {
     ctx?.ui?.notify?.(`Could not return child context: ${err?.message ?? err}`, "error");
     return false;

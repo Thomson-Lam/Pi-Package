@@ -1,7 +1,7 @@
 import type { Api, Model } from "@earendil-works/pi-ai";
 import type { ExtensionContext } from "@earendil-works/pi-coding-agent";
 import { describe, expect, it, vi } from "vitest";
-import { approveInvocation, approveManualLaunch, buildLedgerContext, DEFAULT_HANDOFF_COMPACTION_PROMPT } from "../src/approval.js";
+import { approveInvocation, approveManualLaunch, buildLedgerContext, DEFAULT_HANDOFF_COMPACTION_PROMPT, selectInheritedContext } from "../src/approval.js";
 
 const model = { provider: "test", id: "basic", name: "Basic", reasoning: false } as unknown as Model<Api>;
 const registry = { getAll: () => [model], getAvailable: () => [model] };
@@ -75,6 +75,38 @@ describe("subagent approval", () => {
     expect(result).toMatchObject({ outcome: "launch", context: { selectedIds: [], inheritedNodes: [external] } });
   });
 
+  it("keeps the Agent approval controls when /otn supplies initial context", async () => {
+    let actions: string[] = [];
+    const result = await approveInvocation({
+      mode: "tui",
+      ui: {
+        select: async (_title: string, offered: string[]) => {
+          actions = offered;
+          return "Launch";
+        },
+      },
+    } as unknown as ExtensionContext, registry, {
+      ...request,
+      maxTurns: undefined,
+      initialContext: { selectedIds: [], inheritedNodes: [] },
+    }, {
+      branch: [],
+      candidates: [],
+      summarize: () => Promise.resolve("summary"),
+    });
+    expect(result.outcome).toBe("launch");
+    expect(actions).toEqual([
+      "Review / edit task prompt",
+      "Build context",
+      "Launch",
+      "Change model (test/basic)",
+      "Change reasoning (off)",
+      "Feedback to main agent",
+      "Do it yourself",
+      "Cancel",
+    ]);
+  });
+
   it("manual approval only offers prompt review, launch, and cancel", async () => {
     let actions: string[] = [];
     const result = await approveManualLaunch({
@@ -136,6 +168,28 @@ describe("approval with context ledger", () => {
       component.handleInput("enter");
     });
   }
+
+  it("reuses the native inheritance selector for a prebuilt /otn context", async () => {
+    const select = vi.fn(async () => "Yes");
+    const openInheritTree = vi.fn(async () => [candidates[0]]);
+    const inherited = await selectInheritedContext(
+      { mode: "tui", ui: { select } } as unknown as ExtensionContext,
+      { candidates, openInheritTree },
+    );
+    expect(inherited).toEqual([candidates[0]]);
+    expect(select).toHaveBeenCalledWith("Include existing context?", ["Yes", "No"]);
+    expect(openInheritTree).toHaveBeenCalledWith("L0");
+  });
+
+  it("skips the native inheritance selector when no parent context exists", async () => {
+    const select = vi.fn();
+    const inherited = await selectInheritedContext(
+      { mode: "tui", ui: { select } } as unknown as ExtensionContext,
+      { candidates: [], openInheritTree: vi.fn() },
+    );
+    expect(inherited).toEqual([]);
+    expect(select).not.toHaveBeenCalled();
+  });
 
   it("flow: select → inherit Yes (tree) → no compaction → launch", async () => {
     const ui = {

@@ -401,6 +401,17 @@ export interface BuildLedgerContextOptions {
   compactQuestion?: string;
 }
 
+/** Select an existing parent ledger chain using the native context-tree flow. */
+export async function selectInheritedContext(
+  ctx: ExtensionContext,
+  contextInput: Pick<ApprovalContextInput, "candidates" | "openInheritTree">,
+): Promise<ContextLedgerNode[]> {
+  if (contextInput.candidates.length === 0) return [];
+  const wantInherit = (await ctx.ui.select("Include existing context?", ["Yes", "No"])) === "Yes";
+  if (!wantInherit || !contextInput.openInheritTree) return [];
+  return (await contextInput.openInheritTree(contextInput.candidates[0]?.id)) ?? [];
+}
+
 /**
  * Shared context-ledger builder used by launch approval and child-to-parent
  * returns. It owns the native selection UI, optional inheritance, compaction
@@ -421,14 +432,9 @@ export async function buildLedgerContext(
   });
   if (!builtSelection) return undefined;
 
-  let inheritedNodes: ContextLedgerNode[] = [];
-  if (options.allowInheritance !== false && contextInput.candidates.length > 0) {
-    const wantInherit = (await ctx.ui.select("Include existing context?", ["Yes", "No"])) === "Yes";
-    if (wantInherit && contextInput.openInheritTree) {
-      const inherited = await contextInput.openInheritTree(contextInput.candidates[0]?.id);
-      if (inherited) inheritedNodes = inherited;
-    }
-  }
+  const inheritedNodes = options.allowInheritance === false
+    ? []
+    : await selectInheritedContext(ctx, contextInput);
 
   let summary: string | undefined;
   for (;;) {
